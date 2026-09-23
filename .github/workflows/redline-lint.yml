@@ -1,0 +1,25 @@
+name: redline-lint
+
+# 内核红线固化（设计 §9 / §7-M4）：
+# 只跑 scripts/review_lint.py --strict —— 纯标准库、零依赖、秒级反馈。
+# 之所以不在这里跑 pytest：测试依赖 torch / easyocr / opencv / pyautogui
+# 等原生包，安装耗时数十分钟且与 GPU/显示器环境耦合，不适合放在每次 push 上。
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  redline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run kernel redline lint (strict)
+        run: python scripts/review_lint.py --strict

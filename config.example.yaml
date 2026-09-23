@@ -1,0 +1,62 @@
+# ============================================================================
+# OmniAgent X3 配置模板（无秘钥，可安全提交）
+#
+# 后续不能在这里新加配置，如果必须要加配置需要做到 web 端。
+#
+# 本文件只保留「Web 里没有入口、且需要一个地方能看到缺省值」的项：
+# 1. 可调项一律走 Web 设置面板 → 写入 ~/.omniagent/config.yaml（或 mcp.json），
+#    **绝不回写项目**。因此模型/通道/工具开关/上下文治理等不在此文件里出现。
+# 2. 缺省值以代码为唯一出处（config.CONTEXT_DEFAULTS + 各模块内置兜底），
+#    本文件只是「可发现性」副本——整份删掉也不影响运行。
+# 3. 不要在这里新增配置项，也不要新建其它项目级 config 文件。
+# ============================================================================
+
+runtime:
+  # 执行后端：host（宿主机屏幕）| emulator（Android，需用户自行提供 adb_serial 才启用）。
+  backend: host
+  # 升级/终止判定（缺省见 omni_core/local/tool_loop.py 的 _DEFAULT_ESCALATION）
+  escalation:
+    verify_fail_max: 3        # verify 连续失败达此次数 → 升级
+    wallclock_sec: 120        # 单步墙钟超时（秒）
+    no_confidence_hard: true  # 无置信度时按硬失败处理
+    worker_history_keep: 3    # 升级时保留的子任务历史条数
+  # 工具限流：缺项即用各工具内置 _LIMITS（见 omni_core/tools/*.py），不会报错。
+  # 注意层级：这四个键是 runtime 的直接子键，**不是** runtime.tools 的子键。
+  shell_exec:
+    timeout_sec: 30
+    max_output: 8000
+  python_exec:
+    timeout_sec: 10
+    max_output: 4000
+  filesystem:
+    read_limit: 2000
+    max_output: 8000
+  web:
+    timeout_sec: 20
+    max_output: 12000
+  # M4a.1 轨迹落盘（零硬编码：task/project 来自 TaskSpec；落项目级 .omniagent/）
+  trajectory:
+    enabled: true             # false 则本次运行不落盘（仅内存跑）
+    dir: ""                   # 留空 → 项目级 .omniagent/<project>/trajectory/<task>
+    prune_days: 30            # raw 轨迹滚动保留天数（failures 固定 14 天）
+  # M4b.1 world-model 持久化（无状态大脑注入 + 子目标 checkpoint + 压缩 merge_progress）
+  world_model:
+    dir: ""                   # 留空 → 项目级 .omniagent/<project>/world_model/<task>
+  # M4b.3 Curator（任务完成后触发式跑一次，从 rollout 蒸馏长期记忆）
+  curator:
+    corrective_source: false  # 是否把「纠正类」rollout 也作为蒸馏来源
+  # F2.4 长任务主链墙钟（秒）；0=不检查（默认）。大步数预算下默认不检查，避免被 120s 子任务墙钟腰斩。
+  # 与 runtime.escalation.wallclock_sec（缺省 120s，worker 防打转安全网）解耦，二者来源/语义/缺省均不同。
+  long_task:
+    wallclock_sec: 0
+    # F4.1b 纪律文件（AGENTS.md）：run 起始读一次并锁进 system prompt（缓存友好 + 覆盖语义正确）
+    instructions_limit: 8192   # 注入块字符上限，超限截断并标注
+    inject_instructions: true  # 总开关；false = 零注入（默认行为不变）
+    # F4.2 memory 注入位置：true=迁至请求尾部（会话流）；false=回退 system prompt 注入
+    memory_in_user: true
+
+server:
+  # 后端监听地址。非回环地址（如 0.0.0.0）必须配置 auth_token，否则拒绝启动。
+  # 改这两项需要重启后端才生效。
+  host: 127.0.0.1
+  port: 8000

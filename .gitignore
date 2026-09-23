@@ -1,0 +1,39 @@
+﻿.venv/
+__pycache__/
+.idea/
+models/
+# temp artifacts
+temp/
+# OS/editor
+.DS_Store
+Thumbs.db
+/external/llama/*
+/external/llama_old/
+external/
+*.jsonl
+/lora/*
+# frontend deps & build
+node_modules/
+dist/
+build/
+.output/
+coverage/
+*.local
+# local tooling config
+.claude/
+# runtime logs
+*.log
+*.err
+logs/
+# 运行时生成数据（轨迹 / world-model / skills 落盘，非源码）
+data/
+# 项目级 .omniagent/ 运行时数据（由 agents/local/runtime_paths.py 生成，非源码）
+.omniagent/
+# 本机 CodeBuddy 本地工具目录（含私人 memory/ 记录，勿提交）
+.codebuddy/
+
+# 本机配置（含明文 api key，勿提交）
+# 项目根 config.yaml 只保留「Web 无入口」的少量项，需与 config.example.yaml 同步；
+# 可调项一律由 Web 设置面板写入 ~/.omniagent/config.yaml，不要往项目根堆配置。
+config.yaml
+config.local.yaml

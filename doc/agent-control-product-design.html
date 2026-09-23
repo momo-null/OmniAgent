@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OmniAgent · 产品设计</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#1f2933; --muted:#6b7280;
+    --line:#d9dee5; --code:#0f172a;
+    --brain:#6366f1; --runtime:#0ea5e9; --provider:#14b8a6;
+    --exec:#22c55e; --env:#94a3b8; --meta:#f59e0b;
+    --vision:#a855f7; --danger:#ef4444; --mcp:#ec4899;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.7;font-size:15px}
+  .wrap{max-width:1080px;margin:0 0 0 300px;padding:40px 28px 80px}
+  header.doc{border-bottom:2px solid var(--line);padding-bottom:18px;margin-bottom:8px}
+  header.doc h1{font-size:26px;margin:0 0 6px;letter-spacing:.3px}
+  header.doc .sub{color:var(--muted);font-size:13.5px}
+  .badges{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
+  .badge{font-size:12px;padding:3px 10px;border-radius:999px;background:#eef2f7;color:#475569;border:1px solid var(--line)}
+  nav.toc{position:fixed;top:0;left:0;width:280px;height:100vh;overflow-y:auto;
+    background:var(--panel);border-right:1px solid var(--line);border-radius:0;
+    padding:24px 18px 40px;margin:0}
+  nav.toc h3{margin:0 0 10px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+  nav.toc ol{margin:0;padding-left:20px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--runtime);text-decoration:none;display:block;padding:2px 6px;border-radius:6px;transition:background .15s,color .15s}
+  nav.toc a:hover{text-decoration:underline}
+  nav.toc a.active{background:var(--runtime);color:#fff;font-weight:600}
+  @media (max-width:900px){
+    .wrap{max-width:none;margin:0;padding:24px 16px 60px}
+    nav.toc{position:static;width:auto;height:auto;overflow:visible;border-right:none;border:1px solid var(--line);border-radius:12px;margin:0 0 24px}
+  }
+  section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 30px;margin:22px 0;
+    box-shadow:0 1px 3px rgba(15,23,42,.04)}
+  section h2{font-size:20px;margin:0 0 6px;display:flex;align-items:center;gap:10px}
+  section h2 .num{font-size:13px;background:var(--ink);color:#fff;border-radius:8px;padding:2px 9px;font-weight:600}
+  section .lead{color:var(--muted);margin:0 0 20px;font-size:14px}
+  h3.blk{font-size:15.5px;margin:24px 0 8px;color:#334155}
+  .diagram{background:#fbfcfe;border:1px solid var(--line);border-radius:12px;padding:18px;margin:14px 0;overflow-x:auto}
+  .diagram svg{display:block;width:100%;height:auto;max-width:920px;margin:0 auto}
+  .cap{font-size:12.5px;color:var(--muted);text-align:center;margin-top:8px}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:#f1f5f9;color:#334155;font-weight:600}
+  code,.mono{font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;font-size:12.8px;
+    background:#eef2f7;padding:1px 6px;border-radius:5px;color:var(--code)}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 4px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:14px;height:14px;border-radius:4px;display:inline-block;border:1px solid rgba(0,0,0,.1)}
+  .note{background:#fffbeb;border-left:4px solid var(--meta);padding:10px 14px;border-radius:0 8px 8px 0;font-size:13.5px;margin:14px 0}
+  .redline{background:#fef2f2;border-left:4px solid var(--danger);padding:10px 14px;border-radius:0 8px 8px 0;font-size:13.5px;margin:14px 0}
+  footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:30px}
+  .fileref{font-size:12.5px;color:#475569;background:#f1f5f9;border-radius:8px;padding:8px 12px;margin:8px 0}
+  .part{margin:34px 0 12px;padding:12px 16px;border-left:4px solid var(--brain);background:#f5f6ff;border-radius:0 10px 10px 0}
+  .part h2{margin:0;font-size:17px;color:var(--brain);letter-spacing:.4px}
+  .part .psub{margin:4px 0 0;color:var(--muted);font-size:13px}
+  .prin{counter-reset:p;list-style:none;padding-left:0;margin:12px 0}
+  .prin li{position:relative;padding:9px 12px 9px 40px;margin:7px 0;background:#f8fafc;border:1px solid var(--line);border-radius:8px;font-size:13.5px}
+  .prin li:before{counter-increment:p;content:counter(p);position:absolute;left:10px;top:9px;width:20px;height:20px;background:var(--brain);color:#fff;border-radius:6px;text-align:center;font-size:12px;line-height:20px;font-weight:700}
+  .prin li b{color:var(--brain)}
+
+  .toc-sidebar{position:fixed;top:0;left:0;width:280px;height:100vh;overflow-y:auto;
+    background:var(--panel);border-right:1px solid var(--line);padding:22px 16px 40px;
+    box-sizing:border-box;z-index:20}
+  .toc-sidebar .toc-h{font-size:12.5px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:1.2px;margin:0 0 14px;font-weight:600}
+  .toc-sidebar ul{list-style:none;margin:0;padding:0}
+  .toc-sidebar li{margin:1px 0;line-height:1.45}
+  .toc-sidebar li.l3{padding-left:18px}
+  .toc-sidebar a{display:block;color:var(--ink);text-decoration:none;font-size:13.5px;
+    padding:6px 10px;border-radius:8px;border-left:3px solid transparent;
+    transition:background .15s,color .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .toc-sidebar a:hover{background:#eef2f7}
+  .toc-sidebar a.active{background:var(--runtime);color:#fff;font-weight:600}
+  body{padding:0 40px 0 300px}
+  @media (max-width:900px){
+    .toc-sidebar{position:static;width:auto;height:auto;border-right:none;
+      border:1px solid var(--line);border-radius:12px;margin:0 0 24px;max-height:none}
+    .toc-sidebar a{white-space:normal}
+    body{padding:24px 16px 60px!important}
+  }
+
+</style>
+</head>
+<body>
+<nav class="toc-sidebar" aria-label="目录">
+  <p class="toc-h">目录</p>
+  <ul>
+    <li class="l2"><a href="#s-1-产品定位">1. 产品定位</a></li>
+    <li class="l3"><a href="#s-它是什么">它是什么</a></li>
+    <li class="l3"><a href="#s-当前主场景">当前主场景</a></li>
+    <li class="l3"><a href="#s-与手搓态的根本区别">与手搓态的根本区别</a></li>
+    <li class="l2"><a href="#s-2-核心原则与红线">2. 核心原则与红线</a></li>
+    <li class="l2"><a href="#s-3-技术选型与决策依据">3. 技术选型与决策依据</a></li>
+    <li class="l2"><a href="#s-4-行业对标与参考">4. 行业对标与参考</a></li>
+    <li class="l2"><a href="#s-5-维护约定">5. 维护约定</a></li>
+  </ul>
+</nav>
+<h1>OmniAgent · 产品设计</h1>
+<p class="lead">本文档为 OmniAgent 的产品设计说明，描述产品定位、设计原则、技术选型与行业对标。架构细节见 <code>agent-control-arch-design.html</code>；规格约束见 <code>agent-control-master-spec.md</code>。</p>
+<table>
+<tr><th>文档名称</th><td>OmniAgent 产品设计</td></tr>
+<tr><th>版本 / 状态</th><td>框架态（当前有效）</td></tr>
+<tr><th>范围</th><td>产品定位 · 设计原则 · 技术决策 · 行业对标</td></tr>
+<tr><th>读者</th><td>产品 / 研发 / 协作者</td></tr>
+<tr><th>配套文档</th><td>架构设计 HTML · master-spec · 未实现与遗留问题 backlog</td></tr>
+</table>
+<h2 id="s-1-产品定位">1. 产品定位</h2><p class="lead">OmniAgent 是什么、为谁服务、与过去版本的根本区别。</p>
+
+  <h3 id="s-它是什么" class="blk">它是什么</h3>
+  <p>一个 <b>通用自主 Agent</b> 内核：模型通过调用<b>工具</b>完成任务，能做什么完全由外层插件（自研 tool + 外部 MCP）提供的工具清单决定，内核不绑定任何场景。核心范式 = <b>在线强模型作规划/反思（大模型）+ 本地快模型作执行器（高频决策 / 感知）+ 知识库自学（world-model / skill）</b>。控制流归大模型，程序退化为工具运行时。<b>GUI / 设备操控仅是我的一项特色能力</b>（经外层插件动态注入），而非 agent 的预设身份。</p>
+
+  <h3 id="s-当前主场景" class="blk">当前主场景</h3>
+  <p>GUI / 设备操控（Android 模拟器经 uiautomator2 / ADB 操控，或宿主机键鼠）是<b>当前用得最多的场景</b>，但 agent 本身是 <b>通用 agent，不 GUI 特化</b>：能力来自外层 tool 插件（截图 / 点击 / OCR / 模板 / 视觉）与运行时自学，<b>不为任何 app / 游戏 / 界面写专属程序</b>。System prompt 已泛化为「通用自主 Agent」，不把「操作电脑设备 / 点界面元素」等写死成 persona——这些只出现在 tool schema 里，由模型按需自主调用。</p>
+
+  <h3 id="s-与手搓态的根本区别" class="blk">与手搓态的根本区别</h3>
+  <p>手搓态（2026-07）的死穴 = ReAct 循环、function-call 协议、工具派发全自己写，每加一个能力都要改内核、极易写死。框架态彻底把<b>循环驱动 + 协议 + 工具路由</b>交给 LangGraph / Agents SDK（开源 <code>function_tool</code> 隔离四跳），内核退化为「配置 + 钩子注册中心」；工具实现全部外移至<b>外层插件层</b>——自研 tool（屏幕/鼠标/视觉/文件 IO 等基础能力，用 function_tool 承载）与<b>外部 MCP</b>（开源/第三方系统，纯配置接入）平级，领域逻辑只在外层插件内。</p>
+
+  <div class="fileref">能力边界：图形界面（自绘 / 空间布局 / 图标密集）是关系型 / 状态型的，纯 OCR 文本识别无法理解 UI 元素间的关系与语义 → <b>VLM 作主感知层</b>，OCR 降级为精确坐标 / 文本校验辅助。</div><h2 id="s-2-核心原则与红线">2. 核心原则与红线</h2><p class="lead">七条不可偏移的原则。它们是后面所有技术选型的总依据，也是代码审计的「嗅觉测试」。</p>
+
+  <ol class="prin">
+    <li><b>控制流归大模型：</b>模型规划任务并决策调用工具（截图 / 点击 / OCR / 模板 / 视觉），程序退化为工具运行时（框架薄壳接管循环）。大模型只在决策点 / 子目标边界低频调用。</li>
+    <li><b>知识自学，无插件：</b>world-model + skill 由 agent 运行时观测积累；场景知识（如 IME 处理、开程序原语）属<b>运行时知识</b>而非硬编码。旧插件系统已丢弃，不迁移。</li>
+    <li><b>能力 == 插件（红线）：</b>内核只负责通用闭环驱动（框架接管）+ 后处理钩子，不认识具体 X；<b>加能力 = 加一个外层 tool 插件 / 接一个外部 MCP，绝不改内核</b>。自研 tool 与开源 MCP 完全平级，由 LLM 直接调用。</li>
+    <li><b>模型无关：</b>能力声明来自模型元数据，<b>动态注入提示词</b>；换 VL / 换执行模型零代码改动。比主流静态工具列表更严谨。</li>
+    <li><b>大模型低频、本地高频：</b>在线大模型仅决策点介入；本地执行器在子目标内自闭环。依据 OSWorld 实测——顶级 agent 75–94% wall time 花在规划 / 反思 LLM 调用，故该延迟设计正确；grounding 是头号失败点 → SoM 必要。</li>
+    <li><b>诚实边界：</b>自学习只长「知识 / 策略」，不长「硬件 / 工具精度」；新 skill 须连续成功 N 次才晋升，防幻觉 skill 自欺（自学习 ≠ 自欺）。</li>
+    <li><b>超长任务连续性：</b>把「工作上下文」（有界、可压）与「会话连续性」（外部、持久）分离——<b>无状态大模型 + 持久 world-model + 子目标检查点</b>，使小时 / 跨天任务不丢目标、崩溃可续。</li>
+  </ol>
+
+  <div class="redline"><b>红线（代码嗅觉测试）：</b>改动若给 <code>agents/</code> 核心加了针对某 app / 游戏 / 任务的判断 → 必须抽成 MCP 工具 / skill。审计约束（<code>scripts/review_lint.py</code>）：<b>C1 工具零写死</b>（内核不出现工具名分支）、<b>C2 字段零假设</b>（内核不出现屏幕/ocr/active_window 等感知字段）、<b>C3 模型无关</b>、<b>C4 钩子自治</b>（L2 单步自愈、仅抛锚才呼叫人工）、<b>C5 HITL 双通道</b>（硬停止 / 软注入，目标：全用框架原生；当前仍为自研，见 N10 待办）。</div><h2 id="s-3-技术选型与决策依据">3. 技术选型与决策依据</h2><p class="lead">所有关键技术决策与「为什么这么选、落选方案为何被否」。均为当前落地态；未编码项明确标注为待办，不伪装成已完成。</p>
+
+  <table>
+    <tr><th>维度</th><th>当前选型</th><th>决策依据（为什么 / 落选方案）</th></tr>
+    <tr>
+      <td><b>编排 + 单 agent 运行时</b></td>
+      <td>LangGraph（编排）+ OpenAI Agents SDK（ReAct/FC/流式/MCP 加载）</td>
+      <td>手搓 ReAct/function-call 协议成本高、易写死 → 交框架原生。两者协同非二选一：LangGraph 表达 Manager/Worker 多 agent 拓扑与 handoff，Agents SDK 跑单 agent 循环并从 MCP 加载工具。<b>P0 框架优先：interrupt / 运行时消息注入 / 状态机全用框架原语，不自研。</b></td>
+    </tr>
+    <tr>
+      <td><b>在线大模型</b></td>
+      <td>任意 OpenAI 兼容接口模型（base_url / model / api_key 配置）</td>
+      <td>本地算力不足 → 不能靠本地模型当大模型；在线强模型做规划 / 反思；走 OpenAI 兼容接口，模型可任意替换（仅改三项），不绑定任何厂商。作为 SDK 的 <code>Model</code> provider 接入，守住 C3。</td>
+    </tr>
+    <tr>
+      <td><b>本地执行模型</b></td>
+      <td>任意本地 VLM（OpenAI 兼容 / llama.cpp 等，由 config 指定）</td>
+      <td>有云端大模型后本地只需快速执行 → 选轻量 VLM；要求「一个模型干文本 + 视觉」、离线可用、零架构改动。模型可任意替换：具体选型由 <code>config.yaml</code> 决定。</td>
+    </tr>
+    <tr>
+      <td><b>执行后端（设备）</b></td>
+      <td>自研外层 tool 插件（屏幕/鼠标/键盘：Host/Emulator 控制）</td>
+      <td>原 <code>execution_host.py</code> / <code>execution_emulator.py</code> 实现<b>平移</b>为自研外层 tool（function_tool 承载），工具 = 现有 tool_schemas（type/click/observe/launch_app…）。内核只持「工具名列表 + 能力分组配置」，零实现。B2 的 <code>text_of</code>/<code>verify_done</code> 抽象 → 外层 tool 内 <code>get_state_text</code> + <code>verify</code> 语义。</td>
+    </tr>
+    <tr>
+      <td><b>视觉通道</b></td>
+      <td>自研外层 tool 插件（SoM + VLM 工具 + yolo 内部原语）</td>
+      <td>RPG UI 关系 / 空间 / 图标密集 → <b>VLM 作主感知</b>；SoM 编号标注提点击可靠性；OCR 降级精确文本 / 坐标；yolo 仅作 SoM 内部原语（默认不单独暴露，工具=插件原则下可直调）。SoM marks 跨步状态自持于 tool 内 <code>som://last_result</code> resource，内核零感知（α 决策）。</td>
+    </tr>
+    <tr>
+      <td><b>工具解耦</b></td>
+      <td>外层插件（自研 function_tool + 外部 MCP，二者平级）</td>
+      <td>红线「能力 == 工具」升级为「能力 == 平级插件」：加能力 = 加自研 tool 或接外部 MCP，core 零改动；开源 <code>function_tool</code> 隔离「定义→注册→派发→回填」四跳，框架原生 dispatch，内核不再持有 <code>ToolRegistry</code> 与 <code>if name==</code> 分支（C1 自然清零）。MCP 本质是对外协议，仅用于外部工具接入。</td>
+    </tr>
+    <tr>
+      <td><b>Python 执行</b></td>
+      <td>自研外层 tool 插件（<code>run_python</code>，待 M0 后补）</td>
+      <td>补齐纯文本能力缺口（手搓态无脚本执行）；沙箱 / 超时 / stdout 捕获。作为外层 tool 接入，与 MCP 平级，无需手搓。</td>
+    </tr>
+    <tr>
+      <td><b>知识库 / 护城河</b></td>
+      <td>world-model + skill 库（Hermes 风 Markdown + YAML）+ Trajectory + Curator</td>
+      <td><b>框架外保留</b>，作为生命周期钩子挂载：每步后处理 → <code>trajectory.log</code>；任务结束 → <code>Curator.run_once()</code>；成功轨迹 → <code>SkillLibrary</code> 提炼晋升。L2 对循环有单步自治权（C4），但协议层仍归 L3。自学无插件。</td>
+    </tr>
+    <tr>
+      <td><b>自升级 meta-loop</b></td>
+      <td>四层：skill（知识）/ world-model（精炼）/ strategy（反思）/ weight-level（训练链升级路径）</td>
+      <td>知识级管行为适配，权重级管执行器能力适配，互补非互斥；权重级触发策略 A（阈值 + 提示确认，不自动跑）。旧 LoRA 链保留为主动升级路径。</td>
+    </tr>
+    <tr>
+      <td><b>持久化策略</b></td>
+      <td>三级留存：raw 轨迹 / failures / gguf 当前 + 上一版</td>
+      <td>采集常开（仅多写 jsonl，近零成本）；防低质轨迹稀释 SFT 语料；存储敏感。</td>
+    </tr>
+    <tr>
+      <td><b>验证门</b></td>
+      <td>N = 3（候选 skill 连续成功 3 次晋升）</td>
+      <td>防「乱点 20 次最后成功」被学成策略；幻觉 skill 自欺护栏。</td>
+    </tr>
+    <tr>
+      <td><b>Curator</b></td>
+      <td>触发式（任务完成后跑一次）</td>
+      <td>静默维护技能库锐度（prune + refine + 标 low-quality）。</td>
+    </tr>
+    <tr>
+      <td><b>上下文管理</b></td>
+      <td>worker：<code>history_keep:3</code> 硬滑窗；大模型：<code>long_task</code> 自动压缩（token 占比主触发）；超长任务：无状态大模型 + world-model 落盘 + 子目标 checkpoint</td>
+      <td>1M 窗口 ≠ 不压（context rot）；本地执行器无摘要能力 → 硬裁是唯一选择；大模型不做 3 轮（会丢全局上下文）。压缩 / 滑窗策略由框架 lifecycle 钩子执行，owner 变框架。</td>
+    </tr>
+    <tr>
+      <td><b>Escalation 阈值</b></td>
+      <td>verify 连败 3 / 内层 8 步 / 无置信硬触发 / 显式 escalate / ctx 溢出 / subtask 墙钟 120s（调试，待实测回收 60s）</td>
+      <td>全放 <code>config.yaml</code> 不硬编码；前沿无先验最优，默认值先跑通再测反推。handoff 表达为 LangGraph 原语（N6）。</td>
+    </tr>
+    <tr>
+      <td><b>HITL（人工干预）</b></td>
+      <td>双通道（硬停止 <code>/stop</code> + 软注入插话），全用框架原生</td>
+      <td>长任务少干预诉求：人工只在「抛锚（超阈值无法自愈）」介入，日常自愈由 L2 兜。硬停止 = 框架 cancel 当前 run + 新指令重启；软注入 = 运行时 push user 消息，下一步 agent 可见、优先级高于 L2 自治。前端 SSE/<code>/stop</code>/插话已存在（手搓态 N10），迁框架 interrupt 接管（C5）。</td>
+    </tr>
+  </table>
+
+  <div class="note"><b>架构红线（零场景特化）：</b>核心执行层不写任何 app / 游戏 / 业务专属策略；所有「怎么做」的任务流程知识由 skill / 知识库提供、由模型决策，不进执行器代码。内核经 <code>review_lint.py</code> 守护 C1–C5 五条契约。<code>collect_list</code> 作为<b>通用工具</b>（批量抓当前列表）保留；枚举类任务在「纯框架 + 无辅助代码」下能否由本地执行器自主完成，是待验证的<b>架构通用性边界</b>。</div><h2 id="s-4-行业对标与参考">4. 行业对标与参考</h2><p class="lead">框架态设计与 2026 主流 agent 范式高度对齐。下列参考是「为什么这么选」的外部佐证。</p>
+
+  <table>
+    <tr><th>范式 / 项目</th><th>与 OmniAgent 框架态的对应关系</th></tr>
+    <tr><td><b>MCP</b>（Anthropic，2025-12 捐 Linux Foundation AAIF）</td><td>事实标准「AI 的 USB-C」；哲学「build once as MCP server, any host 可用」= 我们的「能力 == 工具、core 不认识 X」。工具全经 MCP 接入，框架原生加载。</td></tr>
+    <tr><td><b>ReAct</b>（tool-use loop）</td><td>2026 单 agent 默认范式 = 我们的通用闭环，现由 OpenAI Agents SDK 原生接管，不再手搓。</td></tr>
+    <tr><td><b>Agent Skills</b>（Anthropic 开放标准）</td><td>SKILL.md 文件夹、agent 像装 App 加载技能 = 我们的 skill / world-model 纯文本知识库。</td></tr>
+    <tr><td><b>Hermes Agent</b>（NousResearch，MIT）</td><td>自进化技能系统 + Autonomous Background Curator；三层记忆本地 markdown；轨迹导出供微调。直接印证「world-model + skill 自学」范式，skill 格式对齐 agentskills.io。</td></tr>
+    <tr><td><b>UI-TARS</b>（ByteDance）</td><td>原生 GUI 模型；System-2 Reasoning + Iterative Training w/ Reflective Online Traces。印证「反思 + 从失败学」须内建。</td></tr>
+    <tr><td><b>MGA</b>（Memory-Driven GUI Agent）</td><td>本地快 VLM 感知 + 远程强模型记忆规划 ≈ 两层架构的论文版，强印证。</td></tr>
+    <tr><td><b>OSWorld</b> 基准</td><td>真实电脑环境 369 任务；顶级 agent 75–94% wall time 花在规划 / 反思 LLM 调用 → 印证「大模型低频、本地快执行」；grounding 是头号失败点 → SoM 必要。</td></tr>
+    <tr><td><b>LangGraph / OpenAI Agents SDK</b></td><td>协同栈：LangGraph 编排多 agent 拓扑 + handoff + interrupt（HITL），Agents SDK 跑单 agent ReAct/FC/流式并从 MCP 加载工具。印证「循环与协议交给框架、领域脑外挂」。</td></tr>
+  </table>
+
+  <div class="note"><b>诚实 caveat：</b>纯自主无结构化路由是科研前沿，生产普遍加 guardrail（step limit / tool allowlist / plan-replan / Reflexion 防循环）——OmniAgent 定位研究探索 agent 可接受，但保留 step cap。自动生成 skill 当前仍不可靠（弱模型 skill 会放大 bug），故「人审核接入」是正确保守姿态而非妥协。</div><h2 id="s-5-维护约定">5. 维护约定</h2><div class="note"><b>维护纪律（关键）：</b>本文件描述 <b>当前框架态</b>。设计变更时在此「就地更新当前状态」，<b>不追加演进史段落</b>。模块名锚定实时代码树（<code>omni_core/</code> 内核 · <code>omni_core/tools/</code> 外层插件包 · <code>devices/</code> 设备驱动 · <code>model_hub/</code>），改代码后同步此处。<b>框架态核心转变：</b>ReAct 循环与 function-call 协议交由 LangGraph + OpenAI Agents SDK；工具脱离内核、成为外层平级插件（自研 tool 承载基础能力 + 外部 MCP 承载外部系统，二者平级、由 LLM 直接调用）；护城河（WorldModel/Curator/Trajectory/Skill）外挂为生命周期钩子。</div>
+<script>
+(function(){
+  var links=[].slice.call(document.querySelectorAll('.toc-sidebar a'));
+  if(!links.length) return;
+  var map={};
+  links.forEach(function(a){ var id=a.getAttribute('href').slice(1); (map[id]=map[id]||[]).push(a); });
+  var targets=[];
+  links.forEach(function(a){ var t=document.getElementById(a.getAttribute('href').slice(1)); if(t) targets.push(t); });
+  var obs=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        links.forEach(function(l){l.classList.remove('active');});
+        (map[e.target.id]||[]).forEach(function(a){a.classList.add('active');});
+      }
+    });
+  },{rootMargin:'-15% 0px -75% 0px',threshold:0});
+  targets.forEach(function(t){obs.observe(t);});
+})();
+</script>
+
+</body>
+</html>
+
+
+
+
+
+

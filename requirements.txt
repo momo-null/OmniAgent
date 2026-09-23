@@ -1,0 +1,30 @@
+﻿# 基础依赖
+PyYAML>=6.0
+requests>=2.31.0
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# 屏幕截图
+mss>=9.0.1
+
+# 键鼠控制
+PyAutoGUI>=0.9.54
+
+# 视觉模型
+easyocr>=1.7.1
+ultralytics>=8.4.0
+opencv-python>=4.8.0
+
+# 深度学习基础
+torch>=2.1.0
+
+# 状态机编排（LangGraph：Send 并发扇出 + update_state 软注入；Agent 循环归 openai-agents）
+langgraph>=0.0.38
+# Agent 循环框架（OpenAI Agents SDK：Runner 驱动 ReAct 循环 + 流式事件）
+openai-agents>=0.22.2
+
+# API 网关
+fastapi>=0.110.0
+uvicorn>=0.29.0
+httpx>=0.27.0
+

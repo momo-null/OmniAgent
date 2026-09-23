@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OmniAgent · 架构设计</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#1f2933; --muted:#6b7280;
+    --line:#d9dee5; --code:#0f172a;
+    --brain:#6366f1; --runtime:#0ea5e9; --provider:#14b8a6;
+    --exec:#22c55e; --env:#94a3b8; --meta:#f59e0b;
+    --vision:#a855f7; --danger:#ef4444; --mcp:#ec4899;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.7;font-size:15px}
+  .wrap{max-width:1080px;margin:0 0 0 300px;padding:40px 28px 80px}
+  header.doc{border-bottom:2px solid var(--line);padding-bottom:18px;margin-bottom:8px}
+  header.doc h1{font-size:26px;margin:0 0 6px;letter-spacing:.3px}
+  header.doc .sub{color:var(--muted);font-size:13.5px}
+  .badges{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
+  .badge{font-size:12px;padding:3px 10px;border-radius:999px;background:#eef2f7;color:#475569;border:1px solid var(--line)}
+  nav.toc{position:fixed;top:0;left:0;width:280px;height:100vh;overflow-y:auto;
+    background:var(--panel);border-right:1px solid var(--line);border-radius:0;
+    padding:24px 18px 40px;margin:0}
+  nav.toc h3{margin:0 0 10px;font-size:14px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+  nav.toc ol{margin:0;padding-left:20px}
+  nav.toc li{margin:4px 0}
+  nav.toc a{color:var(--runtime);text-decoration:none;display:block;padding:2px 6px;border-radius:6px;transition:background .15s,color .15s}
+  nav.toc a:hover{text-decoration:underline}
+  nav.toc a.active{background:var(--runtime);color:#fff;font-weight:600}
+  @media (max-width:900px){
+    .wrap{max-width:none;margin:0;padding:24px 16px 60px}
+    nav.toc{position:static;width:auto;height:auto;overflow:visible;border-right:none;border:1px solid var(--line);border-radius:12px;margin:0 0 24px}
+  }
+  section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 30px;margin:22px 0;
+    box-shadow:0 1px 3px rgba(15,23,42,.04)}
+  section h2{font-size:20px;margin:0 0 6px;display:flex;align-items:center;gap:10px}
+  section h2 .num{font-size:13px;background:var(--ink);color:#fff;border-radius:8px;padding:2px 9px;font-weight:600}
+  section .lead{color:var(--muted);margin:0 0 20px;font-size:14px}
+  h3.blk{font-size:15.5px;margin:24px 0 8px;color:#334155}
+  .diagram{background:#fbfcfe;border:1px solid var(--line);border-radius:12px;padding:18px;margin:14px 0;overflow-x:auto}
+  .diagram svg{display:block;width:100%;height:auto;max-width:920px;margin:0 auto}
+  .cap{font-size:12.5px;color:var(--muted);text-align:center;margin-top:8px}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:#f1f5f9;color:#334155;font-weight:600}
+  code,.mono{font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;font-size:12.8px;
+    background:#eef2f7;padding:1px 6px;border-radius:5px;color:var(--code)}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 4px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:14px;height:14px;border-radius:4px;display:inline-block;border:1px solid rgba(0,0,0,.1)}
+  .note{background:#fffbeb;border-left:4px solid var(--meta);padding:10px 14px;border-radius:0 8px 8px 0;font-size:13.5px;margin:14px 0}
+  .redline{background:#fef2f2;border-left:4px solid var(--danger);padding:10px 14px;border-radius:0 8px 8px 0;font-size:13.5px;margin:14px 0}
+  footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:30px}
+  .fileref{font-size:12.5px;color:#475569;background:#f1f5f9;border-radius:8px;padding:8px 12px;margin:8px 0}
+  .part{margin:34px 0 12px;padding:12px 16px;border-left:4px solid var(--brain);background:#f5f6ff;border-radius:0 10px 10px 0}
+  .part h2{margin:0;font-size:17px;color:var(--brain);letter-spacing:.4px}
+  .part .psub{margin:4px 0 0;color:var(--muted);font-size:13px}
+  .prin{counter-reset:p;list-style:none;padding-left:0;margin:12px 0}
+  .prin li{position:relative;padding:9px 12px 9px 40px;margin:7px 0;background:#f8fafc;border:1px solid var(--line);border-radius:8px;font-size:13.5px}
+  .prin li:before{counter-increment:p;content:counter(p);position:absolute;left:10px;top:9px;width:20px;height:20px;background:var(--brain);color:#fff;border-radius:6px;text-align:center;font-size:12px;line-height:20px;font-weight:700}
+  .prin li b{color:var(--brain)}
+
+  .toc-sidebar{position:fixed;top:0;left:0;width:280px;height:100vh;overflow-y:auto;
+    background:var(--panel);border-right:1px solid var(--line);padding:22px 16px 40px;
+    box-sizing:border-box;z-index:20}
+  .toc-sidebar .toc-h{font-size:12.5px;color:var(--muted);text-transform:uppercase;
+    letter-spacing:1.2px;margin:0 0 14px;font-weight:600}
+  .toc-sidebar ul{list-style:none;margin:0;padding:0}
+  .toc-sidebar li{margin:1px 0;line-height:1.45}
+  .toc-sidebar li.l3{padding-left:18px}
+  .toc-sidebar a{display:block;color:var(--ink);text-decoration:none;font-size:13.5px;
+    padding:6px 10px;border-radius:8px;border-left:3px solid transparent;
+    transition:background .15s,color .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .toc-sidebar a:hover{background:#eef2f7}
+  .toc-sidebar a.active{background:var(--runtime);color:#fff;font-weight:600}
+  body{padding:0 40px 0 300px}
+  @media (max-width:900px){
+    .toc-sidebar{position:static;width:auto;height:auto;border-right:none;
+      border:1px solid var(--line);border-radius:12px;margin:0 0 24px;max-height:none}
+    .toc-sidebar a{white-space:normal}
+    body{padding:24px 16px 60px!important}
+  }
+
+</style>
+</head>
+<body>
+<nav class="toc-sidebar" aria-label="目录">
+  <p class="toc-h">目录</p>
+  <ul>
+    <li class="l2"><a href="#s-架构图集N1N10">架构图集（N1–N11）</a></li>
+    <li class="l2"><a href="#s-01-总体分层框架-护城河-能力-MCP">01 总体分层（框架 / 护城河 / 能力 + MCP）</a></li>
+    <li class="l2"><a href="#s-02-内核-MCP-工具调用解耦图">02 内核 + MCP 工具调用解耦图</a></li>
+    <li class="l2"><a href="#s-03-单次任务-ReAct-闭环框架原生-钩子">03 单次任务 ReAct 闭环（框架原生 + 钩子）</a></li>
+    <li class="l2"><a href="#s-04-Vision-SoM-通道图MCP-化">04 Vision SoM 通道图（MCP 化）</a></li>
+    <li class="l2"><a href="#s-05-自升级-Meta-loop">05 自升级 Meta-loop</a></li>
+    <li class="l2"><a href="#s-06-两层执行编排-EscalationLangGraph-handoff">06 通用多 agent 编排 + Escalation（LangGraph Send 扇出）</a></li>
+    <li class="l2"><a href="#s-07-上下文管理分层模型大模型质量压缩-vs-worker-硬滑窗">07 上下文管理分层模型（大模型质量压缩 vs worker 硬滑窗）</a></li>
+    <li class="l2"><a href="#s-08-超长任务持久化与检查点模型">08 超长任务持久化与检查点模型</a></li>
+    <li class="l2"><a href="#s-09-全局目录与-Project-Task-模型">09 全局目录与 Project / Task 模型</a></li>
+    <li class="l3"><a href="#s-91-目录结构">9.1 目录结构</a></li>
+    <li class="l3"><a href="#s-92-Project-与-Task-归属规则">9.2 Project 与 Task 归属规则</a></li>
+    <li class="l3"><a href="#s-93-三通道解耦-统一-chat">9.3 三通道解耦 + 统一 /chat</a></li>
+    <li class="l2"><a href="#s-10-前端设计HITL-双通道-C5">10 前端设计（HITL 双通道 = C5）</a></li>
+    <li class="l3"><a href="#s-101-架构分层">10.1 架构分层</a></li>
+    <li class="l3"><a href="#s-102-自研-StoreReact-Context零依赖">10.2 自研 Store（React Context，零依赖）</a></li>
+    <li class="l3"><a href="#s-103-后端对接端点前端-后端">10.3 后端对接端点（前端 ↔ 后端）</a></li>
+    <li class="l3"><a href="#s-104-交互范式Codex-风格-HITL-双通道-C5">10.4 交互范式（Codex 风格 + HITL 双通道 C5）</a></li>
+    <li class="l2"><a href="#s-11-知识层自升级K-系列">11 知识层自升级（K 系列）</a></li>
+    <li class="l3"><a href="#s-111-闭环四步">11.1 闭环四步</a></li>
+    <li class="l3"><a href="#s-112-三实体一致率模型K2">11.2 三实体一致率模型（K2）</a></li>
+    <li class="l3"><a href="#s-113-稳态判据与自动降频K5">11.3 稳态判据与自动降频（K5）</a></li>
+  </ul>
+</nav>
+<div><div><h1>OmniAgent · 架构设计</h1>
+<p class='lead'>架构图集（N1–N11），对应 master-spec 的架构决策。产品设计见 <code>agent-control-product-design.html</code>。</p>
+<h2 id="s-架构图集N1N10">架构图集（N1–N11）</h2>
+  <div class="psub">可视化参考：每张图锚定实时代码树，描述当前框架态。N1/N2/N3/N6 为框架态重写；N4/N5/N7/N8/N9/N10 沿用护城河与能力设计（工具已 MCP 化）。</div>
+</div>
+
+<!-- ============ N1 ============ -->
+<section id="n1">
+  <h2 id="s-01-总体分层框架-护城河-能力-MCP"><span class="num">01</span> 总体分层（框架 / 护城河 / 能力 + MCP）</h2>
+  <p class="lead">框架态核心：三层栈（L3 框架 / L2 护城河 / L1 能力）物理边界清晰。自研能力以 <code>function_tool</code> 插件承载、外部系统以 MCP 接入，二者在 L1 层<b>完全平级</b>；内核退化为「配置 + 钩子注册中心」。</p>
+
+  <div class="legend">
+    <span><i class="sw" style="background:var(--brain)"></i>L3 框架层</span>
+    <span><i class="sw" style="background:var(--meta)"></i>L2 护城河层</span>
+    <span><i class="sw" style="background:var(--mcp)"></i>L1 能力层 (MCP)</span>
+    <span><i class="sw" style="background:var(--exec)"></i>Environment</span>
+    <span><i class="sw" style="background:var(--vision)"></i>Vision</span>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 920 600" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+      <defs>
+        <marker id="ar" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#475569"/></marker>
+        <marker id="ard" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#f59e0b"/></marker>
+        <marker id="arm" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,3 L0,6 Z" fill="#ec4899"/></marker>
+      </defs>
+
+      <!-- L3 框架层 -->
+      <rect x="240" y="20" width="440" height="120" rx="12" fill="#eef0fe" stroke="var(--brain)" stroke-width="2.5"/>
+      <text x="460" y="50" font-size="15" font-weight="700" fill="var(--brain)" text-anchor="middle">L3 框架层（LangGraph + Agents SDK）</text>
+      <text x="460" y="74" font-size="12" fill="#475569" text-anchor="middle">ReAct 循环 · function-call · 流式 · MCP 工具加载</text>
+      <text x="460" y="94" font-size="12" fill="#475569" text-anchor="middle">Send 并发扇出 · 运行时消息注入（update_state）</text>
+      <text x="460" y="116" font-size="11" fill="#64748b" text-anchor="middle">不持有工具实现，不持有领域状态；持久化归 L2（WorldModel）</text>
+
+      <!-- L2 护城河层 -->
+      <rect x="240" y="170" width="440" height="110" rx="12" fill="#fff7e6" stroke="var(--meta)" stroke-width="2.5"/>
+      <text x="460" y="198" font-size="15" font-weight="700" fill="#b45309" text-anchor="middle">L2 护城河层（框架外，lifecycle 钩子挂载）</text>
+      <text x="460" y="222" font-size="12" fill="#475569" text-anchor="middle">WorldModel · Curator · Trajectory · Skill 晋升</text>
+      <text x="460" y="242" font-size="12" fill="#475569" text-anchor="middle">verify_done（任务完成判定）· OrchestrationPolicy（升级路由）</text>
+      <text x="460" y="264" font-size="11" fill="#64748b" text-anchor="middle">单步自治（自愈/换道/回退）· 仅抛锚才呼叫人工（C4）</text>
+
+      <!-- L1 能力层 (MCP) -->
+      <rect x="240" y="320" width="440" height="130" rx="12" fill="#fdeef6" stroke="var(--mcp)" stroke-width="2.5"/>
+      <text x="460" y="348" font-size="15" font-weight="700" fill="#be185d" text-anchor="middle">L1 能力层（SDK function_tool 插件 + 外部 MCP）</text>
+      <text x="460" y="372" font-size="12" fill="#475569" text-anchor="middle">自研 tool：屏幕/鼠标/键盘 · 视觉/SoM · Python 执行</text>
+      <text x="460" y="392" font-size="12" fill="#475569" text-anchor="middle">外部 MCP：MCPServerStdio / StreamableHttp，纯配置接入</text>
+      <text x="460" y="412" font-size="12" fill="#475569" text-anchor="middle">二者平级 · 由 LLM 直接调用 · 设备驱动在 devices/</text>
+      <text x="460" y="434" font-size="11" fill="#64748b" text-anchor="middle">领域逻辑只在外层插件 · 内核只认 tool 名 + 能力分组配置</text>
+
+      <!-- Environment -->
+      <rect x="300" y="490" width="320" height="60" rx="10" fill="#f1f5f9" stroke="var(--env)" stroke-width="2"/>
+      <text x="460" y="516" font-size="14" font-weight="700" fill="#475569" text-anchor="middle">Environment</text>
+      <text x="460" y="536" font-size="12" fill="#64748b" text-anchor="middle">Android 模拟器（u2/ADB）· 宿主机 OS · 未来浏览器/FS</text>
+
+      <!-- vertical main arrows -->
+      <line x1="460" y1="140" x2="460" y2="168" stroke="#475569" stroke-width="2" marker-end="url(#ar)"/>
+      <line x1="460" y1="280" x2="460" y2="318" stroke="#475569" stroke-width="2" marker-end="url(#ar)"/>
+      <line x1="460" y1="450" x2="460" y2="488" stroke="#475569" stroke-width="2" marker-end="url(#ar)"/>
+
+      <!-- L3 -> L1 MCP tool call -->
+      <line x1="680" y1="200" x2="680" y2="385" stroke="var(--mcp)" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arm)"/>
+      <text x="694" y="295" font-size="10.5" fill="#be185d" text-anchor="middle">MCP 工具调用</text>
+
+      <!-- L3 -> L2 hook -->
+      <line x1="240" y1="200" x2="240" y2="180" stroke="var(--meta)" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ard)"/>
+      <text x="228" y="196" font-size="10" fill="#b45309" text-anchor="end">每步后处理钩子</text>
+
+      <!-- capability injection -->
+      <rect x="20" y="170" width="190" height="64" rx="10" fill="#f3e8ff" stroke="var(--vision)" stroke-width="2"/>
+      <text x="115" y="194" font-size="12.5" font-weight="700" fill="#7e22ce" text-anchor="middle">Model Metadata</text>
+      <text x="115" y="214" font-size="11" fill="#64748b" text-anchor="middle">capabilities.vision 等</text>
+      <text x="115" y="230" font-size="11" fill="#64748b" text-anchor="middle">→ prompt 注入（动态）</text>
+      <line x1="210" y1="202" x2="238" y2="202" stroke="var(--vision)" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+      <text x="224" y="192" font-size="10" fill="#7e22ce" text-anchor="middle">能力</text>
+    </svg>
+    <div class="cap">图 N1 · 总体分层（框架态）。L3 框架驱动循环、L2 护城河外挂钩子、L1 外层插件（自研 tool 与外部 MCP 平级）。主线纵向贯通；工具调用与后处理钩子为旁路。</div>
+  </div>
+
+  <div class="fileref">模块锚点：<code>omni_core/</code>（L2：配置 + 钩子注册 + 护城河）· <code>omni_core/brain/llm.py</code>+<code>sdk_model.py</code>（model provider）· <code>omni_core/brain/sdk_loop.py</code>（Agent+Runner 驱动）· <code>omni_core/tools/</code>（L1 插件：device/vision/python/mcp_servers）· <code>devices/</code>（L1 设备驱动）· <code>omni_core/local/world_model.py</code>（护城河）</div>
+
+  <div class="redline"><b>设计红线：</b>内核（L3+L2 挂载）零场景硬编码、零工具实现；场景差异只通过「tool 插件 / MCP server」与「能力元数据」表达。换模型 / 换环境 / 加能力 = 加一个 tool 插件或一条 MCP server 配置、或改 metadata，不改内核。红线由 <code>scripts/review_lint.py --strict</code> 自动扫描 <code>omni_core/**</code> 并在 CI 拦截。</div>
+</section>
+
+<!-- ============ N2 ============ -->
+<section id="n2">
+  <h2 id="s-02-内核-MCP-工具调用解耦图"><span class="num">02</span> 内核 + MCP 工具调用解耦图</h2>
+  <p class="lead">框架态（已落地）：手搓的 ToolRegistry / Provider / <code>if name==</code> 分支已全部移除。自研能力用 SDK <code>function_tool</code> 声明，外部 MCP 用 SDK <code>MCPServerStdio</code> / <code>MCPServerStreamableHttp</code> 接入，二者作为 <code>Agent(tools=[...], mcp_servers=[...])</code> 平级交给 <code>Runner.run</code> 原生 dispatch，内核零持有、零路由。</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 920 480" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+      <defs>
+        <marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#475569"/></marker>
+        <marker id="arm2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#ec4899"/></marker>
+      </defs>
+
+      <!-- Brain via SDK -->
+      <rect x="30" y="40" width="250" height="70" rx="10" fill="#eef0fe" stroke="var(--brain)" stroke-width="2"/>
+      <text x="155" y="66" font-size="14" font-weight="700" fill="var(--brain)" text-anchor="middle">Brain（SDK Agent）</text>
+      <text x="155" y="86" font-size="11.5" fill="#475569" text-anchor="middle">输出 tool_call JSON</text>
+      <text x="155" y="103" font-size="11" fill="#64748b" text-anchor="middle">{"tool":"click","args":{...}}</text>
+
+      <!-- Framework runtime -->
+      <rect x="320" y="40" width="260" height="70" rx="10" fill="#e7f6fd" stroke="var(--runtime)" stroke-width="2"/>
+      <text x="450" y="64" font-size="13.5" font-weight="700" fill="var(--runtime)" text-anchor="middle">框架运行时（Agents SDK）</text>
+      <text x="450" y="84" font-size="11.5" fill="#475569" text-anchor="middle">ReAct 循环 + FC 协议 + 流式</text>
+      <text x="450" y="101" font-size="11" fill="#64748b" text-anchor="middle">原生 dispatch 到 MCP tool</text>
+
+      <line x1="280" y1="75" x2="318" y2="75" stroke="#475569" stroke-width="2" marker-end="url(#ar2)"/>
+
+      <!-- MCP loader -->
+      <rect x="620" y="40" width="260" height="70" rx="10" fill="#fdeef6" stroke="var(--mcp)" stroke-width="2"/>
+      <text x="750" y="64" font-size="13.5" font-weight="700" fill="#be185d" text-anchor="middle">MCP 加载器（框架原生）</text>
+      <text x="750" y="84" font-size="11.5" fill="#475569" text-anchor="middle">connect + list_tools</text>
+      <text x="750" y="101" font-size="11" fill="#64748b" text-anchor="middle">schema 由 server 提供，内核零持有</text>
+
+      <line x1="580" y1="75" x2="618" y2="75" stroke="#475569" stroke-width="2" marker-end="url(#ar2)"/>
+
+      <!-- three MCP servers -->
+      <rect x="600" y="160" width="280" height="90" rx="10" fill="#fdeef6" stroke="var(--mcp)" stroke-width="2"/>
+      <text x="740" y="186" font-size="13" font-weight="700" fill="#be185d" text-anchor="middle">MCP Servers（能力层）</text>
+      <text x="740" y="208" font-size="11.5" fill="#475569" text-anchor="middle">自研 tool · 外部 MCP</text>
+      <text x="740" y="226" font-size="11.5" fill="#475569" text-anchor="middle">（任意未来，纯配置接入）</text>
+      <line x1="750" y1="110" x2="750" y2="158" stroke="var(--mcp)" stroke-width="2" marker-end="url(#arm2)"/>
+
+      <!-- concrete impl inside MCP -->
+      <rect x="600" y="290" width="280" height="130" rx="10" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5"/>
+      <text x="740" y="312" font-size="12" font-weight="700" fill="#475569" text-anchor="middle">具体工具实现（领域逻辑）</text>
+      <text x="740" y="334" font-size="11" fill="#475569" text-anchor="middle">click / tap_by_id / press_keycode</text>
+      <text x="740" y="352" font-size="11" fill="#475569" text-anchor="middle">som_ground / som_marks / describe</text>
+      <text x="740" y="370" font-size="11" fill="#475569" text-anchor="middle">run_python / observe</text>
+      <text x="740" y="392" font-size="11" fill="#64748b" text-anchor="middle">（零场景硬编码，全在 server 内）</text>
+      <line x1="740" y1="250" x2="740" y2="288" stroke="var(--mcp)" stroke-width="2" marker-end="url(#arm2)"/>
+
+      <!-- Kernel config center -->
+      <rect x="30" y="290" width="250" height="90" rx="10" fill="#eef0fe" stroke="var(--brain)" stroke-width="2"/>
+      <text x="155" y="316" font-size="13" font-weight="700" fill="var(--brain)" text-anchor="middle">内核（配置 + 钩子）</text>
+      <text x="155" y="338" font-size="11" fill="#475569" text-anchor="middle">能力分组配置（哪个 MCP 启用）</text>
+      <text x="155" y="356" font-size="11" fill="#475569" text-anchor="middle">后处理钩子注册（护城河）</text>
+      <text x="155" y="374" font-size="11" fill="#64748b" text-anchor="middle">不持有 schema / 不路由</text>
+
+      <!-- Environment -->
+      <rect x="30" y="410" width="530" height="48" rx="10" fill="#f1f5f9" stroke="var(--env)" stroke-width="2"/>
+      <text x="295" y="439" font-size="13" font-weight="700" fill="#475569" text-anchor="middle">Environment：MuMu 模拟器 / 宿主机 OS / 未来浏览器 · 文件系统</text>
+      <line x1="155" y1="380" x2="155" y2="408" stroke="var(--exec)" stroke-width="2" marker-end="url(#ar2)"/>
+    </svg>
+    <div class="cap">图 N2 · 内核 + 工具调用解耦。Brain 只说话（tool_call），Runner dispatch 到外层插件（自研 function_tool 或外部 MCP tool），插件落地领域逻辑。内核仅作配置 + 钩子注册中心，零派发代码（C1 自然清零）。</div>
+  </div>
+
+  <table>
+    <tr><th>角色</th><th>框架态归属</th><th>职责</th><th>是否含场景硬编码</th></tr>
+    <tr><td>Brain</td><td>SDK <code>Agent</code> + <code>Model</code> provider</td><td>规划 / 反思 / 产出 tool_call；按 metadata 注入能力；persona 泛化为「通用自主 Agent」</td><td>否（纯通用）</td></tr>
+    <tr><td>框架运行时</td><td>LangGraph + Agents SDK</td><td>ReAct 循环 / FC 协议 / 流式 / 从 MCP 加载并 dispatch 工具 / Send 并发扇出 / update_state 软注入</td><td>否</td></tr>
+    <tr><td>MCP 加载器</td><td>框架原生 MCP adapter</td><td>connect server + list_tools；schema 转换由框架处理，内核不介入</td><td>否</td></tr>
+    <tr><td>能力插件</td><td>自研外层 tool / 外部 MCP server</td><td>领域工具实现（设备 / 视觉 / 脚本 / 外部系统）</td><td>否（领域数据走配置/插件）</td></tr>
+    <tr><td>护城河</td><td><code>omni_core/local/world_model.py</code> 等</td><td>WorldModel/Curator/Trajectory/Skill/verify_done，钩子挂载</td><td>否</td></tr>
+    <tr><td>内核</td><td><code>omni_core/</code> 配置 + 钩子注册</td><td>能力分组配置 + 后处理钩子；不持 schema、不路由</td><td>否</td></tr>
+    <tr><td>设备驱动</td><td><code>devices/</code>（L1，内核外）</td><td>Host/Emulator 执行原语 + text_of/verify_done 抽象</td><td>—</td></tr>
+  </table>
+</section>
+
+<!-- ============ N3 ============ -->
+<section id="n3">
+  <h2 id="s-03-单次任务-ReAct-闭环框架原生-钩子"><span class="num">03</span> 单次任务 ReAct 闭环（框架原生 + 钩子）</h2>
+  <p class="lead">框架态（已落地）：ReAct 循环由 OpenAI Agents SDK 原生驱动（<code>omni_core/brain/sdk_loop.py</code> 的 <code>Agent + Runner.run</code>），内核不再手搓；手搓的 <code>_run_inner</code> 已标记废弃、主路径不再调用。L2 通过框架原生机制挂接：<code>StopAtTools</code>（task_done / verify / escalate 收尾）、<code>RunHooks</code>（每步结果 → 世界模型 / 轨迹）、分块 <code>max_turns</code>（预算与升级检查点）。完成判定仍走 <code>backend.verify_done</code>，区分「页面变了」与「目标达成」。</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 860 540" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+      <defs>
+        <marker id="ar3" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#475569"/></marker>
+        <marker id="ary" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#ef4444"/></marker>
+        <marker id="ard3" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#f59e0b"/></marker>
+      </defs>
+
+      <!-- START -->
+      <rect x="360" y="20" width="140" height="40" rx="20" fill="#1f2933" />
+      <text x="430" y="45" font-size="13" fill="#fff" text-anchor="middle">START · objective</text>
+
+      <!-- OBSERVING -->
+      <rect x="350" y="90" width="160" height="48" rx="9" fill="#e7f6fd" stroke="var(--runtime)" stroke-width="2"/>
+      <text x="430" y="119" font-size="13" font-weight="700" fill="var(--runtime)" text-anchor="middle">OBSERVING（MCP 工具）</text>
+      <line x1="430" y1="60" x2="430" y2="88" stroke="#475569" stroke-width="2" marker-end="url(#ar3)"/>
+
+      <!-- PLANNING -->
+      <rect x="350" y="170" width="160" height="48" rx="9" fill="#eef0fe" stroke="var(--brain)" stroke-width="2"/>
+      <text x="430" y="199" font-size="13" font-weight="700" fill="var(--brain)" text-anchor="middle">PLANNING（brain）</text>
+      <line x1="430" y1="138" x2="430" y2="168" stroke="#475569" stroke-width="2" marker-end="url(#ar3)"/>
+
+      <!-- EXECUTING -->
+      <rect x="350" y="250" width="160" height="48" rx="9" fill="#e9fbee" stroke="var(--exec)" stroke-width="2"/>
+      <text x="430" y="279" font-size="13" font-weight="700" fill="#15803d" text-anchor="middle">EXECUTING（MCP tool）</text>
+      <line x1="430" y1="218" x2="430" y2="248" stroke="#475569" stroke-width="2" marker-end="url(#ar3)"/>
+
+      <!-- VERIFYING = hook -->
+      <rect x="350" y="330" width="160" height="48" rx="9" fill="#fef3c7" stroke="var(--meta)" stroke-width="2"/>
+      <text x="430" y="359" font-size="13" font-weight="700" fill="#b45309" text-anchor="middle">VERIFYING（L2 钩子）</text>
+      <line x1="430" y1="298" x2="430" y2="328" stroke="#475569" stroke-width="2" marker-end="url(#ar3)"/>
+
+      <!-- decision diamond -->
+      <polygon points="430,420 510,452 430,484 350,452" fill="#fff" stroke="var(--danger)" stroke-width="2"/>
+      <text x="430" y="448" font-size="11.5" font-weight="700" fill="var(--danger)" text-anchor="middle">task_done?</text>
+      <text x="430" y="466" font-size="10" fill="#64748b" text-anchor="middle">verify.pass?</text>
+      <line x1="430" y1="378" x2="430" y2="418" stroke="#475569" stroke-width="2" marker-end="url(#ar3)"/>
+
+      <!-- DONE -->
+      <rect x="600" y="430" width="120" height="44" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+      <text x="660" y="457" font-size="13" font-weight="700" fill="#15803d" text-anchor="middle">DONE</text>
+      <line x1="510" y1="452" x2="598" y2="452" stroke="#16a34a" stroke-width="2" marker-end="url(#ar3)"/>
+
+      <!-- FAILED -->
+      <rect x="140" y="430" width="120" height="44" rx="10" fill="#fee2e2" stroke="var(--danger)" stroke-width="2"/>
+      <text x="200" y="457" font-size="13" font-weight="700" fill="var(--danger)" text-anchor="middle">FAILED</text>
+
+      <!-- retry loop back -->
+      <path d="M350,452 C300,452 250,300 345,260" fill="none" stroke="var(--danger)" stroke-width="2" marker-end="url(#ary)"/>
+      <text x="250" y="360" font-size="10.5" fill="var(--danger)" text-anchor="middle">未达成→重规划</text>
+
+      <!-- hook side: L2 trajectory log -->
+      <rect x="690" y="330" width="190" height="120" rx="10" fill="#fff7e6" stroke="var(--meta)" stroke-width="2"/>
+      <text x="785" y="356" font-size="12.5" font-weight="700" fill="#b45309" text-anchor="middle">L2 护城河钩子</text>
+      <text x="785" y="378" font-size="11" fill="#64748b" text-anchor="middle">每步 → trajectory.log</text>
+      <text x="785" y="396" font-size="11" fill="#64748b" text-anchor="middle">verify_done 判定</text>
+      <text x="785" y="414" font-size="11" fill="#64748b" text-anchor="middle">失败 → 自愈/换道(C4)</text>
+      <text x="785" y="432" font-size="11" fill="#64748b" text-anchor="middle">任务完 → Curator+Skill</text>
+      <line x1="640" y1="354" x2="688" y2="354" stroke="var(--meta)" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ard3)"/>
+      <text x="664" y="344" font-size="10" fill="#b45309" text-anchor="middle">回调</text>
+
+      <text x="430" y="520" font-size="10.5" fill="#64748b" text-anchor="middle">每轮：大模型自主选感知 MCP 工具 (observe / ocr_screenshot / vision_describe) → brain → 框架 dispatch → act → L2 verify 钩子</text>
+    </svg>
+    <div class="cap">图 N3 · 单次任务 ReAct 闭环（框架态，已落地）。循环由 SDK Runner 驱动；Verify / 收尾 / 升级通过 StopAtTools + RunHooks 挂回 L2；失败重试与自愈由护城河决策（C4）。</div>
+  </div>
+
+  <div class="note"><b>为何 Verify 是钩子而非内核步骤（C4）：</b>经典 Computer-use 翻车 = 「点了 → 页面变了 → 以为完成」。框架态保留两层校验：① <b>显式 verify 钩子</b>：<code>spec.expected</code> / <code>done_when</code> 命中 → 直接 DONE（不调大模型）；② <b>task_done 门控</b>：大模型调 <code>task_done</code> 时强制 <code>verify_done</code>，通过才接受。verify 逻辑在 L2（护城河），内核循环不感知其实现。</div>
+  <div class="note"><b>感知工具三角（延续）：</b>observe（u2 层级树 text，快）/ ocr_screenshot（EasyOCR GPU）/ vision_describe（本地 VLM）三件并列 MCP 工具、无程序化优先级，大模型自主选择何时/用何工具观察。</div>
+</section>
+
+<!-- ============ N4 ============ -->
+<section id="n4">
+  <h2 id="s-04-Vision-SoM-通道图MCP-化"><span class="num">04</span> Vision SoM 通道图（MCP 化）</h2>
+  <p class="lead">关键设计：agent（LLM）是唯一判断者；本地 VLM 只是它的「眼睛/外层 tool」。SoM marks 跨步状态自持于 tool 内 <code>som://last_result</code>（α 决策，已落地：<code>omni_core/tools/vision_tool.py</code> 持有 <code>_last_marks</code>，<code>VisionRuntime</code> 改为无状态的 <code>tap_mark(mark)</code>；能力实现在同层 L1 的 <code>vision_runtime.py</code>，已迁出 <code>omni_core/local/</code>），内核零感知。agent 可用 <code>som_last_result</code> 工具重读。</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 880 300" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+      <defs>
+        <marker id="ar5" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#475569"/></marker>
+      </defs>
+      <!-- Brain -->
+      <rect x="320" y="30" width="240" height="56" rx="10" fill="#eef0fe" stroke="var(--brain)" stroke-width="2"/>
+      <text x="440" y="54" font-size="13.5" font-weight="700" fill="var(--brain)" text-anchor="middle">Brain（唯一判断者）</text>
+      <text x="440" y="74" font-size="11" fill="#64748b" text-anchor="middle">规划 / 决策 / 校验</text>
+
+      <!-- screenshot -->
+      <rect x="40" y="120" width="180" height="60" rx="10" fill="#f1f5f9" stroke="var(--env)" stroke-width="2"/>
+      <text x="130" y="146" font-size="12.5" font-weight="700" fill="#475569" text-anchor="middle">Environment 截图</text>
+      <text x="130" y="166" font-size="11" fill="#64748b" text-anchor="middle">screenshot 工具(MCP)</text>
+
+      <!-- vision tool -->
+      <rect x="320" y="120" width="240" height="60" rx="10" fill="#fdeef6" stroke="var(--mcp)" stroke-width="2"/>
+      <text x="440" y="146" font-size="13" font-weight="700" fill="#be185d" text-anchor="middle">视觉外层 tool（SoM/VLM）</text>
+      <text x="440" y="166" font-size="11" fill="#64748b" text-anchor="middle">describe / som_marks（标可点区）</text>
+
+      <!-- Som marks output -->
+      <rect x="600" y="120" width="240" height="60" rx="10" fill="#fff7e6" stroke="var(--meta)" stroke-width="2"/>
+      <text x="720" y="146" font-size="12.5" font-weight="700" fill="#b45309" text-anchor="middle">结构化视觉结果</text>
+      <text x="720" y="166" font-size="11" fill="#64748b" text-anchor="middle">{id, 归一化坐标, label}</text>
+
+      <line x1="220" y1="150" x2="318" y2="150" stroke="#475569" stroke-width="2" marker-end="url(#ar5)"/>
+      <line x1="560" y1="150" x2="598" y2="150" stroke="#475569" stroke-width="2" marker-end="url(#ar5)"/>
+      <line x1="720" y1="180" x2="720" y2="220" stroke="#475569" stroke-width="2" marker-end="url(#ar5)"/>
+      <line x1="440" y1="220" x2="440" y2="186" stroke="var(--vision)" stroke-width="1.6" stroke-dasharray="4 4" marker-end="url(#ar5)" opacity=".6"/>
+
+      <text x="440" y="248" font-size="11.5" fill="#64748b" text-anchor="middle">Vision 是对称 MCP 工具之一，不硬编码成管线；若 Brain 自带 VL，metadata 翻转即可跳过</text>
+    </svg>
+    <div class="cap">图 N4 · Vision SoM 通道（工具插件态）。本地 VLM 仅作为视觉外层 tool 返回结构化区域，最终点击决策仍由 Brain 做出（tap_by_mark 双路：结构化 ref → tap_by_id；视觉 center → 鼠标点击）；marks 状态自持于插件内 <code>som://last_result</code>。</div>
+  </div>
+
+  <div class="note"><b>yolo 修正（设计定稿）：</b>yoyo = <b>yolo（目标检测 / 简单 OCR）</b>，是视觉工具不是推理模型。vision-mcp 内部调用 yolo 检测结果再编号产 marks；<b>yolo 默认不单独暴露给 agent</b>（避免低层 bbox 淹没 agent），仅作 SoM 内部依赖；若需直调，后续可选暴露 <code>detect</code> tool。</div>
+</section>
+
+<!-- ============ N5 ============ -->
+<section id="n5">
+  <h2 id="s-05-自升级-Meta-loop"><span class="num">05</span> 自升级 Meta-loop</h2>
+  <p class="lead">长期变强的闭环（护城河核心，框架外保留）。轨迹由 L2 钩子落盘，经 Quality Filter 后晋升为 Skill / 沉淀为 SFT 语料；权重级升级在 M5，且须经人工确认（策略 A）。</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 880 280" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+      <defs>
+        <marker id="ar6" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#475569"/></marker>
+      </defs>
+      <rect x="30" y="110" width="150" height="56" rx="10" fill="#e6f7f5" stroke="var(--provider)" stroke-width="2"/>
+      <text x="105" y="134" font-size="12.5" font-weight="700" fill="#0f766e" text-anchor="middle">Trajectory</text>
+      <text x="105" y="154" font-size="10.5" fill="#64748b" text-anchor="middle">jsonl 落盘（钩子）</text>
+
+      <rect x="220" y="110" width="160" height="56" rx="10" fill="#fff7e6" stroke="var(--meta)" stroke-width="2"/>
+      <text x="300" y="134" font-size="12.5" font-weight="700" fill="#b45309" text-anchor="middle">Quality Filter</text>
+      <text x="300" y="154" font-size="10.5" fill="#64748b" text-anchor="middle">高retry/高介入→排除</text>
+
+      <rect x="420" y="40" width="170" height="56" rx="10" fill="#e9fbee" stroke="var(--exec)" stroke-width="2"/>
+      <text x="505" y="64" font-size="12.5" font-weight="700" fill="#15803d" text-anchor="middle">Skill Library</text>
+      <text x="505" y="84" font-size="10.5" fill="#64748b" text-anchor="middle">N=3 晋升（M4b.2 已落地）</text>
+
+      <rect x="420" y="180" width="170" height="56" rx="10" fill="#f3e8ff" stroke="var(--vision)" stroke-width="2"/>
+      <text x="505" y="204" font-size="12.5" font-weight="700" fill="#7e22ce" text-anchor="middle">Dataset (SFT)</text>
+      <text x="505" y="224" font-size="10.5" fill="#64748b" text-anchor="middle">稳定成功轨迹</text>
+
+      <rect x="640" y="110" width="200" height="56" rx="10" fill="#eef0fe" stroke="var(--brain)" stroke-width="2"/>
+      <text x="740" y="134" font-size="12.5" font-weight="700" fill="var(--brain)" text-anchor="middle">LoRA→merge→GGUF</text>
+      <text x="740" y="154" font-size="10.5" fill="#64748b" text-anchor="middle">权重级（M5·策略A确认）</text>
+
+      <line x1="180" y1="138" x2="218" y2="138" stroke="#475569" stroke-width="2" marker-end="url(#ar6)"/>
+      <line x1="380" y1="138" x2="418" y2="96" stroke="#475569" stroke-width="2" marker-end="url(#ar6)"/>
+      <line x1="380" y1="138" x2="418" y2="200" stroke="#475569" stroke-width="2" marker-end="url(#ar6)"/>
+      <line x1="590" y1="68" x2="638" y2="120" stroke="#475569" stroke-width="2" marker-end="url(#ar6)"/>
+      <line x1="590" y1="208" x2="638" y2="150" stroke="#475569" stroke-width="2" marker-end="url(#ar6)"/>
+    </svg>
+    <div class="cap">图 N5 · 自升级 Meta-loop（护城河）。Skill 与 Dataset 源自同一批轨迹；权重级升级在 M5，且必须经 Quality Filter 与人工确认（策略 A），避免「乱点 20 次最后成功」被学成策略。</div>
+  </div>
+</section>
+
+<!-- ============ N6 ============ -->
+<section id="n6">
+  <h2 id="s-06-两层执行编排-EscalationLangGraph-handoff"><span class="num">06</span> 通用多 agent 编排 + Escalation（LangGraph Send 扇出）</h2>
+  <p class="lead">框架态（M10 已落地，<a href="../plans/implemented/multi-agent-redesign-2026-09-13.md">multi-agent-redesign</a >）：<b>去分层</b>——不再有固定的「manager 规划 + worker 执行」两层。主 agent（主模型）默认自己把任务做完；只有互不依赖、可并行的子任务群，主 agent 才调 <code>dispatch</code> 元工具产出计划，编排层（<code>omni_core/orchestration/graph.py</code>，main / sub / finalize 节点）用 LangGraph <code>Send</code> 扇出子 agent（执行模型）<b>并发</b>执行，结果经 add reducer 聚合回灌主 agent。子 agent 干不动时靠可量化升级条件把现场交回主 agent（escalate）。</p >
+
+  <div class="diagram">
+    <svg viewBox="0 0 920 480" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+      <defs>
+        <marker id="ar9" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#475569"/></marker>
+        <marker id="ar9r" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#ef4444"/></marker>
+        <marker id="ar9b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#6366f1"/></marker>
+      </defs>
+
+      <!-- LangGraph orchestrator -->
+      <rect x="300" y="20" width="320" height="44" rx="10" fill="#eef0fe" stroke="var(--brain)" stroke-width="2"/>
+      <text x="460" y="47" font-size="13" font-weight="700" fill="var(--brain)" text-anchor="middle">LangGraph 编排（main / sub / finalize + Send 扇出）</text>
+
+      <!-- Main agent -->
+      <rect x="300" y="84" width="320" height="56" rx="10" fill="#eef0fe" stroke="var(--brain)" stroke-width="2"/>
+      <text x="460" y="110" font-size="14" font-weight="700" fill="var(--brain)" text-anchor="middle">主 agent（主模型 · 默认自己跑完）</text>
+      <text x="460" y="130" font-size="11.5" fill="#475569" text-anchor="middle">需要并行时调 dispatch() → 结构化派发计划</text>
+
+      <line x1="460" y1="64" x2="460" y2="82" stroke="var(--brain)" stroke-width="2" marker-end="url(#ar9b)"/>
+
+      <!-- dispatch plan box -->
+      <rect x="320" y="160" width="280" height="40" rx="10" fill="#e7f6fd" stroke="var(--runtime)" stroke-width="2"/>
+      <text x="460" y="185" font-size="12" fill="#334155" text-anchor="middle">dispatch plan[] · desc / done_when</text>
+
+      <line x1="460" y1="140" x2="460" y2="158" stroke="#475569" stroke-width="2" marker-end="url(#ar9)"/>
+
+      <!-- Sub agents (concurrent) -->
+      <rect x="250" y="218" width="420" height="100" rx="10" fill="#e9fbee" stroke="var(--exec)" stroke-width="2"/>
+      <text x="460" y="246" font-size="14" font-weight="700" fill="#15803d" text-anchor="middle">子 agent × N（执行模型 · Send 并发扇出）</text>
+      <text x="460" y="268" font-size="11.5" fill="#475569" text-anchor="middle">Agents SDK 内层 ReAct：自主选感知 MCP 工具→brain→框架 dispatch→act→verify 钩子</text>
+      <text x="460" y="288" font-size="11.5" fill="#475569" text-anchor="middle">真并发（asyncio.to_thread + ainvoke）· 走同一套 MCP 工具</text>
+      <text x="460" y="308" font-size="10.5" fill="#64748b" text-anchor="middle">成功→results 聚合回灌 ｜ 触发升级条件→暂停 escalate（C4 自愈）</text>
+
+      <line x1="460" y1="200" x2="460" y2="216" stroke="#475569" stroke-width="2" marker-end="url(#ar9)"/>
+
+      <!-- escalation path (dashed red) -> main agent -->
+      <path d="M250,254 C150,254 110,150 110,78 C110,60 130,54 298,54" fill="none" stroke="var(--danger)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ar9r)"/>
+      <text x="118" y="150" font-size="10.5" fill="var(--danger)" text-anchor="middle">escalate(卡点)</text>
+      <text x="118" y="166" font-size="9.5" fill="#64748b" text-anchor="middle">失败升级→主 agent 反思</text>
+
+      <!-- brain replan label -->
+      <text x="200" y="40" font-size="10" fill="#64748b" text-anchor="middle">边界/失败反思</text>
+
+      <!-- DONE -->
+      <rect x="610" y="330" width="150" height="46" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+      <text x="685" y="358" font-size="13" font-weight="700" fill="#15803d" text-anchor="middle">DONE（全部完成）</text>
+      <path d="M540,318 C600,338 640,348 669,328" fill="none" stroke="#16a34a" stroke-width="2" marker-end="url(#ar9)"/>
+      <text x="600" y="300" font-size="10" fill="#16a34a" text-anchor="middle">子任务完成→回灌</text>
+
+      <!-- config box -->
+      <rect x="710" y="218" width="190" height="200" rx="10" fill="#fff7e6" stroke="var(--meta)" stroke-width="2"/>
+      <text x="805" y="244" font-size="12.5" font-weight="700" fill="#b45309" text-anchor="middle">升级阈值</text>
+      <text x="805" y="266" font-size="10.5" fill="#64748b" text-anchor="middle">config.yaml</text>
+      <text x="805" y="284" font-size="10.5" fill="#64748b" text-anchor="middle">runtime.escalation.*</text>
+      <text x="805" y="310" font-size="10.5" fill="#64748b" text-anchor="middle">· verify 连败 3</text>
+      <text x="805" y="330" font-size="10.5" fill="#64748b" text-anchor="middle">· 内层 8 步</text>
+      <text x="805" y="350" font-size="10.5" fill="#64748b" text-anchor="middle">· 无置信 硬触发</text>
+      <text x="805" y="370" font-size="10.5" fill="#64748b" text-anchor="middle">· 墙钟 120s(调试)</text>
+      <text x="805" y="392" font-size="9.5" fill="#64748b" text-anchor="middle">全可配·不硬编码</text>
+    </svg>
+    <div class="cap">图 N6 · 通用多 agent 编排 + Escalation（M10 框架态）。主 agent 默认自己做完；调 <code>dispatch</code> 才 Send 扇出子 agent 并发执行，结果 add reducer 聚合回灌；干不动才 escalate 回主 agent。<b>架构决策（2026-09-17 评估）：</b>保留图编排（Send 扇出含批次栅栏 / 预算分配 / 轮次上限），不迁移 SDK <code>as_tool</code> / handoff 原语——批次原子性与结构化控制是长任务刚需。</div>
+  </div>
+
+  <table>
+    <tr><th>升级触发（子 agent → 主 agent，经 escalate）</th><th>默认阈值</th><th>说明</th></tr>
+    <tr><td>verify 连续失败</td><td><b>3 次</b></td><td>同 subtask 内连续校验失败 → 升级，防死磕</td></tr>
+    <tr><td>内层步数上限</td><td><b>8 步</b></td><td>单 subtask 内层 loop 超步仍无进展 → 升级（防打转）</td></tr>
+    <tr><td>无置信匹配</td><td><b>硬触发</b></td><td>template_match 低于阈 / som 无对应 label / OCR 无 expected 且无 fallback → 立即升级</td></tr>
+    <tr><td>显式升级工具</td><td>模型自决</td><td>子 agent 可主动调 <code>escalate(reason)</code> 求援</td></tr>
+    <tr><td>上下文近上限</td><td>随 <code>max_history</code></td><td>本地 ctx 临顶（配合已有裁剪）→ 升级或压缩</td></tr>
+    <tr><td>subtask 墙钟超时</td><td><b>120s（调试）</b></td><td>实时场景单 subtask 超时 → 升级；调试阶段放宽至 2 分钟，待实测轨迹反推合理值后回收至 60s</td></tr>
+  </table>
+
+  <div class="note"><b>LangGraph 定位（2026-09-17 收束）：</b>LangGraph 在本架构中只承担<b>运行中编排</b>——Send 并发扇出、轮次 / 预算控制、<code>update_state</code> 软注入。持久化一律交给领域层（WorldModel 落盘 + skill 沉淀，见 §08），不引入 SqliteSaver 等持久化 checkpointer。graph state 只记控制簿记（plan / results / round / budget），零领域数据。</div>
+</section>
+
+<!-- ============ N7 ============ -->
+<section id="n7">
+  <h2 id="s-07-上下文管理分层模型大模型质量压缩-vs-worker-硬滑窗"><span class="num">07</span> 上下文管理分层模型（大模型质量压缩 vs worker 硬滑窗）</h2>
+  <p class="lead">两层架构下，大模型与 worker 的上下文目标不同，管理策略必须分开：worker 是「存活裁剪」（硬滑窗防溢出），大模型是「质量压缩」（handoff 前瞻摘要 + token 占比主触发）。1M 窗口 ≠ 不压。压缩 / 滑窗策略由框架 lifecycle 钩子执行，owner 变框架。</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 920 470" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+      <defs>
+        <marker id="ar10" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#475569"/></marker>
+        <marker id="ar10r" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#ef4444"/></marker>
+        <marker id="ar10b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#6366f1"/></marker>
+      </defs>
+
+      <!-- Online Brain -->
+      <rect x="60" y="36" width="380" height="62" rx="10" fill="#eef0fe" stroke="var(--brain)" stroke-width="2"/>
+      <text x="250" y="62" font-size="14" font-weight="700" fill="var(--brain)" text-anchor="middle">Online Brain（manager · OpenAI 兼容）</text>
+      <text x="250" y="82" font-size="11" fill="#475569" text-anchor="middle">规划上下文：plan + constraints 每次调用重注入</text>
+
+      <!-- accumulating messages -->
+      <rect x="90" y="116" width="320" height="38" rx="8" fill="#f1f5f9" stroke="var(--line)"/>
+      <text x="250" y="140" font-size="11" fill="#475569" text-anchor="middle">累积消息随 subtask 增长（token 占比驱动）</text>
+
+      <!-- compress triggers -->
+      <rect x="90" y="172" width="150" height="58" rx="8" fill="#fff7e6" stroke="var(--meta)" stroke-width="1.5"/>
+      <text x="165" y="194" font-size="11" font-weight="700" fill="#b45309" text-anchor="middle">compress_threshold</text>
+      <text x="165" y="212" font-size="10.5" fill="#64748b" text-anchor="middle">0.65 用到 65% 即压</text>
+      <text x="165" y="226" font-size="9.5" fill="#64748b" text-anchor="middle">抢在 context rot 前</text>
+
+      <rect x="260" y="172" width="150" height="58" rx="8" fill="#fff7e6" stroke="var(--meta)" stroke-width="1.5"/>
+      <text x="335" y="194" font-size="11" font-weight="700" fill="#b45309" text-anchor="middle">hard_ceiling</text>
+      <text x="335" y="212" font-size="10.5" fill="#64748b" text-anchor="middle">0.85 无条件压</text>
+      <text x="335" y="226" font-size="9.5" fill="#64748b" text-anchor="middle">（兜底）</text>
+
+      <!-- handoff summary arrow -->
+      <path d="M335,172 C335,120 280,118 250,154" fill="none" stroke="var(--brain)" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ar10b)"/>
+      <text x="205" y="146" font-size="9.5" fill="var(--brain)" text-anchor="middle">handoff 前瞻摘要</text>
+
+      <!-- persistent constraint block -->
+      <rect x="90" y="250" width="320" height="44" rx="8" fill="#eef0fe" stroke="var(--brain)" stroke-width="1.5"/>
+      <text x="250" y="270" font-size="11" font-weight="700" fill="var(--brain)" text-anchor="middle">持久约束块 plan+constraints 永注入</text>
+      <text x="250" y="286" font-size="9.5" fill="#64748b" text-anchor="middle">压缩只更新摘要，不丢约束块</text>
+
+      <!-- max_turns fallback -->
+      <rect x="90" y="308" width="320" height="34" rx="8" fill="#f1f5f9" stroke="var(--line)"/>
+      <text x="250" y="330" font-size="10.5" fill="#475569" text-anchor="middle">max_turns:16（次级兜底 · 不截断任务）</text>
+
+      <!-- Local Executor Worker -->
+      <rect x="480" y="36" width="380" height="62" rx="10" fill="#e9fbee" stroke="var(--exec)" stroke-width="2"/>
+      <text x="670" y="62" font-size="14" font-weight="700" fill="#15803d" text-anchor="middle">Local Executor（worker · 高频）</text>
+      <text x="670" y="82" font-size="11" fill="#475569" text-anchor="middle">内层 loop · ctx 8192</text>
+
+      <!-- hard keep 3 -->
+      <rect x="510" y="116" width="320" height="58" rx="8" fill="#e9fbee" stroke="var(--exec)" stroke-width="1.5"/>
+      <text x="670" y="138" font-size="11" font-weight="700" fill="#15803d" text-anchor="middle">history_keep:3 硬滑窗</text>
+      <text x="670" y="156" font-size="10" fill="#64748b" text-anchor="middle">只留最近 3 轮 · 按轮裁剪防溢出</text>
+
+      <!-- 本地执行器无摘要 -->
+      <rect x="510" y="190" width="320" height="40" rx="8" fill="#f1f5f9" stroke="var(--line)"/>
+      <text x="670" y="214" font-size="10.5" fill="#475569" text-anchor="middle">本地执行器无摘要能力 → 不产 handoff，硬裁是唯一选择</text>
+
+      <!-- overflow -> escalate -->
+      <path d="M510,206 C440,206 412,150 405,98" fill="none" stroke="var(--danger)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ar10r)"/>
+      <text x="428" y="156" font-size="9.5" fill="var(--danger)" text-anchor="middle">ctx 临顶/溢出</text>
+      <text x="428" y="170" font-size="9.5" fill="var(--danger)" text-anchor="middle">→ 升级回大模型</text>
+
+      <!-- config box -->
+      <rect x="480" y="250" width="380" height="150" rx="10" fill="#fff7e6" stroke="var(--meta)" stroke-width="2"/>
+      <text x="670" y="276" font-size="12.5" font-weight="700" fill="#b45309" text-anchor="middle">config.yaml 落点</text>
+      <text x="500" y="300" font-size="10.5" fill="#64748b">✅ brain.long_task.enabled : true</text>
+      <text x="500" y="320" font-size="10.5" fill="#64748b">✅ brain.long_task.max_turns : 16</text>
+      <text x="500" y="340" font-size="10.5" fill="#64748b">✅ brain.long_task.compress : true</text>
+      <text x="500" y="360" font-size="10.5" fill="#64748b">✅ escalation.worker_history_keep : 3</text>
+      <text x="500" y="380" font-size="10.5" fill="#b45309">⏳ compress_threshold / hard_ceiling（待补）</text>
+      <text x="500" y="398" font-size="9" fill="#64748b">⚠ 落地前需确认所选大模型的真实窗口</text>
+    </svg>
+    <div class="cap">图 N7 · 上下文管理分层模型（框架态）。worker 硬滑窗存活裁剪（绿），大模型 token 占比主触发 + handoff 质量压缩（紫）。二者策略不可混用；压缩/滑窗由框架 lifecycle 钩子执行。</div>
+  </div>
+
+  <div class="note"><b>为何「1M 窗口 ≠ 不压」：</b>Claude 官方称大窗口下的退化叫 "context rot"；Chroma 2025 实测 200K 窗口自 50K token 起性能明显退化（lost-in-the-middle）。Codex / Claude / Hermes <b>全都在压</b>——大窗口只给跑大任务的余量。OmniAgent 大模型走 OpenAI 兼容接口，模型可任意替换，真实窗口因所选模型而异，token 占比必须相对其真实窗口算。</div>
+</section>
+
+<!-- ============ N8 ============ -->
+<section id="n8">
+  <h2 id="s-08-超长任务持久化与检查点模型"><span class="num">08</span> 超长任务持久化与检查点模型</h2>
+  <p class="lead">OmniAgent 会跑小时级甚至跨天常驻任务（长任务少干预诉求），不能靠 /clear 续命。解法：把大部分状态根本不进窗口——无状态大模型 + 持久世界模型落盘 + 子目标检查点续跑。压缩写回世界模型以规避 JPEG 效应。这是「长任务少干预」的护城河支点。</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 920 540" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+      <defs>
+        <marker id="ar11" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#475569"/></marker>
+        <marker id="ar11b" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#6366f1"/></marker>
+      </defs>
+
+      <!-- global goal constraint block -->
+      <rect x="120" y="20" width="680" height="46" rx="10" fill="#eef0fe" stroke="var(--brain)" stroke-width="2"/>
+      <text x="460" y="46" font-size="12.5" font-weight="700" fill="var(--brain)" text-anchor="middle">全局目标 · plan · constraints（持久约束块，每次调用重注入）</text>
+
+      <!-- subtasks -->
+      <rect x="120" y="100" width="200" height="44" rx="8" fill="#e7f6fd" stroke="var(--runtime)" stroke-width="1.5"/>
+      <text x="220" y="127" font-size="11.5" fill="#334155" text-anchor="middle">子目标 SG1 · 清房间1</text>
+      <rect x="360" y="100" width="200" height="44" rx="8" fill="#e7f6fd" stroke="var(--runtime)" stroke-width="1.5"/>
+      <text x="460" y="127" font-size="11.5" fill="#334155" text-anchor="middle">子目标 SG2 · 清房间2</text>
+      <rect x="600" y="100" width="200" height="44" rx="8" fill="#e7f6fd" stroke="var(--runtime)" stroke-width="1.5"/>
+      <text x="700" y="127" font-size="11.5" fill="#334155" text-anchor="middle">子目标 SG3 · 回港领奖</text>
+
+      <line x1="300" y1="66" x2="220" y2="100" stroke="#475569" stroke-width="1.5" marker-end="url(#ar11)"/>
+      <line x1="460" y1="66" x2="460" y2="100" stroke="#475569" stroke-width="1.5" marker-end="url(#ar11)"/>
+      <line x1="620" y1="66" x2="700" y2="100" stroke="#475569" stroke-width="1.5" marker-end="url(#ar11)"/>
+
+      <!-- workers -->
+      <rect x="120" y="164" width="200" height="44" rx="8" fill="#e9fbee" stroke="var(--exec)" stroke-width="1.5"/>
+      <text x="220" y="191" font-size="10.5" fill="#15803d" text-anchor="middle">worker · 干净本地 ctx</text>
+      <rect x="360" y="164" width="200" height="44" rx="8" fill="#e9fbee" stroke="var(--exec)" stroke-width="1.5"/>
+      <text x="460" y="191" font-size="10.5" fill="#15803d" text-anchor="middle">worker · 干净本地 ctx</text>
+      <rect x="600" y="164" width="200" height="44" rx="8" fill="#e9fbee" stroke="var(--exec)" stroke-width="1.5"/>
+      <text x="700" y="191" font-size="10.5" fill="#15803d" text-anchor="middle">worker · 干净本地 ctx</text>
+
+      <line x1="220" y1="144" x2="220" y2="164" stroke="var(--exec)" stroke-width="1.5" marker-end="url(#ar11)"/>
+      <line x1="460" y1="144" x2="460" y2="164" stroke="var(--exec)" stroke-width="1.5" marker-end="url(#ar11)"/>
+      <line x1="700" y1="144" x2="700" y2="164" stroke="var(--exec)" stroke-width="1.5" marker-end="url(#ar11)"/>
+
+      <!-- checkpoint arrows SG -> world model -->
+      <path d="M220,144 C220,230 380,290 460,300" fill="none" stroke="var(--meta)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar11)"/>
+      <path d="M460,144 C460,240 460,290 460,300" fill="none" stroke="var(--meta)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar11)"/>
+      <path d="M700,144 C700,230 540,290 460,300" fill="none" stroke="var(--meta)" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar11)"/>
+      <text x="320" y="252" font-size="9.5" fill="var(--meta)" text-anchor="middle">checkpoint 落盘</text>
+      <text x="600" y="252" font-size="9.5" fill="var(--meta)" text-anchor="middle">（子目标边界）</text>
+
+      <!-- world model disk -->
+      <rect x="120" y="300" width="680" height="70" rx="10" fill="#f1f5f9" stroke="#475569" stroke-width="2"/>
+      <text x="460" y="326" font-size="12.5" font-weight="700" fill="#334155" text-anchor="middle">持久 world-model 落盘（目标 / 约束 / 已学事实 / 进度）</text>
+      <text x="460" y="346" font-size="10.5" fill="#64748b" text-anchor="middle">压缩只更新指针 · 关键进展写回此处（避免 JPEG 效应）</text>
+      <text x="460" y="362" font-size="9.5" fill="#64748b" text-anchor="middle">&lt;repo&gt;/.omniagent/world_model/（current.md + facts/ + recent.md）</text>
+
+      <!-- stateless brain call -->
+      <rect x="120" y="400" width="680" height="46" rx="10" fill="#eef0fe" stroke="var(--brain)" stroke-width="1.5"/>
+      <text x="460" y="420" font-size="11" font-weight="700" fill="var(--brain)" text-anchor="middle">无状态大模型：每次调用重建上下文</text>
+      <text x="460" y="438" font-size="10" fill="#64748b" text-anchor="middle">= world-model 快照 + 当前子目标 / 升级原因（不累积长历史）</text>
+
+      <!-- resume after crash -->
+      <rect x="120" y="470" width="680" height="42" rx="10" fill="#fef2f2" stroke="var(--danger)" stroke-width="1.5"/>
+      <text x="460" y="496" font-size="11" fill="#b91c1c" text-anchor="middle">崩溃 / 重启 → 从 checkpoint resume 重注入（不丢数小时进度）</text>
+      <path d="M460,370 C460,410 460,440 460,470" fill="none" stroke="var(--danger)" stroke-width="1.5" stroke-dasharray="6 4"/>
+    </svg>
+    <div class="cap">图 N8 · 超长任务持久化与检查点模型（护城河）。子目标分解给 worker 干净本地 ctx，边界写 checkpoint 到持久 world-model；大模型无状态、每次只收快照+当前子目标，崩溃可续。</div>
+  </div>
+
+  <table>
+    <tr><th>机制</th><th>作用</th><th>是否进 LLM 窗口</th></tr>
+    <tr><td>无状态大模型（每次调用重建上下文）</td><td>只收「world-model 快照 + 当前子目标 / 升级原因」，不累积历史 → 几乎不触发压缩</td><td>极小（仅当前轮）</td></tr>
+    <tr><td>持久外部记忆（world-model 落盘）</td><td>目标 / 约束 / 已学事实 / 进度，每次调用重注入；压缩怎么压都不丢</td><td>仅摘要指针注入</td></tr>
+    <tr><td>子目标检查点（checkpoint 落盘）</td><td>子目标边界把 world-model + 当前子目标写盘；崩溃 / 重启从检查点续</td><td>不进窗口</td></tr>
+  </table>
+
+  <div class="note"><b>行业对齐：</b>Codex 警告「多次压缩导致模型准确度下降」（JPEG 效应）；Zylos 2026 结论——长任务靠「压缩 + 结构化外部记忆 + 子 agent 委派」三层，且<b>压缩有损，外部记忆才是连续性真靠山</b>。OmniAgent 两层架构骨架已朝此方向，world_model 持久化 + 检查点已落地（M4b.1）：`world_model.py` save/load(current.md) + checkpoint(JSON) + merge_progress(防 JPEG)；`_plan`/`_reflect` 无状态化（只组装 `world.summary()`）。框架态下该机制不变，仅压缩/checkpoint 触发点改由框架 lifecycle 钩子驱动。</div>
+  <div class="note"><b>架构决策（2026-09-17）：不引入持久化 checkpointer（SqliteSaver 等）。</b>推理链：① LLM 上下文有限 → 长任务必然滑动（压缩 / 滑窗，见 §07），「恢复全量执行状态」本就不存在；② 崩溃恢复后模型重建认知靠的仍是 WorldModel 快照 + skill 沉淀，而非逐步执行轨迹；③ 通用 checkpointer 存全量 state 快照，体积大且大部分是模型吃不回的旧上下文——领域定制的 WorldModel（只存认知要点）粒度更对，且 skill 升级沉淀实现跨任务复用。LangGraph checkpointer 维持 <code>MemorySaver</code> 内存版，仅作软注入（<code>update_state</code>）通道使用，不承担持久化职责。HITL 需求为「运行中不中断」（软注入 + /stop），评估后不做 <code>interrupt</code> 审批暂停点。</div>
+</section>
+
+<!-- ============ N9 ============ -->
+<section id="n9">
+  <h2 id="s-09-全局目录与-Project-Task-模型"><span class="num">09</span> 全局目录与 Project / Task 模型</h2>
+  <p class="lead">定义 agent 所有持久资产的落盘位置：用户全局 <code>~/.omniagent/</code>（跨 project）。原 <code>workspace</code> / <code>app</code> 概念已<b>从内核彻底删除</b>（北极星红线），改为 <b>project（路径 slug）+ 独立 task</b> 两实体。与框架无关，纯资产落盘约定。</p>
+
+  <h3 id="s-91-目录结构" class="blk">9.1 目录结构</h3>
+  <div class="diagram">
+    <pre style="font-size:12.5px;line-height:1.6;background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:16px;margin:0;overflow-x:auto"><code>~/.omniagent/                     # 用户全局（跨 project，~ = 用户主目录）
+  config.yaml                     # 去明文 key + 端点；三通道(planner/executor/vision)由 Web 设置面板写入
+  skills/                         # 通用 skill（跨 project 共享，含 Curator 升级产出）
+  memory/                         # 知识层（K 系列）记忆子系统：跨会话长期记忆（非「全量加载」）
+    MEMORY.md                     #   全局长期记忆（仅追加、可人工编辑）
+    memory_summary.md             #   注入专用视图（截断 20000 字符、可随时再生）
+    merged.json                   #   已合并 task_id 清单（幂等去重核心）
+    rollouts/&lt;task_id&gt;.md         #   单任务蒸馏记忆，头部关联原始轨迹路径
+    signals_aggregate.json        #   K2 信号聚合基线（假成功率 / 分歧率 / C₁·C₂ 分布）
+    steady_state.json             #   K5 稳态判据与收敛状态
+  projects/&lt;path-slug&gt;/           # project = 工作目录逻辑分组（id = 路径 slug），仅存会话历史 jsonl
+  tasks/&lt;task_id&gt;/                # task 一等实体，独立平铺，含自身全部资产
+    task.json                     #   元信息（objective / state / project_id? / runs）
+    trajectory.jsonl              #   该 task 轨迹
+    world_model.md                #   该 task 世界模型 / checkpoints
+    collected.json                #   采集结果
+    skills/                       #   该 task 私有 skill（可选）
+  rules/</code></pre>
+  </div>
+
+  <table>
+    <tr><th>目录</th><th>层级</th><th>内容 / 用途</th></tr>
+    <tr><td><code>config.yaml</code></td><td>全局</td><td>真 API key（去仓库）、模型端点、<code>local_model.auto_start</code>、三通道（<code>brain</code> / <code>runtime.executor</code> / <code>runtime.vision</code>，各自独立 enable + base_url/model，由 Web 设置面板「通道」Tab 写入 <code>~/.omniagent/config.yaml</code>）。框架态下三通道仍作为 model provider 接入 SDK。</td></tr>
+    <tr><td><code>skills/</code></td><td>全局</td><td>通用 skill 存全局（跨 project 共享）；task 私有 skill 存 <code>tasks/&lt;task_id&gt;/skills/</code>。recall 合并、task 优先。Curator 提炼的<b>通用</b> skill（带 <code>scope: global</code>）落全局，实现「技能升级跨项目复利」。</td></tr>
+    <tr><td><code>memory/</code></td><td>全局</td><td>知识层（K 系列）记忆子系统：<code>MEMORY.md</code> 全局长期记忆（仅追加、可人工编辑）+ <code>memory_summary.md</code> 注入视图（可随时再生）+ <code>rollouts/&lt;task_id&gt;.md</code> 单任务蒸馏记忆 + <code>merged.json</code> 去重清单；另有 <code>signals_aggregate.json</code>（K2 信号基线）与 <code>steady_state.json</code>（K5 稳态）。<b>不是「每会话全量加载」</b>——注入走截断后的 summary 视图，且默认关闭、需显式开启。</td></tr>
+    <tr><td><code>projects/&lt;path-slug&gt;/</code></td><td>全局</td><td>project = 工作目录的 slug 分组，仅承载会话历史 jsonl；<b>不装资产</b>。</td></tr>
+    <tr><td><code>tasks/&lt;task_id&gt;/</code></td><td>全局</td><td>task 一等实体：自身含全部资产（trajectory / world_model / collected / skills）+ task.json 元信息。可关联一个 <code>project_id</code>（仅作 cwd 元数据，不影响落点）。</td></tr>
+  </table>
+
+  <h3 id="s-92-Project-与-Task-归属规则" class="blk">9.2 Project 与 Task 归属规则</h3>
+  <ol class="prin">
+    <li><b>指定工作目录</b> → project_id = <code>slugify_path(绝对路径)</code>，会话历史落 <code>projects/&lt;project_id&gt;/</code>；task 资产仍落 <code>tasks/&lt;task_id&gt;/</code>（资产与 project 解耦）。</li>
+    <li><b>未指定工作目录（GUI / 游戏等）</b> → <code>auto_project_id()</code> 自动造 <code>~/OmniAgent/&lt;date&gt;-task-N</code>，永远有 project 归属，避免 null 分支。</li>
+    <li><b>task 资产跟 task 走</b>：<code>tasks/&lt;task_id&gt;/</code> 存全部重资产；project 仅作会话历史容器，不重复存。</li>
+    <li><b>前端历史 task list</b>：平铺读 <code>tasks/</code>，按 state / 时间排序，不按 project 嵌套。</li>
+  </ol>
+
+  <h3 id="s-93-三通道解耦-统一-chat" class="blk">9.3 三通道解耦 + 统一 /chat</h3>
+  <p>「运行模式三态」已演进为 <b>三通道解耦</b>：planner(brain) / executor(runtime.executor) / vision(runtime.vision) 三个通道<b>各自独立 enable + base_url/model/api_key</b>，Web 设置面板「通道」Tab 写入 <code>~/.omniagent/config.yaml</code>，保存后即时生效。框架态下三通道作为 SDK 的 <code>Model</code> provider 接入（C3 模型无关）。</p>
+  <table>
+    <tr><th>通道</th><th>作用</th><th>独立配置</th></tr>
+    <tr><td><code>planner</code>（brain）</td><td>规划 / 反思，看全局</td><td>base_url / model / api_key，始终在线</td></tr>
+    <tr><td><code>executor</code>（runtime.executor）</td><td>子 agent 执行模型（dispatch 扇出时）</td><td><code>enabled</code> + base_url / model / api_key；关闭时由主模型兼任（<code>executor_is_planner=True</code>，统一入口不退化）</td></tr>
+    <tr><td><code>vision</code>（runtime.vision）</td><td>本地 VLM 视觉工具（vision-mcp 后端）</td><td><code>enabled</code> + model / base_url</td></tr>
+  </table>
+
+  <div class="redline"><b>红线不变：</b>目录结构只是<b>资产落盘位置的约定</b>，不引入任何 app / 游戏 / 场景专属逻辑。内核路径统一由 <code>runtime_paths.py</code>（<code>task_*</code> / <code>project_*</code> / <code>slugify_path</code> / <code>auto_project_id</code>）提供，<b>搜不到 <code>app</code> 作为分区键</b>。北极星红线（内核零场景硬编码）延续。</div>
+</section>
+
+<!-- ============ N10 ============ -->
+<section id="n10">
+  <h2 id="s-10-前端设计HITL-双通道-C5"><span class="num">10</span> 前端设计（HITL 双通道 = C5）</h2>
+  <p class="lead">单页 Shell + 三页 + 自研 Store。设计理念：Codex 风格——对话框下任务 + 实时进展流（SSE）+ 执行中可插话。前端已实现的 <code>/stop</code> 与插话队列，正是 §3.5 C5 的 HITL 双通道。<b>通道归属（2026-09-17 评估收束）：</b>软注入已走 LangGraph 原生 <code>update_state</code>（M8 落地：运行中往图状态追加纠偏消息，不打断当前 turn）；<code>/stop</code> 维持自研 <code>ToolLoop.request_stop()</code> 标志位（由 <code>run_subtask_sdk</code> 在块间轮询）；<code>interrupt</code> 审批暂停点评估后<b>不做</b>——HITL 需求为「运行中不中断」（软注入 + 硬停止已覆盖）。</p>
+
+  <h3 id="s-101-架构分层" class="blk">10.1 架构分层</h3>
+  <div class="diagram">
+    <svg viewBox="0 0 880 260" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
+      <defs>
+        <marker id="ar13" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#475569"/></marker>
+      </defs>
+      <rect x="330" y="20" width="220" height="52" rx="10" fill="#eef0fe" stroke="var(--brain)" stroke-width="2"/>
+      <text x="440" y="44" font-size="13" font-weight="700" fill="var(--brain)" text-anchor="middle">main.tsx</text>
+      <text x="440" y="62" font-size="10.5" fill="#64748b" text-anchor="middle">挂载根组件</text>
+      <line x1="440" y1="72" x2="440" y2="98" stroke="#475569" stroke-width="2" marker-end="url(#ar13)"/>
+
+      <rect x="330" y="104" width="220" height="52" rx="10" fill="#e7f6fd" stroke="var(--runtime)" stroke-width="2"/>
+      <text x="440" y="128" font-size="13" font-weight="700" fill="var(--runtime)" text-anchor="middle">App.tsx</text>
+      <text x="440" y="146" font-size="10.5" fill="#64748b" text-anchor="middle">&lt;TaskStoreProvider&gt;&lt;Layout/&gt;</text>
+      <line x1="440" y1="156" x2="440" y2="182" stroke="#475569" stroke-width="2" marker-end="url(#ar13)"/>
+
+      <rect x="40" y="188" width="220" height="56" rx="10" fill="#f0fdf4" stroke="var(--exec)" stroke-width="2"/>
+      <text x="150" y="212" font-size="12" font-weight="700" fill="#15803d" text-anchor="middle">store/taskStore.tsx</text>
+      <text x="150" y="230" font-size="10" fill="#64748b" text-anchor="middle">Context 全局状态</text>
+
+      <rect x="330" y="188" width="220" height="56" rx="10" fill="#e9fbee" stroke="var(--meta)" stroke-width="2"/>
+      <text x="440" y="212" font-size="12" font-weight="700" fill="#b45309" text-anchor="middle">components/Layout.tsx</text>
+      <text x="440" y="230" font-size="10" fill="#64748b" text-anchor="middle">两栏 + 视图分发</text>
+
+      <rect x="620" y="188" width="220" height="56" rx="10" fill="#f3e8ff" stroke="var(--vision)" stroke-width="2"/>
+      <text x="730" y="212" font-size="12" font-weight="700" fill="#7e22ce" text-anchor="middle">pages/*</text>
+      <text x="730" y="230" font-size="10" fill="#64748b" text-anchor="middle">Chat / SkillsAndTools / Settings</text>
+
+      <line x1="150" y1="188" x2="328" y2="216" stroke="#475569" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#ar13)"/>
+      <line x1="550" y1="216" x2="618" y2="216" stroke="#475569" stroke-width="2" stroke-dasharray="4 4" marker-end="url(#ar13)"/>
+    </svg>
+    <div class="cap">图 10-1 · 前端分层。无路由库：App 仅包一层 Provider + Layout；视图切换由 store.view 驱动。</div>
+  </div>
+
+  <table>
+    <tr><th>文件</th><th>职责</th><th>关键设计</th></tr>
+    <tr><td><code>main.tsx</code></td><td>入口，挂载 <code>&lt;App/&gt;</code></td><td>无 <code>BrowserRouter</code>，纯根渲染</td></tr>
+    <tr><td><code>App.tsx</code></td><td>组合 Provider 与 Layout</td><td><code>&lt;TaskStoreProvider&gt;&lt;Layout/&gt;&lt;/TaskStoreProvider&gt;</code></td></tr>
+    <tr><td><code>store/taskStore.tsx</code></td><td>全局 UI 状态（Context 自研）</td><td>见 §10.2；零依赖，替代 zustand/redux</td></tr>
+    <tr><td><code>components/Layout.tsx</code></td><td>两栏布局 + 视图分发</td><td>左 Sidebar（task 平铺 + 新建会话）/ 右主区按 <code>view</code> 渲染三页之一</td></tr>
+    <tr><td><code>pages/Chat/index.tsx</code></td><td>统一对话/任务 + SSE 流式进展 + 插话</td><td>接 <code>runtimeApi.chat()</code> / <code>connectStream</code></td></tr>
+    <tr><td><code>pages/SkillsAndTools/index.tsx</code></td><td>Skills / Tools / MCP 三 Tab</td><td>接 <code>skillApi</code> / 工具与 MCP 列表</td></tr>
+    <tr><td><code>pages/Settings/index.tsx</code></td><td>通用 / 模型 / 通道 / 关于 四 Tab</td><td>接 <code>settingsApi</code>（三通道配置）、<code>modelApi</code> / <code>llmApi</code></td></tr>
+    <tr><td><code>api/client.ts</code></td><td>typed fetch 封装（各 <code>*Api</code>）</td><td><code>taskApi</code> / <code>projectApi</code> / <code>skillApi</code> / <code>settingsApi</code> / <code>modelApi</code> / <code>llmApi</code> / <code>runtimeApi</code></td></tr>
+  </table>
+
+  <h3 id="s-102-自研-StoreReact-Context零依赖" class="blk">10.2 自研 Store（React Context，零依赖）</h3>
+  <p>全局 UI 状态集中在 <code>TaskStoreProvider</code>，通过 <code>createContext</code> 下发，组件用 <code>useTaskStore()</code> 消费。状态粒度：</p>
+  <ul style="font-size:13.5px;line-height:1.8">
+    <li><b>视图</b>：<code>view: "chat" | "skills" | "settings"</code> + <code>setView</code>（单页切换，无路由跳转）。</li>
+    <li><b>任务</b>：<code>tasks[]</code> / <code>projects[]</code> / <code>currentTaskId</code> + <code>refreshTasks()</code>（调 <code>taskApi.list()</code> + <code>projectApi.meta()</code> 平铺）。</li>
+    <li><b>运行</b>：<code>running</code> / <code>currentTaskId</code> / <code>maxSteps</code>（步数上限）+ <code>sendMessage()</code>（统一走 <code>runtimeApi.chat</code>，首条自动建 task）。</li>
+    <li><b>消息 &amp; 流</b>：<code>messages[]</code> / <code>pushMessage</code> / <code>clearMessages</code>；<code>snapshot</code>（<code>RuntimeSnapshot</code>）+ <code>connectStream()</code> / <code>disconnectStream()</code>（SSE）。</li>
+  </ul>
+  <div class="note"><b>设计取舍：</b>不引入 zustand/redux——状态规模小、且要零额外依赖；Context + <code>useMemo</code> 足够。SSE 连接挂在 store 上，保证切页不断流（Chat 切到 Settings 再切回，进展流不中断）。</div>
+
+  <h3 id="s-103-后端对接端点前端-后端" class="blk">10.3 后端对接端点（前端 ↔ 后端）</h3>
+  <table>
+    <tr><th>前端调用</th><th>后端端点</th><th>用途</th></tr>
+    <tr><td><code>taskApi.list()</code> / <code>.get(id)</code></td><td><code>GET /api/runtime/tasks</code> · <code>GET /api/runtime/tasks/{id}</code></td><td>平铺历史 task、加载详情</td></tr>
+    <tr><td><code>taskApi.create()</code> / <code>.setState()</code></td><td><code>POST /api/runtime/tasks</code> · <code>POST /api/runtime/tasks/{id}/state</code></td><td>新建 / 改状态</td></tr>
+    <tr><td><code>projectApi.meta()</code> / <code>.sessions()</code></td><td><code>GET /api/runtime/projects/meta</code> · <code>GET /api/runtime/projects/{pid}/sessions</code></td><td>项目元信息 / 会话列表</td></tr>
+    <tr><td><code>skillApi.list()</code> / <code>.taskSkills()</code></td><td><code>GET /api/runtime/skills</code> · <code>GET /api/runtime/tasks/{tid}/skills</code></td><td>Skills 页 / task 级 skill</td></tr>
+    <tr><td><code>settingsApi.get()</code> / <code>.put()</code></td><td><code>GET /api/settings</code> · <code>PUT /api/settings</code></td><td>Settings 通用 + 三通道配置</td></tr>
+    <tr><td><code>connectStream()</code></td><td><code>GET /api/runtime/stream</code>（SSE）</td><td>实时进展流 + 状态机事件</td></tr>
+    <tr><td><code>runtimeApi.chat()</code> / <code>.stop()</code></td><td><code>POST /api/runtime/chat</code> · <code>POST /api/runtime/stop</code></td><td>统一 agent 入口：闲聊 + 任务执行合一，双 agent 协作；首条自动建 task 回填 task_id / <b>硬停止通道（C5-A）</b></td></tr>
+    <tr><td><code>skillApi.run()</code> / <code>.remove()</code></td><td><code>POST /api/runtime/skill/run</code> · <code>POST /api/runtime/skill/delete</code></td><td>手动跑 skill / 删 skill（Skills 页）</td></tr>
+    <tr><td><code>modelApi</code> / <code>llmApi</code></td><td>模型状态 / LLM 配置查询</td><td>Settings「模型」Tab</td></tr>
+  </table>
+
+  <h3 id="s-104-交互范式Codex-风格-HITL-双通道-C5" class="blk">10.4 交互范式（Codex 风格 + HITL 双通道 C5）</h3>
+  <ol class="prin">
+    <li><b>统一对话 / 任务</b>：Chat 页主区即对话。发消息即 <code>runtimeApi.chat()</code>：首条消息后端自动建 task 落盘并回填 <code>task_id</code>；内部直接进统一入口 <code>run_task</code>——<b>单链路</b>，模型自主判断纯文本回答（方案 B 收尾）还是调工具执行，会话历史单路注入；需要并行时调 <code>dispatch</code> 扇出子 agent（M10 去分层）。不再做闲聊 probe 快判——追问等无工具消息也自然走 agent 链路，展示与上下文统一。</li>
+    <li><b>实时进展流</b>：<code>connectStream()</code> 接 SSE，把后端状态机事件（OBSERVING/PLANNING/EXECUTING/VERIFYING）实时渲染为消息流。</li>
+    <li><b>C5-A 硬停止</b>：发 <code>POST /api/runtime/stop</code> 置位 <code>ToolLoop.request_stop()</code> 标志位（由 <code>run_subtask_sdk</code> 在块间轮询优雅退出），随后用户输入新指令 → 大模型重新执行。长任务中人工随时可强行接管。</li>
+    <li><b>C5-B 软注入插话</b>：流未结束时仍可向 <code>messages</code> 注入用户消息（经框架运行时消息注入队列），实现 human-in-the-loop 纠偏——循环不中断，下一步 agent 改路继续。<b>优先级：人类注入 &gt; L2 自治决策 &gt; 框架默认策略</b>。</li>
+    <li><b>两栏布局</b>：左 Sidebar 平铺 task 列表 + 「新建会话」；右主区整页覆盖显示当前 <code>view</code>（chat/skills/settings），无路由跳转。</li>
+  </ol>
+
+  <div class="redline"><b>红线延续：</b>前端不写任何场景 / app / 游戏专属逻辑或文案；所有领域数据来自后端配置与 API。UI 仅做通用 agent 控制台，能力暴露完全由后端 <code>*Api</code> 决定。</div>
+</section>
+
+<!-- ============ N11 ============ -->
+<section id="n11">
+  <h2 id="s-11-知识层自升级K-系列"><span class="num">11</span> 知识层自升级（K 系列）</h2>
+  <p class="lead">自升级主线为<b>知识级</b>：不改模型权重，而是把每次任务的经验蒸馏成可消费的记忆，下次注入回上下文。完整设计权威见 <code>doc/plans/知识级自升级_完整设计_K系列_定稿.md</code>；本节为架构图集索引。</p>
+
+  <h3 id="s-111-闭环四步" class="blk">11.1 闭环四步</h3>
+  <div class="diagram">
+    <pre style="font-size:12.5px;line-height:1.6;background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:16px;margin:0;overflow-x:auto"><code>任务执行 ──&gt; trajectory.jsonl 落盘（只读，30 天窗口）
+     │
+     ▼  Curator 第五件维护（tool_loop._finish 触发）
+distill_task_memory ──&gt; memory/rollouts/&lt;task_id&gt;.md   （facts / lessons / user_corrections）
+     │
+     ▼  未合并数 ≥ 阈值（默认 5）
+maybe_merge_rollouts ─&gt; memory/MEMORY.md + memory_summary.md（再生）
+     │
+     ▼  下次任务（knowledge_inject，弱注入 system prompt，默认关）
+注入消费 ──&gt; 更少的重复试错 ──&gt; 又产出新轨迹 …</code></pre>
+  </div>
+  <table>
+    <tr><th>里程碑</th><th>落点</th><th>状态</th></tr>
+    <tr><td>K0 知识层接通</td><td><code>memory/</code> 子系统 + Curator 第五件 + 弱注入（默认关）</td><td>✅ 已落地</td></tr>
+    <tr><td>K1 运行积累与可视化</td><td>memory REST API + 前端「记忆」Tab + 右栏学习提示</td><td>✅ 已落地</td></tr>
+    <tr><td>K2 信号基础设施</td><td><code>omni_core/local/signals.py</code> + <code>GET /signals</code>、<code>/signals/summary</code></td><td>✅ 已落地 + 真机验证</td></tr>
+    <tr><td>K3 有效性裁决</td><td><code>scripts/review_rollouts.py</code> + <code>scripts/effectiveness.py</code></td><td>✅ 脚本就绪；⚠️ V3 结论待跑</td></tr>
+    <tr><td>K4 纠偏采集</td><td>rollout 第三来源 <code>## user_corrections</code>（复用 C₁）</td><td>✅ 已落地 + 真机验证</td></tr>
+    <tr><td>K5 稳态运营</td><td><code>omni_core/local/steady_state.py</code> + <code>GET /signals/steady</code> + 「稳态」Tab</td><td>✅ 已落地 + 真机验证</td></tr>
+  </table>
+
+  <h3 id="s-112-三实体一致率模型K2" class="blk">11.2 三实体一致率模型（K2）</h3>
+  <p>「任务到底算不算成功」不是一个布尔值，而是三方口径的交叉：</p>
+  <table>
+    <tr><th>实体</th><th>是什么</th><th>来源</th></tr>
+    <tr><td><b>A</b> 系统判定</td><td>run 结束的 <code>success</code></td><td><code>loop.run_task</code> → <code>result["success"]</code></td></tr>
+    <tr><td><b>B</b> 模型自报</td><td>本轮 assistant 结论文本</td><td>会话末条 assistant 内容</td></tr>
+    <tr><td><b>C</b> 真值</td><td>交互段 C₁＝用户下一条消息裁决；自主段 C₂＝终态观测评审</td><td>session jsonl / trajectory 终态观测</td></tr>
+  </table>
+  <div class="note"><b>用途：</b>抓<b>假成功</b>——A 说成功、C 说没有（例如用户回「不对，重做」）。
+  派生指标：假成功率 / 漏报率 / 分歧率 / 不可判占比，按交互·自主分模式统计，写入
+  <code>tasks/&lt;tid&gt;/&lt;run_id&gt;.signal.json</code> 并累加到 <code>memory/signals_aggregate.json</code>。
+  <b>纯前向采集</b>：只采集新任务，不回溯历史，无手动脚本，用户零操作。</div>
+
+  <h3 id="s-113-稳态判据与自动降频K5" class="blk">11.3 稳态判据与自动降频（K5）</h3>
+  <div class="diagram">
+    <pre style="font-size:12.5px;line-height:1.6;background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:16px;margin:0;overflow-x:auto"><code>四信号 ──&gt; 域收敛判据 ──&gt; 收敛？──&gt; 是 ──&gt; Curator 跳过蒸馏（降频）+ 日志可见
+   │                                  └─&gt; 否 ──&gt; 正常蒸馏（合并阈值 5）
+   ├ 蒸馏去重命中率（新 facts 已被 MEMORY.md 覆盖比例）
+   ├ skill 晋升率（candidate → active）
+   ├ 步数方差（同域任务离散度）
+   └ 人工介入频率（C₁ refuted 轮占比，目标 ≤5%）</code></pre>
+  </div>
+  <div class="note"><b>v1 单域假设：</b>域 = 常量 <code>single-domain(v1)</code>，多域分区列远期扩展。
+  判据阈值标注「初值，实测校准」。介入频率衰减曲线是核心演示面（前端「稳态」Tab，自绘 SVG）。</div>
+
+  <div class="redline"><b>红线与诚实边界：</b>内核零场景硬编码；能力默认关、需显式开启；
+  <code>trajectory.jsonl</code> 只读（信号层不写任务原始数据）；<code>PUT /memory</code> 不校验内容。
+  <b>K3 的 V3 ablation 尚未跑出结论</b>（需 ≥20 次同域对照长跑）——因此对外只宣称
+  「链路已实现并真机验证」，<b>不宣称「记忆注入已证明有效」</b>。</div>
+</section>
+
+<footer>
+  OmniAgent · 产品设计（框架态，当前设计态）<br/>
+  本文件 = 产品手册 / 设计理念（人读）；约束驱动 AI 的任务见 <code>refactor-agent-core-framework-design</code> 与 <code>master-spec</code><br/>
+  旧手搓态档案见 agent-control-arch-2026-07-26.html（已归档，不维护）
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav.toc a[href^="#"]'));
+  if(!links.length) return;
+  var map = {};
+  links.forEach(function(a){
+    var id = a.getAttribute('href').slice(1);
+    var el = document.getElementById(id);
+    if(el) map[id] = a;
+  });
+  var ids = Object.keys(map);
+  var targets = ids.map(function(id){ return document.getElementById(id); });
+
+  function onScroll(){
+    var pos = window.scrollY + 120;
+    var current = ids[0];
+    for(var i=0;i<targets.length;i++){
+      if(targets[i].offsetTop <= pos) current = ids[i];
+      else break;
+    }
+    links.forEach(function(a){ a.classList.remove('active'); });
+    if(current && map[current]) map[current].classList.add('active');
+  }
+
+  window.addEventListener('scroll', onScroll, {passive:true});
+  window.addEventListener('resize', onScroll);
+  onScroll();
+})();
+</script>
+
+<script>
+(function(){
+  var links=[].slice.call(document.querySelectorAll('.toc-sidebar a'));
+  if(!links.length) return;
+  var map={};
+  links.forEach(function(a){ var id=a.getAttribute('href').slice(1); (map[id]=map[id]||[]).push(a); });
+  var targets=[];
+  links.forEach(function(a){ var t=document.getElementById(a.getAttribute('href').slice(1)); if(t) targets.push(t); });
+  var obs=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        links.forEach(function(l){l.classList.remove('active');});
+        (map[e.target.id]||[]).forEach(function(a){a.classList.add('active');});
+      }
+    });
+  },{rootMargin:'-15% 0px -75% 0px',threshold:0});
+  targets.forEach(function(t){obs.observe(t);});
+})();
+</script>
+
+</body>
+</html>
+
+
+
+
+
+
+</body>
+</html>
+
+
+
+
+
+

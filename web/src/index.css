@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/* 全局细滚动条：克制灰色，默认即悬停灰，轨道淡灰，贴近边框 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.4) rgba(0, 0, 0, 0.05);
+}
+html ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  -webkit-appearance: none;
+}
+html ::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+}
+html ::-webkit-scrollbar-thumb {
+  -webkit-appearance: none;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 4px;
+}
+html ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+/* 自绘滚动条（ScrollArea）内层：彻底隐藏原生滚动条，仅保留原生滚轮/触摸滚动 */
+.omni-scroll-area-inner {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.omni-scroll-area-inner::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
