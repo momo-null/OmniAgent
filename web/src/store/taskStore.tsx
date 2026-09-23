@@ -192,12 +192,49 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [clearMessages]);
 
+  // 回放「进行中这一轮」的实时过程：该轮只存在于后端内存（outbox 被 SSE 消费即清空，
+  // 且轮末才落盘），刷新/切任务后前端 processLogs 为空、会话历史里也没有它 → 表现为
+  // 「执行中全程无输出，直到本轮结束才一次性出现」。这里在挂载/切任务时拉一次
+  // /live 快照种进去；后端 running=false 时不种（该轮已结束，历史里已有完整轮次）。
+  const seedLiveLogs = useCallback(async (taskId: string) => {
+    if (!taskId) return;
+    try {
+      const r = await runtimeApi.live(taskId);
+      const d = r.data as {
+        running?: boolean;
+        thinking?: ProcessItem[];
+        message?: ProcessItem[];
+        toolcall?: ProcessItem[];
+      };
+      if (!d?.running) return;
+      const items: ProcessItem[] = [
+        ...(d.thinking || []).map((x) => ({ ...x, type: "thinking" as const })),
+        ...(d.message || []).map((x) => ({ ...x, type: "message" as const })),
+        ...(d.toolcall || []).map((x) => ({ ...x, type: "tool_call" as const })),
+      ]
+        // 后端 outbox 的 ts 是秒级 time.time()，统一转毫秒与 SSE 增量对齐
+        .map((x) => ({ ...x, ts: Number(x.ts) * 1000 }))
+        .sort((a, b) => a.ts - b.ts);
+      if (!items.length) return;
+      setProcessLogs((prev) => {
+        // 按 id 合并：快照为准；prev 里 id 不在快照内的（快照之后才到的增量）保留
+        const ids = new Set(items.map((x) => x.id));
+        const keep = prev.filter((p) => p.id !== undefined && !ids.has(p.id));
+        return [...items, ...keep].sort((a, b) => a.ts - b.ts).slice(-300);
+      });
+    } catch {
+      /* 忽略瞬时错误 */
+    }
+  }, []);
+
     const selectTask = useCallback((taskId: string) => {
     setCurrentTaskId(taskId);
     try { localStorage.setItem("omniagent.currentTaskId", taskId); } catch { /* ignore */ }
     clearProcessLogs();
     loadHistory(taskId);
-  }, [loadHistory, clearProcessLogs]);
+    // 回放进行中这一轮的实时过程（见 seedLiveLogs 注释）
+    seedLiveLogs(taskId);
+  }, [loadHistory, clearProcessLogs, seedLiveLogs]);
 
   // 刷新后恢复上次打开的 task（其 agent 消息含 steps，toolcall/思考随之重建，避免「刷新即清零」）
   useEffect(() => {
@@ -367,10 +404,12 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       try {
         const m = JSON.parse((ev as MessageEvent).data) as {
           ts?: number; role?: string; name?: string; arguments?: string;
-          result?: string; model?: string;
+          result?: string; model?: string; id?: string;
         };
-            pushProcessLog({
+        // 按 id upsert：与 live 快照回放的同一条工具卡原地更新，不重复成两张
+        upsertProcessLog({
           type: "tool_call",
+          id: m.id,
           ts: m.ts ? Number(m.ts) * 1000 : Date.now(),
           role: m.role,
           model: m.model,

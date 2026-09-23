@@ -132,6 +132,9 @@ export const runtimeApi = {
   projects: () => http.get("/api/runtime/projects"),
   snapshot: (taskId: string, projectId = "") =>
     http.get("/api/runtime/snapshot", { params: { task_id: taskId, project_id: projectId } }),
+  // 当前轮实时过程快照：页面刷新 / 切任务后回放进行中的思考 + 工具调用
+  live: (taskId: string) =>
+    http.get("/api/runtime/live", { params: { task_id: taskId } }),
   skills: (taskId: string) =>
     http.get("/api/runtime/skills", { params: { task_id: taskId } }),
   // 统一 agent 入口：一个会话 = 一个 task；首条消息 task_id 留空由后端自动建

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import copy
+import itertools
 import json
 import os
 import re
@@ -46,6 +47,52 @@ def _paths():
 
 def _ensure_outbox(task_id: str) -> Dict[str, "collections.deque"]:
     return manager.ensure_outbox(task_id)
+
+# ── 当前轮「实时过程快照」（刷新 / 切任务后回放） ─────────────────────────────
+# outbox 是「消费即清空」的瞬时队列（见 chat_runtime._stream_gen），且实时过程不落盘；
+# 因此页面刷新或切换 task 后，进行中的这一轮没有任何可回放来源（前端 processLogs 空，
+# history jsonl 里也没有该轮）。这里另存一份**按 id upsert 的有界快照**，由
+# GET /api/runtime/live 提供给前端在挂载/切任务时回放——不改 SSE 协议本身。
+_LIVE_CHANNELS = ("thinking", "message", "toolcall")
+_LIVE_LIMIT = 200                     # 每通道保留条数上限（超出丢最旧）
+_LIVE_SNAPSHOT: Dict[str, Dict[str, "collections.OrderedDict"]] = {}
+_live_lock = threading.RLock()        # 写入在 agent 线程、读取在请求线程
+_live_seq = itertools.count(1)        # 给无 id 的一次性事件补稳定 key（toolcall 等）
+
+
+def _live_box(task_id: str) -> Dict[str, "collections.OrderedDict"]:
+    """取（必要时新建）某 task 的 live 快照容器。"""
+    tid = task_id or "_global"
+    with _live_lock:
+        box = _LIVE_SNAPSHOT.get(tid)
+        if box is None:
+            box = {k: collections.OrderedDict() for k in _LIVE_CHANNELS}
+            _LIVE_SNAPSHOT[tid] = box
+        return box
+
+
+def _live_push(task_id: str, channel: str, key: str, entry: dict) -> None:
+    """把一条过程项写入 live 快照（同 key 原地覆盖，超限丢最旧）。"""
+    box = _live_box(task_id)
+    with _live_lock:
+        d = box[channel]
+        d[key] = entry
+        while len(d) > _LIVE_LIMIT:
+            d.popitem(last=False)
+
+
+def live_snapshot(task_id: str) -> Dict[str, Any]:
+    """返回某 task 当前轮的实时过程快照（深拷贝，供路由序列化）。"""
+    box = _live_box(task_id)
+    with _live_lock:
+        return {ch: [dict(e) for e in box[ch].values()] for ch in _LIVE_CHANNELS}
+
+
+def clear_live_snapshot(task_id: str) -> None:
+    """清空某 task 的实时过程快照（每轮开始时调用，避免残留上一轮）。"""
+    tid = task_id or "_global"
+    with _live_lock:
+        _LIVE_SNAPSHOT.pop(tid, None)
 
 def _try_start_task(task_id: str, agent_id: str = AGENT_MAIN) -> bool:
     """原子地标记 (task_id, agent_id) 为 running。已有运行体在跑返回 False。"""
@@ -142,8 +189,10 @@ def push_thinking(role: str, content: str, model: str = "", task_id: str = ""):
     if not content:
         return
     tid = task_id or _running_task_id() or "_global"
-    box = _ensure_outbox(tid)
-    box["thinking"].append({"role": role, "content": content, "model": model, "ts": time.time()})
+    entry = {"role": role, "content": content, "model": model, "ts": time.time(),
+             "id": f"th-{next(_live_seq)}"}
+    _ensure_outbox(tid)["thinking"].append(entry)
+    _live_push(tid, "thinking", entry["id"], entry)
 
 def push_tool_call(role: str, name: str, arguments: str, result: str,
                    model: str = "", task_id: str = ""):
@@ -152,11 +201,14 @@ def push_tool_call(role: str, name: str, arguments: str, result: str,
     name/arguments/result 构成一条完整的 react 动作卡（模型调了什么、结果如何）。
     """
     tid = task_id or _running_task_id() or "_global"
-    box = _ensure_outbox(tid)
-    box["toolcall"].append({
+    entry = {
         "role": role, "name": name, "arguments": arguments or "",
         "result": result or "", "model": model, "ts": time.time(),
-    })
+        # id：前端据此 upsert —— 刷新时 live 快照回放与后续 SSE 增量不会变成两张卡
+        "id": f"tc-{next(_live_seq)}",
+    }
+    _ensure_outbox(tid)["toolcall"].append(entry)
+    _live_push(tid, "toolcall", entry["id"], entry)
 
 def _upsert(box: "collections.deque", channel: str, block_id: str, entry: dict):
     """按 block_id 在通道内 upsert（存在则原地更新 content，保留原 ts 防时间线跳序）。"""
@@ -171,16 +223,16 @@ def _upsert(box: "collections.deque", channel: str, block_id: str, entry: dict):
 def push_thinking_stream(role: str, model: str, block_id: str, content: str, task_id: str = ""):
     """流式「深度思考」增量：按 block_id upsert，content 为「截至当前完整文本」。"""
     tid = task_id or _running_task_id() or "_global"
-    box = _ensure_outbox(tid)
-    _upsert(box, "thinking",
-            block_id, {"role": role, "content": content or "", "model": model, "id": block_id, "ts": time.time()})
+    entry = {"role": role, "content": content or "", "model": model, "id": block_id, "ts": time.time()}
+    _upsert(_ensure_outbox(tid), "thinking", block_id, entry)
+    _live_push(tid, "thinking", block_id, entry)
 
 def push_message_stream(role: str, model: str, block_id: str, content: str, task_id: str = ""):
     """流式「口播」增量：按 block_id upsert，content 为「截至当前完整文本」（问题1/3）。"""
     tid = task_id or _running_task_id() or "_global"
-    box = _ensure_outbox(tid)
-    _upsert(box, "message",
-            block_id, {"role": role, "content": content or "", "model": model, "id": block_id, "ts": time.time()})
+    entry = {"role": role, "content": content or "", "model": model, "id": block_id, "ts": time.time()}
+    _upsert(_ensure_outbox(tid), "message", block_id, entry)
+    _live_push(tid, "message", block_id, entry)
 
 def _make_brain_cfg():
     """构造在线大脑配置（含 executor 透传），供统一 /chat 入口复用。

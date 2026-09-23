@@ -33,8 +33,10 @@ from backend.api.routers.helpers import (
     _trajectory_dir,
     _try_start_task,
     asyncio,
+    clear_live_snapshot,
     config,
     json,
+    live_snapshot,
     manager,
     push_chat,
     push_message_stream,
@@ -72,6 +74,8 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     # 阶段 1：运行体句柄存于 RuntimeManager 复合键 (task_id, agent_id)，不再用全局 _loop
     _last_answer = ""  # 累积大脑最后一段口播，作为结尾「结果框」内容
     turn_steps: List[Dict[str, Any]] = []  # 本轮 agent 的执行轨迹（思考 + 工具调用）
+    # 新的一轮：清空实时过程快照，避免 GET /live 把上一轮的残留过程回放给前端
+    clear_live_snapshot(task_id)
     try:
         from omni_core.local.tool_loop import ToolLoop, TaskSpec
 
@@ -376,6 +380,27 @@ async def _stream_gen(task_id: str = ""):
             await asyncio.sleep(0.3)
     except asyncio.CancelledError:
         return
+
+@router.get("/live")
+async def live(task_id: str = ""):
+    """当前轮实时过程快照（页面刷新 / 切任务后回放用）。
+
+    实时过程只写内存 outbox，且被 SSE 消费即清空、不落盘；进行中的这一轮在会话历史
+    里也不存在。故另存一份**按 id upsert 的有界快照**，供前端挂载/切任务时种进过程流，
+    避免「执行中刷新后全程无输出、直到本轮结束才一次性出现」。
+
+    running=false 时快照无意义（该轮已结束，历史里已有带 steps 的完整轮次），前端据此跳过。
+    """
+    tid = task_id or (_running_task_id() or "")
+    if tid:
+        try:
+            _paths().validate_identifier(tid, "task_id")
+        except ValueError:
+            return JSONResponse({"ok": False, "error": "task_id 格式不合法"}, status_code=422)
+    data = live_snapshot(tid)
+    data["task_id"] = tid
+    data["running"] = _is_task_running(tid) if tid else _is_any_running()
+    return JSONResponse(data)
 
 @router.get("/stream")
 async def stream(task_id: str = ""):

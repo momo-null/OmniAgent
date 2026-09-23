@@ -31,13 +31,14 @@ from backend.api.routers.helpers import (  # noqa: F401
     _read_merged_ids, _read_rollout_detail, _read_rollouts_list, _read_skills,
     _read_trajectory, _read_world, _rollout_header, _running_task_id,
     _session_records_to_model_messages, _snapshot, _steps_to_text, _task_store,
-    _trajectory_dir, _trim, _try_start_task, _upsert, config, push_chat,
+    _trajectory_dir, _trim, _try_start_task, _upsert, clear_live_snapshot, config,
+    live_snapshot, push_chat,
     push_message_stream, push_thinking, push_thinking_stream, push_tool_call,
     TOOL_REGISTRY,
 )
 from backend.api.routers.chat_runtime import (  # noqa: F401
     _dispatch_chat, _sse, _stream_gen, api_chat, api_inject, api_stop,
-    api_wake, stream,
+    api_wake, live, stream,
 )
 from backend.api.routers.tools_api import (list_tools, set_disabled_tools)  # noqa: F401
 from backend.api.routers.memory_api import (  # noqa: F401
