@@ -11,6 +11,8 @@ import os
 import sys
 import tempfile
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PIL import Image, ImageDraw
@@ -21,7 +23,19 @@ from omni_core.tools.vision_runtime import (
     build_som,
     parse_ui_nodes,
 )
-from omni_core.tools import vision_tool
+from omni_core.tools.loader import load_plugins, plugin_module
+
+#: vision 插件模块句柄：P3 起 vision 已迁为官方插件（plugins/vision），由下面的
+#: autouse fixture 在装载后填充（正文仍按 `vision_tool.xxx` 书写，语义不变）。
+vision_tool = None
+
+
+@pytest.fixture(autouse=True)
+def _load_official_plugins():
+    global vision_tool
+    load_plugins({})
+    vision_tool = plugin_module("vision")
+    assert vision_tool is not None, "vision 插件未装载"
 
 
 _SAMPLE_XML = """<?xml version="1.0" encoding="UTF-8"?>

@@ -25,52 +25,7 @@ from omni_core.tools.base import (
     schemas,
     build_plugin_registry,
 )
-from omni_core.tools.vision_tool import (
-    bind_vision_runtime,
-    vision_describe,
-    som_ground,
-    som_marks,
-    som_last_result,
-    tap_by_mark,
-)
-from omni_core.tools.device_tool import (
-    bind_execution_module,
-    press,
-    hotkey,
-    input_text,
-    wait,
-    click,
-    drag,
-    observe,
-    read_screen_text,
-    ocr_screenshot,
-    screenshot,
-    get_ui_tree,
-    tap_by_id,
-    tap_text,
-    launch_app,
-    press_keycode,
-    collect_list,
-    template_match,
-    wait_for,
-)
 from omni_core.tools.python_tool import run_python, configure as configure_python
-from omni_core.tools.shell_tool import shell_exec, configure as configure_shell
-from omni_core.tools.filesystem_tool import (
-    read_file,
-    write_file,
-    edit_file,
-    list_dir,
-    search_content,
-    mkdir,
-    generate_report,
-    configure as configure_filesystem,
-)
-from omni_core.tools.web_tool import (
-    web_fetch,
-    web_search,
-    configure as configure_web,
-)
 from omni_core.tools.mcp_servers import build_mcp_servers
 from omni_core.tools.skill_tool import (
     load_skill,
@@ -85,6 +40,13 @@ from omni_core.tools.local_model_tool import (
     TOOL_NAME as LOCAL_INFER_TOOL,
     GROUP as LOCAL_MODEL_GROUP,
 )
+from omni_core.tools.loader import (
+    PluginContext,
+    LoadReport,
+    load_plugins,
+    last_report,
+    shutdown_plugins,
+)
 
 
 __all__ = [
@@ -98,31 +60,6 @@ __all__ = [
     "call_tool",
     "schemas",
     "build_plugin_registry",
-    "bind_vision_runtime",
-    "vision_describe",
-    "som_ground",
-    "som_marks",
-    "som_last_result",
-    "tap_by_mark",
-    "bind_execution_module",
-    "press",
-    "hotkey",
-    "input_text",
-    "wait",
-    "click",
-    "drag",
-    "observe",
-    "read_screen_text",
-    "ocr_screenshot",
-    "screenshot",
-    "get_ui_tree",
-    "tap_by_id",
-    "tap_text",
-    "launch_app",
-    "press_keycode",
-    "collect_list",
-    "template_match",
-    "wait_for",
     "run_python",
     "configure_python",
     "build_mcp_servers",
@@ -135,17 +72,9 @@ __all__ = [
     "local_model_registered",
     "LOCAL_INFER_TOOL",
     "LOCAL_MODEL_GROUP",
-    "shell_exec",
-    "configure_shell",
-    "read_file",
-    "write_file",
-    "edit_file",
-    "list_dir",
-    "search_content",
-    "mkdir",
-    "generate_report",
-    "configure_filesystem",
-    "web_fetch",
-    "web_search",
-    "configure_web",
+    "PluginContext",
+    "LoadReport",
+    "load_plugins",
+    "last_report",
+    "shutdown_plugins",
 ]

@@ -1,4 +1,4 @@
-"""视觉 / SoM 自研外层 tool 插件（平级，由 LLM 直接调用）。
+"""视觉 / SoM 官方插件（P3 自 omni_core/tools/vision_tool.py 迁出，函数体零改动）。
 
 设计（见 doc/plans/refactor-agent-core-framework-design-2026-09-12.md §5.4）：
 - `vision_describe` / `som_ground` / `som_marks` / `tap_by_mark` 是平级 tool 插件，
@@ -11,15 +11,24 @@
 不进 WorldModel、不进 tool_loop、也不放在 VisionRuntime 里。
 agent 需要重读时用 `som_last_result` 工具取回。
 
-运行时注入：`bind_vision_runtime(vr)` 在 ToolLoop 构造期调用一次。
+运行时注入：`bind_vision_runtime(vr)` 由插件 `startup(ctx)` 在每个 ToolLoop 装配时
+调用（**不是**只在首次 import 时调用一次），因为每个 ToolLoop 实例持有自己的
+VisionRuntime（内含自己的 ExecutionModule）。
 """
+import importlib.util
+import sys
 from typing import Any, Dict, List, Optional
 
-from omni_core.tools.base import function_tool
+from omni_core.tools.base import TOOL_REGISTRY, function_tool, unregister_tool
 from omni_core.tools.vision_runtime import VisionRuntime
+from utils import get_logger
 
+logger = get_logger("plugins.vision")
 
-# 注入的视觉运行时（由 tool_loop 在 runtime.vision.enabled 时注入）
+# 依赖 VLM 的视觉工具（vision 关闭时从注册表移除，让大脑「知道」不可用）
+_VLM_TOOLS = ("vision_describe", "som_ground", "som_marks")
+
+# 注入的视觉运行时（由 ToolLoop 装配期经 startup(ctx) 注入）
 _VR: Optional[VisionRuntime] = None
 
 #: SoM marks 跨步状态（`som://last_result`）。仅本插件持有，内核零感知。
@@ -27,9 +36,58 @@ _last_marks: List[Dict[str, Any]] = []
 
 
 def bind_vision_runtime(vr: VisionRuntime) -> None:
-    """注入视觉运行时（一次性，tool_loop 构造期调用）。"""
+    """注入视觉运行时（每个 ToolLoop 装配期调用一次）。"""
     global _VR
     _VR = vr
+
+
+def startup(ctx) -> None:
+    """内核装配后决定绑定 / 注销视觉工具。
+
+    分支（``wired`` 是 P3 的关键修正——只读枚举路径不得做破坏性动作）：
+    - 有运行时句柄 → 绑定（ToolLoop 装配路径，每个实例都刷新）；
+    - ``wired=True`` 且 vision 未启用 → 注销三个依赖 VLM 的工具并记日志，
+      让大脑「知道」不可用（对齐原 core.py 的 M-fix 行为）；
+    - ``wired=False``（只读枚举 / 测试旁路）且未启用 → 什么都不做
+      （否则会把全局注册表里的视觉工具抹掉，且幂等装载不会再补回来）。
+
+    Args:
+        ctx: PluginContext（读 ctx.vision / ctx.wired）。
+    """
+    # 先确保自己的工具在册：vision 曾被关闭的轮次把它们注销过，而全局注册表是
+    # 进程级状态——「谁注册谁维护」，否则一次关闭会永久改变注册表（vision 再也回不来）。
+    _ensure_registered()
+
+    vision = getattr(ctx, "vision", None)
+    if vision is not None:
+        bind_vision_runtime(vision)
+        return
+
+    if not getattr(ctx, "wired", False):
+        logger.debug("vision 未提供运行时句柄且非装配路径（只读枚举），跳过绑定与注销")
+        return
+
+    for tool_name in _VLM_TOOLS:
+        unregister_tool(tool_name)
+    logger.info("视觉通道未启用：已注销 %s，大脑将不再调用", " / ".join(_VLM_TOOLS))
+
+
+def _ensure_registered() -> None:
+    """确保本插件声明的视觉工具在册（被注销过则重新注册）。
+
+    实现：在**既有模块命名空间**内重跑一次模块体 → 模块级 ``@function_tool``
+    装饰器重新执行 → 重新登记。刻意不用 ``importlib.reload``：插件是按文件路径
+    动态装载的，reload 会按名字重新 find_spec 而失败（ModuleNotFoundError）。
+    """
+    if all(name in TOOL_REGISTRY for name in _VLM_TOOLS):
+        return
+    module = sys.modules.get(__name__)
+    if module is None or not getattr(module, "__file__", None):
+        return
+    spec = importlib.util.spec_from_file_location(__name__, module.__file__)
+    if spec is None or spec.loader is None:
+        return
+    spec.loader.exec_module(module)
 
 
 def _require_vr() -> VisionRuntime:

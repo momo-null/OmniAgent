@@ -32,6 +32,10 @@ async def list_tools():
         rt = cfg.get("runtime") or {}
         # M9：本地模型工具是配置驱动的动态插件，枚举前先按配置登记一次
         configure_local_model_from_config(cfg)
+        # P1 工具插件：枚举前幂等装载一次（重复调用记 skip），保证插件工具出现在清单里
+        from omni_core.tools.loader import last_report, load_plugins
+
+        load_plugins(cfg)
         # 与 tool_loop 保持一致：groups 缺省剔除 shell（高危默认关），
         # full_access=true 时放行 shell，使枚举与实际运行的分组对齐。
         tools_cfg = (rt.get("tools") or {})
@@ -99,6 +103,12 @@ async def list_tools():
                 # 视图级禁用名单：当前配置禁用的工具（与可用工具列表同源，
                 # 仅做视图展示，不改动全局 TOOL_REGISTRY 原始数据）。
                 "disabled": disabled,
+                # P1 插件装载报告（loaded / skipped / failed 三表；未装载过时为空三表）
+                "plugins": (
+                    last_report().as_dict()
+                    if last_report() is not None
+                    else {"loaded": [], "skipped": [], "failed": []}
+                ),
                 "mcp": {
                     "enabled": bool(mcp_cfg.get("enabled", False)),
                     "servers": servers,
@@ -123,6 +133,12 @@ async def set_disabled_tools(request: Request):
     不改动全局 TOOL_REGISTRY 原始数据（仅配置化视图过滤）。
     """
     import config as app_config
+
+    # P1 工具插件：校验前幂等装载一次，使插件工具名同样可被禁用
+    # （否则迁出后 PATCH 会把合法插件工具名判成"非法工具名"，破坏视图契约）。
+    from omni_core.tools.loader import load_plugins
+
+    load_plugins(app_config.load_config() or {})
 
     try:
         body = await request.json()

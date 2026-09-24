@@ -1,0 +1,7 @@
+{
+  "name": "shell",
+  "version": "1.0.0",
+  "description": "宿主机 shell 命令执行（cmd / powershell / bash）",
+  "group": "shell",
+  "permissions": ["shell"]
+}

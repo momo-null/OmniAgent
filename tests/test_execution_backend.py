@@ -12,11 +12,26 @@ M4：设备实现已从内核 omni_core/ 迁出到顶层 devices/ 包（L1 能�
 import sys
 import os
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from devices import create_backend, ExecutionModule, HostBackend, EmulatorBackend
 from omni_core.tools.base import call_tool, TOOL_REGISTRY
-from omni_core.tools.device_tool import bind_execution_module
+from omni_core.tools.loader import load_plugins, plugin_module
+
+
+@pytest.fixture(autouse=True)
+def _load_official_plugins():
+    """P3：device 已迁为官方插件（plugins/device），按名访问前需先装载。"""
+    load_plugins({})
+
+
+def _device():
+    """取已装载的 device 插件模块句柄。"""
+    module = plugin_module("device")
+    assert module is not None, "device 插件未装载"
+    return module
 
 
 def test_create_backend_default_host():
@@ -117,7 +132,7 @@ class _FakeExec:
 def test_dispatch_routes_emulator_tools():
     """M3：设备工具已外置为平级插件，派发走插件层 call_tool（内核零分支）。"""
     fake = _FakeExec()
-    bind_execution_module(fake)
+    _device().bind_execution_module(fake)
     r1 = call_tool("get_ui_tree", {})
     r2 = call_tool("tap_by_id", {"resource_id": "com.x:id/y"})
     r3 = call_tool("launch_app", {"package": "com.calc"})
@@ -139,6 +154,6 @@ def test_dispatch_routes_emulator_tools():
 
 def test_dispatch_observe_via_exec():
     fake = _FakeExec()
-    bind_execution_module(fake)
+    _device().bind_execution_module(fake)
     res = call_tool("observe", {})
     assert res == {"active_window": "x", "ocr_text": ["1"]}

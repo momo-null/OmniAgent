@@ -1,4 +1,4 @@
-"""Shell 执行自研外层 tool 插件（平级，由 LLM 直接调用）。
+"""Shell 执行官方插件（P2 自 omni_core/tools/shell_tool.py 迁出，函数体零改动）。
 
 设计（与 python 工具同族）：补齐 agent 在宿主机跑命令的能力——脚本执行、系统操作、
 自动化处理。用户点名的 cmd / powershell / bash 通过一个 `shell` 参数覆盖，避免工具列表
@@ -41,6 +41,20 @@ def configure(cfg: Optional[dict]) -> None:
         _LIMITS["max_output"] = int(cfg.get("max_output", _LIMITS["max_output"]))
     except (TypeError, ValueError):
         pass
+
+
+def startup(ctx) -> None:
+    """内核装配后按旧配置键 config.runtime.shell_exec 注入限流参数。
+
+    迁移前该调用写在 ToolLoop.__init__ 里（内核点名 configure_shell）；
+    现在由插件自己在 startup 时读取同一配置键，**用户配置零改动**。
+
+    Args:
+        ctx: PluginContext（读 ctx.config["runtime"]["shell_exec"]）。
+    """
+    cfg = getattr(ctx, "config", None)
+    runtime = (cfg.get("runtime") or {}) if isinstance(cfg, dict) else {}
+    configure(runtime.get("shell_exec") or {})
 
 
 def _clip(text: str, limit: int) -> str:

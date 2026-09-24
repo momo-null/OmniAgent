@@ -9,6 +9,13 @@ import sys
 import pytest
 
 from omni_core.tools.base import call_tool
+from omni_core.tools.loader import load_plugins
+
+
+@pytest.fixture(autouse=True)
+def _load_official_plugins():
+    """P2：shell_exec 已迁为官方插件（plugins/shell），按名调用前需先装载。"""
+    load_plugins({})
 
 
 def test_run_python_utf8_chinese_emoji():

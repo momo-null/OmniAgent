@@ -28,17 +28,6 @@ from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local import telemetry
 from omni_core.local.curator import Curator
 from devices import ExecutionModule
-from omni_core.tools import (
-    build_plugin_registry,
-    bind_execution_module,
-    configure_python,
-    configure_shell,
-    configure_filesystem,
-    configure_web,
-    build_mcp_servers,
-    configure_local_model_from_config,
-    unregister_tool,
-)
 from omni_core.local.runtime_paths import (
     task_trajectory, task_collected, auto_project_id,
 )

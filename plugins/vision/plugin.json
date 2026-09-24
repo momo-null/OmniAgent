@@ -1,0 +1,7 @@
+{
+  "name": "vision",
+  "version": "1.0.0",
+  "description": "视觉 / Set-of-Marks：截图理解 + SoM 标注 + 按 mark 点击",
+  "group": "vision",
+  "permissions": ["fs_read"]
+}

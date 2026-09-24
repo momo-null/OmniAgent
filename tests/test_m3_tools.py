@@ -1,13 +1,21 @@
 """M3 设备能力 tool 化单测：键鼠路由 / 感知 / 通用件（template_match、wait_for、drag）。
 
 设备能力已从 `brain/providers/*` 的手搓派发平移为 agent 外层 tool 插件
-（omni_core.tools.device_tool），与视觉/Python/外部 MCP 平级。
+（现为 plugins/device 插件包），与视觉/Python/外部 MCP 平级。
 不依赖 GPU / 真实模型 / 模拟器：用 fake 执行后端注入插件层。
 """
 from PIL import Image, ImageDraw
 
+import pytest
+
 from omni_core.tools.base import TOOL_REGISTRY, call_tool, schemas
-from omni_core.tools.device_tool import bind_execution_module
+from omni_core.tools.loader import load_plugins, plugin_module
+
+
+@pytest.fixture(autouse=True)
+def _load_official_plugins():
+    """P3：device 已迁为官方插件（plugins/device），按名访问前需先装载。"""
+    load_plugins({})
 
 
 class _FakeBackendInner:
@@ -59,7 +67,9 @@ class _FakeExec:
 
 
 def _bind(exec_mod):
-    bind_execution_module(exec_mod)
+    module = plugin_module("device")
+    assert module is not None, "device 插件未装载"
+    module.bind_execution_module(exec_mod)
     return exec_mod
 
 
@@ -228,8 +238,9 @@ def test_kernel_has_no_handrolled_dispatch():
     _ld = Path(inspect.getfile(_lp)).parent
     src = "\n".join((_ld / f).read_text(encoding="utf-8") for f in sorted(_ld.glob("*.py")))
     assert "build_registry" not in src
-    # 内核只注入运行时 + 取插件层 schema，不按工具名分支
-    assert "bind_execution_module" in src
+    # 内核只注入运行时 + 取插件层 schema，不按工具名分支；
+    # P3：设备/视觉已迁为插件，内核改经 loader 装载、不再点名绑定函数。
+    assert "load_plugins" in src
     assert "build_plugin_registry" in src
 
 

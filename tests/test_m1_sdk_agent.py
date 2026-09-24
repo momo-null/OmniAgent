@@ -11,7 +11,14 @@ import os
 import pytest
 
 from omni_core.brain import sdk_model, sdk_agent
-from omni_core.tools.vision_tool import bind_vision_runtime, vision_describe
+from omni_core.tools.loader import load_plugins, plugin_module
+
+
+@pytest.fixture(autouse=True)
+def _load_official_plugins():
+    """P3：vision 已迁为官方插件（plugins/vision）；build_omni_agent 的默认工具
+    与 vision_describe 函数体都改从注册表/插件模块取，故需先装载。"""
+    load_plugins({})
 
 
 # 用 offline stub 的 AsyncOpenAI 客户端测装配（不触网）
@@ -43,7 +50,8 @@ def test_agent_exposes_tool_schemas():
 
 
 def test_sdk_function_tool_wraps_business_fn():
-    # 业务函数体来自 omni_core.tools（平级插件），仅加 SDK 装饰器
+    # 业务函数体来自插件包（plugins/vision），仅加 SDK 装饰器
+    vision_describe = plugin_module("vision").vision_describe
     ft = sdk_agent.sdk_function_tool(vision_describe)
     assert ft.name == "vision_describe"
     assert callable(ft.on_invoke_tool)

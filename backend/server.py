@@ -80,6 +80,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # 建目录失败不应阻断启动
         logger.warning("启动预建全局目录失败（已忽略）: %s", e)
     yield
+    # P1 工具插件：进程退出前依次调用各插件 shutdown()（异常吞掉，不阻断退出）。
+    try:
+        from omni_core.tools.loader import shutdown_plugins
+        shutdown_plugins()
+    except Exception as e:  # 插件清理失败不应阻断退出
+        logger.warning("插件 shutdown 失败（已忽略）: %s", e)
 
 
 app = FastAPI(title="OmniAgent Backend", version="1.0.0", lifespan=lifespan)

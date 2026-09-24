@@ -4,8 +4,10 @@
 """
 import os
 
+import pytest
+
 from omni_core.tools.base import call_tool
-from omni_core.tools.vision_tool import bind_vision_runtime
+from omni_core.tools.loader import load_plugins, plugin_module
 from omni_core.brain.prompt import (
     capability_block,
     tool_catalog_block,
@@ -51,7 +53,7 @@ class _FakeVision:
 def test_som_marks_dispatch_routes_to_vision():
     """M3：派发已迁至 agent 外层插件层（call_tool），视觉工具经运行时注入。"""
     fake = _FakeVision()
-    bind_vision_runtime(fake)
+    plugin_module("vision").bind_vision_runtime(fake)
     res = call_tool("som_marks", {"ask": "列出所有按钮"})
     assert res["ok"] is True
     assert fake.calls == ["列出所有按钮"]
@@ -143,7 +145,7 @@ def test_tap_by_mark_structured_uses_resource_id(tmp_path):
 
 def test_tap_by_mark_unknown_id():
     """未知 id 在插件侧被拒（运行时不持有 marks 状态）。"""
-    from omni_core.tools import vision_tool
+    vision_tool = plugin_module("vision")
 
     assert vision_tool.tap_by_mark(99)["ok"] is False
     assert "未知" in vision_tool.tap_by_mark(99)["error"]

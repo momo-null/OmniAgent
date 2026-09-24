@@ -1,0 +1,7 @@
+{
+  "name": "device",
+  "version": "1.0.0",
+  "description": "设备能力：键盘 / 鼠标 / 感知 / 设备原语 + 通用件（host 或 emulator 后端）",
+  "group": "device",
+  "permissions": ["shell"]
+}

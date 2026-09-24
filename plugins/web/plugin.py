@@ -1,4 +1,4 @@
-"""联网工具自研外层 tool 插件（平级，由 LLM 直接调用）。
+"""联网工具官方插件（P2 自 omni_core/tools/web_tool.py 迁出，函数体零改动）。
 
 web_fetch：抓取网页 URL 并返回可读正文（自研 HTML→文本，无外部 API key）。
 web_search：自研联网搜索（默认走 DuckDuckGo lite 无密钥抓取并解析结果），返回
@@ -41,6 +41,20 @@ def configure(cfg: Optional[dict]) -> None:
         _LIMITS["max_output"] = int(cfg.get("max_output", _LIMITS["max_output"]))
     except (TypeError, ValueError):
         pass
+
+
+def startup(ctx) -> None:
+    """内核装配后按旧配置键 config.runtime.web 注入限流参数。
+
+    迁移前该调用写在 ToolLoop.__init__ 里（内核点名 configure_web）；
+    现在由插件自己在 startup 时读取同一配置键，**用户配置零改动**。
+
+    Args:
+        ctx: PluginContext（读 ctx.config["runtime"]["web"]）。
+    """
+    cfg = getattr(ctx, "config", None)
+    runtime = (cfg.get("runtime") or {}) if isinstance(cfg, dict) else {}
+    configure(runtime.get("web") or {})
 
 
 def _clip(text: str, limit: int) -> str:

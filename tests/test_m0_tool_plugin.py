@@ -4,8 +4,23 @@
 验证 function_tool 装饰器隔离的「定义/注册/派发/回填」四跳，以及 vision
 工具已从 providers 手搓派发迁为平级插件。
 """
+import pytest
+
 from omni_core.tools.base import TOOL_REGISTRY, call_tool, schemas
-from omni_core.tools.vision_tool import bind_vision_runtime
+from omni_core.tools.loader import load_plugins, plugin_module
+
+
+@pytest.fixture(autouse=True)
+def _load_official_plugins():
+    """P3：vision 已迁为官方插件（plugins/vision），按名访问前需先装载。"""
+    load_plugins({})
+
+
+def _vision():
+    """取已装载的 vision 插件模块句柄。"""
+    module = plugin_module("vision")
+    assert module is not None, "vision 插件未装载"
+    return module
 
 
 class _FakeVision:
@@ -50,7 +65,7 @@ def test_all_vision_tools_registered_as_plugins():
 def test_dispatch_routes_to_plugin_no_core_branch():
     # [3] 派发：[4] 回填：call_tool 按名路由，无 if name== 分支
     fake = _FakeVision()
-    bind_vision_runtime(fake)
+    _vision().bind_vision_runtime(fake)
 
     res = call_tool("vision_describe", {"prompt": "这是什么界面？"})
     assert res == {"ok": True, "description": "fake:这是什么界面？"}

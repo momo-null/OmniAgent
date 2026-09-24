@@ -1,7 +1,7 @@
 """F4.1（D1）— 纪律文件写保护 + 注入块组装原语。
 
 注：注入**位置**的验收已随 F4.1b 迁移——AGENTS.md 由「尾部重插」改为
-「run 起始读一次 → 并入 system prompt（run 内锁定）」，相应断言在
+:「run 起始读一次 → 并入 system prompt（run 内锁定）」，相应断言在
 ``tests/test_f41b_instructions_system.py``；本文件保留与位置无关的契约：
 
 1. 注入块组装原语：来源标注、零注入、上限截断并标注；
@@ -11,11 +11,25 @@
 import asyncio
 from pathlib import Path
 
+import pytest
 from agents import Model
 
 from omni_core.brain.sdk_loop import _TailInjectModel
 from omni_core.local.knowledge_inject import compose_injection_block
-from omni_core.tools import filesystem_tool as fs
+from omni_core.tools.loader import load_plugins, plugin_module
+
+
+@pytest.fixture
+def fs():
+    """filesystem 已迁为官方插件（plugins/filesystem）：用例内取模块句柄。
+
+    P2 把 `omni_core/tools/filesystem_tool.py` 整体迁到 `plugins/filesystem/plugin.py`
+    且**不留兼容 re-export**，故这里改为「先幂等装载插件、再取模块」。
+    """
+    load_plugins({})
+    module = plugin_module("filesystem")
+    assert module is not None, "filesystem 插件未装载"
+    return module
 
 
 class _Inner(Model):
@@ -90,7 +104,7 @@ def test_tail_inject_reports_once():
 
 
 # --- 4. 纪律文件写保护（F4.1b 维持现状，不做改动） ------------------------------
-def test_agents_md_write_blocked(tmp_path):
+def test_agents_md_write_blocked(tmp_path, fs):
     p = tmp_path / "AGENTS.md"
     r = fs.write_file(str(p), "nope")
     assert r["ok"] is False and "只读" in r["error"]
@@ -105,7 +119,7 @@ def test_agents_md_write_blocked(tmp_path):
     assert ok["ok"] is True
 
 
-def test_agents_md_write_guard_covers_nested_name(tmp_path):
+def test_agents_md_write_guard_covers_nested_name(tmp_path, fs):
     """嵌套同名文件同样受保护（大小写不敏感）。"""
     nested = Path(tmp_path) / "sub" / "agents.md"
     r = fs.write_file(str(nested), "nope")

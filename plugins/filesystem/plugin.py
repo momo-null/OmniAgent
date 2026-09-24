@@ -1,11 +1,12 @@
-"""文件系统操作自研外层 tool 插件（平级，由 LLM 直接调用）。
+"""文件系统操作官方插件（P2 自 omni_core/tools/filesystem_tool.py 迁出，函数体零改动）。
 
 覆盖用户点名的能力：读取 / 整理 / 修改电脑上的文件（文档、表格、代码、图片等）、
 管理项目目录、生成报告文件。
 
 默认启用（`group="filesystem"`）。安全边界：直接操作宿主机文件系统，路径由调用方
 给定，不做额外沙箱（与 shell 同类风险，需用户知情——本组默认开是因为风险低于 shell，
-且文件读写是通用 agent 的基础能力）。
+且文件读写是通用 agent 的基础能力）。路径围栏由安全线 S1 统一注入（见
+doc/plans/sandbox-permission-design.md），本插件不自行实现权限判断。
 """
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -30,6 +31,20 @@ def configure(cfg: Optional[dict]) -> None:
         _LIMITS["max_output"] = int(cfg.get("max_output", _LIMITS["max_output"]))
     except (TypeError, ValueError):
         pass
+
+
+def startup(ctx) -> None:
+    """内核装配后按旧配置键 config.runtime.filesystem 注入限流参数。
+
+    迁移前该调用写在 ToolLoop.__init__ 里（内核点名 configure_filesystem）；
+    现在由插件自己在 startup 时读取同一配置键，**用户配置零改动**。
+
+    Args:
+        ctx: PluginContext（读 ctx.config["runtime"]["filesystem"]）。
+    """
+    cfg = getattr(ctx, "config", None)
+    runtime = (cfg.get("runtime") or {}) if isinstance(cfg, dict) else {}
+    configure(runtime.get("filesystem") or {})
 
 
 def _clip(text: str, limit: int) -> str:

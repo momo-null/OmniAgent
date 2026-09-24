@@ -30,14 +30,9 @@ from omni_core.local.curator import Curator
 from devices import ExecutionModule
 from omni_core.tools import (
     build_plugin_registry,
-    bind_execution_module,
     configure_python,
-    configure_shell,
-    configure_filesystem,
-    configure_web,
     build_mcp_servers,
     configure_local_model_from_config,
-    unregister_tool,
 )
 from omni_core.local.runtime_paths import (
     task_trajectory, task_collected, auto_project_id,
@@ -121,9 +116,9 @@ class ToolLoop(
         # T3.2：保留大脑端点配置原样，供读取模型级上下文上限（maxInputTokens）
         self.brain_cfg = dict(brain_cfg or {})
         self.exec = ExecutionModule()
-        # M3：设备能力已外置为 agent 外层 tool 插件（omni_core.tools.device_tool），
-        # 内核只做「运行时注入」，不再持有实现、不再有按工具名分支的手搓派发。
-        bind_execution_module(self.exec)
+        # M3：设备能力已外置为 agent 外层 tool 插件（plugins/device）；P3 起
+        # 「运行时注入」也由插件 startup(ctx) 承接（见下方 load_plugins），内核不再
+        # 点名具体绑定函数——插件迁出不会让内核 ImportError。
         self.exec_model = "none"
         # max_history: 单大脑模式保留最近 N 轮（0=不裁剪，适合云端大脑大上下文）。
         # 本地小模型（如 4B@8K ctx）设为较小值可防止多步后上下文溢出；
@@ -149,19 +144,16 @@ class ToolLoop(
             if _vision_cfg.get("enabled"):
                 self.vision = VisionRuntime(self.exec, _vision_cfg)
                 self.vision_enabled = True
-                # M0：视觉工具已迁为 agent 外层 tool 插件（omni_core.tools），
-                # 把运行时注入插件层，使「工具=平级插件」范式可用（内核零派发）。
-                from omni_core.tools.vision_tool import bind_vision_runtime
-                bind_vision_runtime(self.vision)
+                # P3：视觉工具的运行时注入 + 「关闭即注销」都由 plugins/vision 的
+                # startup(ctx) 承接（load_plugins 在本段之后、句柄已就绪时调用）。
             else:
-                # M-fix：vision 关闭 → 注销依赖 VLM 的视觉工具，让大脑「知道」不可用
+                # M-fix：vision 关闭 → 依赖 VLM 的视觉工具被注销（由 vision 插件
+                # startup 执行）；这里只保留给前端的陈述性事件（内核不点名工具）。
                 dbg = self._dbg("vision")
-                for _n in ("vision_describe", "som_ground", "som_marks"):
-                    unregister_tool(_n)
                 if dbg:
                     dbg("vision_disabled", {
                         "title": "视觉通道已关闭",
-                        "reason": "vision_describe / som_ground / som_marks 已从可用工具移除，大脑将不再调用",
+                        "reason": "依赖 VLM 的视觉工具已从可用工具移除，大脑将不再调用",
                     })
         except Exception as e:
             self._log(f"vision 通道初始化跳过: {type(e).__name__}: {e}")
@@ -175,9 +167,8 @@ class ToolLoop(
         # 内核只做「能力分组配置」，零持有、零派发（设计 §5.0 / §7-M3）。
         _tools_cfg = (_rt.get("tools") or {})
         configure_python(_rt.get("python_exec") or {})
-        configure_shell(_rt.get("shell_exec") or {})
-        configure_filesystem(_rt.get("filesystem") or {})
-        configure_web(_rt.get("web") or {})
+        # filesystem / shell / web 已迁为官方插件（plugins/），其限流参数由各插件
+        # 自己的 startup(ctx) 读取 runtime 下的旧配置键注入（用户配置零改动）。
         # M9：本地模型以工具形态注入（未配置时回退到 runtime.executor 的端点）；
         # 是否暴露由 llm.local_as_tool.enabled + runtime.tools.groups 共同决定。
         self.local_model_as_tool = configure_local_model_from_config(_cfg, on_debug=self._dbg("local_model"))
@@ -190,6 +181,27 @@ class ToolLoop(
             if _mcp_cfg.get("enabled")
             else []
         )
+        # P1 工具插件：builtin 之后扫描 plugin_dirs 动态装载用户侧插件包。
+        # 顺序刻意如此——插件可依赖 PluginContext 提供的绑定句柄（vision/execution），
+        # 反向不成立；单包失败只降级、不阻断（loader 内部已隔离并记录 failed）。
+        from omni_core.tools.loader import PluginContext, load_plugins
+        self.plugin_report = load_plugins(
+            _cfg,
+            ctx=PluginContext(
+                vision=self.vision,
+                execution=self.exec,
+                config=_cfg,
+                wired=True,
+            ),
+        )
+        if self.plugin_report.failed:
+            self._log(
+                "插件装载失败 %d 个: %s"
+                % (
+                    len(self.plugin_report.failed),
+                    ", ".join(str(f.get("name")) for f in self.plugin_report.failed),
+                )
+            )
         # 设备工具按后端收窄：emulator 专属工具（device_emulator 组，含 Android 专用）
         # 仅在 backend=emulator 时暴露；host 模式下内核不向模型下发任何 Android 工具，
         # 从根上杜绝「预设 Android」（红线：内核零场景假设，设备由用户按需配置）。

@@ -1,11 +1,12 @@
-"""设备/通用自研外层 tool 插件（平级，由 LLM 直接调用）。
+"""设备/通用官方插件（P3 自 omni_core/tools/device_tool.py 迁出，函数体零改动）。
 
 设计（见 doc/plans/refactor-agent-core-framework-design-2026-09-12.md §5.6 / §7-M3）：
 - Host / Emulator 的设备能力（键盘/鼠标/感知/设备原语）作为 agent 外层 tool 插件，
   与视觉、Python 执行、外部 MCP 完全平级，由 LLM 直接调用。
 - 工具定义用 SDK `function_tool`：schema 与参数说明由 SDK 从签名 + docstring 产出。
-- 运行时注入：``bind_execution_module(em)`` 在 ToolLoop 构造期调用一次；
-  插件函数体不含全局硬编码依赖。
+- 运行时注入：``bind_execution_module(em)`` 由插件 ``startup(ctx)`` 在每个 ToolLoop
+  装配时调用（**不是**只在首次 import 时调用一次），因为每个 ToolLoop 实例持有自己的
+  ExecutionModule。
 
 去场景化（§9）：需要「把 percept 变文本」时统一走 backend.text_of(percept)，
 不在插件里读具体感知字段。
@@ -13,16 +14,33 @@
 from typing import Any, Dict, Optional
 
 from omni_core.tools.base import function_tool
+from utils import get_logger
 
+logger = get_logger("plugins.device")
 
-# 注入的执行后端委托壳（由 tool_loop 构造期注入）
+# 注入的执行后端委托壳（由 startup(ctx) 在每个 ToolLoop 装配期注入）
 _EM: Optional[Any] = None
 
 
 def bind_execution_module(em: Any) -> None:
-    """注入执行后端（一次性，tool_loop 构造期调用）。"""
+    """注入执行后端（每个 ToolLoop 装配期调用一次）。"""
     global _EM
     _EM = em
+
+
+def startup(ctx) -> None:
+    """内核装配后注入执行后端（ctx.execution 为空则跳过并记日志）。
+
+    Args:
+        ctx: PluginContext（读 ctx.execution）。
+    """
+    execution = getattr(ctx, "execution", None)
+    if execution is None:
+        # 只读枚举路径（GET /api/runtime/tools）没有执行句柄：不绑定、不报错，
+        # 等真正的 ToolLoop 装配时再绑。
+        logger.debug("device 插件：本次装载未提供 execution 句柄，跳过绑定")
+        return
+    bind_execution_module(execution)
 
 
 def _require_em() -> Any:

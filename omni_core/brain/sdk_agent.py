@@ -15,13 +15,17 @@ from agents import Agent, Runner, RunHooks, function_tool
 from agents.run_context import RunContextWrapper
 
 from omni_core.brain import sdk_model
-from omni_core.tools.vision_tool import (
-    bind_vision_runtime,
-    vision_describe,
-    som_ground,
-    som_marks,
-    tap_by_mark,
-)
+from omni_core.tools.base import TOOL_REGISTRY
+
+#: M1 默认工具清单（视觉四件套）。P3 起 vision 已迁为官方插件（plugins/vision），
+#: 这里按名从注册表取，内核不再 import 插件模块（否则插件一迁出就 ImportError，
+#: 违反「内核零反向依赖具体插件」）。
+_DEFAULT_TOOL_NAMES = ("vision_describe", "som_ground", "som_marks", "tap_by_mark")
+
+
+def _default_tools() -> List[Any]:
+    """按名取默认工具（未装载 / 已被注销时自动缺席，与「工具=插件」语义一致）。"""
+    return [TOOL_REGISTRY[n].tool for n in _DEFAULT_TOOL_NAMES if n in TOOL_REGISTRY]
 
 
 class OmniRunHooks(RunHooks):
@@ -70,12 +74,7 @@ def build_omni_agent(
         tools: SDK FunctionTool 列表（用 sdk_function_tool 包装业务函数得到）。
         instructions: 系统指令（由 prompt.build_system_prompt 产出，本模块不持有）。
     """
-    tools = tools or [
-        sdk_function_tool(vision_describe),
-        sdk_function_tool(som_ground),
-        sdk_function_tool(som_marks),
-        sdk_function_tool(tap_by_mark),
-    ]
+    tools = tools or _default_tools()
     return Agent(
         name="omni_agent",
         model=model,
