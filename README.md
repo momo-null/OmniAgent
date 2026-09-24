@@ -95,12 +95,14 @@
 
 ```bash
 python -m venv .venv && .\.venv\Scripts\activate && pip install -r requirements.txt
+cd web && npm install && cd ..    # 前端依赖需手动装一次（脚本只提示不自动装）
 .\start_all.bat        # 后端 :8000 + 前端 :5173 一键起
 # 本地执行器另起：llama-server 加载本地 VLM GGUF（默认 :8085）
 ```
 
-- 真 API key 与三通道配置仅存 `~/.omniagent/config.yaml`，仓库 `config.yaml` 已去明文。
+- 真 API key 与三通道配置仅存 `~/.omniagent/config.yaml`，仓库 `config.yaml` 已去明文；**首次启动后请先到 Web「设置」页配置模型端点与 API key**，否则对话无法调用模型（后端日志出现「配置文件未找到」属正常）。
 - 默认 `runtime.backend: host`（宿主机屏幕）；emulator 需自备 `adb_serial`。
+- 前端访问用 `http://localhost:5173`（dev server 监听 IPv6 `::1`，`127.0.0.1` 可能连不上）；后端无窗口运行是刻意的（日志见 `backend.log` / `backend.err`），且**不要给 uvicorn 加 `--reload`**（Windows 下双进程抢绑端口会随机挂起）。
 
 ## 红线守护
 
@@ -207,12 +209,14 @@ A two-tier + Escalation general-purpose agent runtime: `Brain (online planning)`
 
 ```bash
 python -m venv .venv && .\.venv\Scripts\activate && pip install -r requirements.txt
+cd web && npm install && cd ..    # frontend deps must be installed once (the script only warns)
 .\start_all.bat        # starts backend :8000 + frontend :5173
 # start the local executor separately: llama-server loading a local VLM GGUF (default :8085)
 ```
 
-- The real API key and three-channel config live only in `~/.omniagent/config.yaml`; the repo's `config.yaml` carries no plaintext secrets.
+- The real API key and three-channel config live only in `~/.omniagent/config.yaml`; the repo's `config.yaml` carries no plaintext secrets. **On first launch, configure your model endpoint and API key in the Web Settings page** before chatting ("config file not found" in backend logs is normal on a fresh setup).
 - Default `runtime.backend: host` (host machine screen); emulator mode requires your own `adb_serial`.
+- Open the frontend at `http://localhost:5173` (the dev server listens on IPv6 `::1`; `127.0.0.1` may not connect). The backend intentionally runs windowless (see `backend.log` / `backend.err`), and **do not add `--reload` to uvicorn** (on Windows the reloader double-binds the port and connections randomly hang).
 
 ## Red-Line Guard
 

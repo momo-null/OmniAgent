@@ -133,45 +133,9 @@ SYSTEM_PROMPT = build_system_prompt({}, [])
 
 
 # ---------------------------------------------------------------------------
-# M3b 两层编排：在线大脑「规划者（manager）」专用 prompt + plan 工具 schema
-# ---------------------------------------------------------------------------
-# 在线大脑只在规划期（低频、一次）把总目标分解为结构化子任务，不做逐步执行。
-# 所有子任务按架构约定一律走本地模型（worker）高频执行。
-PLAN_TOOL_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "plan",
-        "description": "把总目标分解为若干可由执行层直接推进的子任务并一次性输出。"
-                       "子任务应是执行层能直接推进的单元（感知→动作→校验），不要包含需要重推理的谜题。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "subtasks": {
-                    "type": "array",
-                    "description": "子任务列表",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "desc": {"type": "string", "description": "子任务描述（要达成什么，不规定用什么工具/方式）"},
-            "done_when": {
-                "type": "string",
-                "description": "该子任务完成的判定条件。应写『完成后可被客观核验的结果描述』——"
-                               "能写具体可见/可查证的字面信号就写字面信号（如实际出现的文字、"
-                               "文件/资源的出现、状态变化），可用 '|' 分隔多个候选，任一命中即通过；"
-                               "禁止写无法客观核验的抽象描述（如 '成功识别界面' '显示列表'）。"
-            },
-                        },
-                        "required": ["desc", "done_when"],
-                    },
-                },
-                "overall_done_when": {
-                    "type": "string",
-                    "description": "整任务完成的判定条件（同样需客观可核验）",
-                },
-            },
-            "required": ["subtasks", "overall_done_when"],
-        },
-    },
-}
+# M3b 两层编排遗留的 plan 工具 schema 已删除（2026-09-24）：
+# 与 PLANNER_TEMPLATE / build_planner_prompt 同批的 M3b 规划者遗留，
+# M10 统一入口后全仓库零引用（P0 死代码清理时漏删，本次补删）。
+
 
 
