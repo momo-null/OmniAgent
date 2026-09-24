@@ -1,6 +1,6 @@
 """工具管理接口：/tools（只读枚举）+ 环境单选 + 插件开关。
 
-新模型（见 doc/plans/capability-unit-refactor-2026-09-24.md）：
+新模型：
 - **环境**（`environments/<kind>/`）：单选（`runtime.backend`），自带工具面 → 前端 radio；
 - **插件**（`plugins/<name>/`）：每个一个 on/off（`~/.omniagent/plugins/<name>.yaml`）→ 前端 switch；
 - **工具**：只读清单（来源 env / plugin / core / mcp），无逐工具开关。

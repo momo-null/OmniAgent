@@ -223,7 +223,9 @@ def test_m7_happy_path(monkeypatch):
         executor_mapping=[_auto_observe_then_done("sub ok")],
         ocr=["S1", "S2", "ALL"],  # verify 门控：屏幕文本需含各自的 done_when
     )
-    res = loop.run_task(TaskSpec(objective="o", done_when="ALL"))
+    # 必须显式给步数预算：缺省 max_steps=None 在内核语义上是「不限」（见 TaskSpec），
+    # 子 agent 策略若感知不到 role=="tool" 就会无界 observe → 按序全量时 CPU 满核卡死。
+    res = loop.run_task(TaskSpec(objective="o", done_when="ALL", max_steps=20))
     assert res["success"] is True
     assert len(res["subtask_results"]) == 2
     assert all(r["success"] for r in res["subtask_results"]), res["subtask_results"]

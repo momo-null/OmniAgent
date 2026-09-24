@@ -12,9 +12,10 @@
 agent 需要重读时用 `som_last_result` 工具取回。
 
 运行时自构造（M-后续：彻底去内核化）：`VisionRuntime` 由本插件 `startup(ctx)`
-在每个 ToolLoop 装配时**自己**构造（读 `ctx.config["runtime"]["vision"]` +
-`ctx.execution`），不再由内核 `tool_loop` 构造并注入。内核完全不 import 视觉运行时。
-- `runtime.vision.enabled` 为真且装配路径（wired）：构造并绑定运行时，工具保持注册；
+在每个 ToolLoop 装配时**自己**构造——配置读**插件自有**文件 `~/.omniagent/plugins/vision.yaml`
+（经 `loader.plugin_config("vision")`；插件**不拿环境厚句柄**），不再由内核 `tool_loop` 构造并注入。
+内核完全不 import 视觉运行时。
+- 插件自有配置 `enabled` 为真且装配路径（wired）：构造并绑定运行时，工具保持注册；
 - 装配路径且未启用：注销依赖 VLM 的三个工具，让大脑「知道」不可用；
 - 只读枚举路径（wired=False，如 GET /api/runtime/tools）：不做破坏性动作，
   保留注册表（否则幂等装载不会补回来）。
@@ -49,13 +50,13 @@ def startup(ctx) -> None:
     """内核装配后自构造运行时 / 决定绑定或注销视觉工具。
 
     分支（``wired`` 是 P3 的关键修正——只读枚举路径不得做破坏性动作）：
-    - ``wired=True`` 且 ``runtime.vision.enabled`` 为真 → 用 ``ctx.execution`` +
-      配置自构造 ``VisionRuntime`` 并绑定（每个 ToolLoop 实例持有自己的运行时）；
+    - ``wired=True`` 且插件自有配置 ``enabled`` 为真 → 用插件自有 yaml
+      （``loader.plugin_config("vision")``）自构造 ``VisionRuntime`` 并绑定（每个 ToolLoop 实例持有自己的运行时）；
     - ``wired=True`` 且未启用 → 注销三个依赖 VLM 的工具并记日志，让大脑「知道」不可用；
     - ``wired=False``（只读枚举 / 测试旁路）→ 什么都不做（保留注册表，避免幂等装载不再补回）。
 
     Args:
-        ctx: PluginContext（读 ctx.config / ctx.execution / ctx.wired）。
+        ctx: PluginContext（只读 ``wired``；视觉配置走插件自有 yaml，不经 ctx）。
     """
     # 先确保自己的工具在册：vision 曾被关闭的轮次把它们注销过，而全局注册表是
     # 进程级状态——「谁注册谁维护」，否则一次关闭会永久改变注册表（vision 再也回不来）。

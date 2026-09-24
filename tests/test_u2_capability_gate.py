@@ -1,6 +1,6 @@
 """U2 能力门禁单测：**环境单选 + 插件开关**（无 per-tool 禁用）。
 
-设计见 doc/plans/capability-unit-refactor-2026-09-24.md §3 / §4：
+设计：
 - 环境（`environments/<kind>/`）**单选**，写 `runtime.backend`（前端 radio）；
 - 插件（`plugins/<name>/`）**各自一个 `enabled` 开关**，写 `~/.omniagent/plugins/<name>.yaml`
   （前端 switch；默认值在 `plugin.json`）；

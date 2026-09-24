@@ -1,6 +1,6 @@
 """执行能力归一（§5）：shell 是内核 builtin、默认常开，且是唯一命令执行入口。
 
-设计见 doc/plans/capability-unit-refactor-2026-09-24.md §5：
+设计：
 - `run_python` 已删除（python 改由 shell 承载：写脚本 → `python <脚本>`）；
 - `shell_exec` 属内核 core，**不经任何插件 / 环境装载**即可用（默认常开）；
 - 保留名保护：插件不得占用 `shell_exec`（否则可顶替 / 关掉唯一执行入口）。

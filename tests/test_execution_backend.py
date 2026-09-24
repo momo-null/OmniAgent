@@ -1,6 +1,6 @@
 """环境层单测（`devices/` 适配层 + `environments/`）。
 
-设计见 doc/plans/capability-unit-refactor-2026-09-24.md §5.5：
+设计：
 - `devices/` 只剩内核需要的三件契约（`kind` / `text_of` / `verify_done`）+ 注册表 + 句柄；
 - 具体环境（host / emulator）在 `environments/` **自注册**，自带 driver 与工具面；
 - 内核**不点名任何环境**（按 `runtime.backend` 查表）；

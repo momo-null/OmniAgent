@@ -1,6 +1,6 @@
 """P1：工具插件加载器契约测试。
 
-覆盖（见 doc/plans/tool-plugin-master-plan.md §1.7 与 capability-unit-refactor §3/§4）：
+覆盖：
 装载/派发、**插件自持配置**（`~/.omniagent/plugins/<name>.yaml` → `configure(cfg)`）、
 钩子顺序与 PluginContext（只读 `config` / `wired` / `env_kind`）、失败隔离与回滚、
 保留名与重名保护、manifest 校验、`enabled` 开关、`requires_env` 环境绑定、

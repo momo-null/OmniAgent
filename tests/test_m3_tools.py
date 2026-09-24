@@ -1,7 +1,7 @@
 """M3 设备能力 tool 化单测：键鼠路由 / 感知 / 通用件（template_match、wait_for、drag）。
 
 设备能力是**环境的工具面**（`environments/<kind>/tools.py`）：激活哪个环境，
-就注册哪个环境的工具（见 doc/plans/capability-unit-refactor-2026-09-24.md §3/§5.5）。
+就注册哪个环境的工具。
 不依赖 GPU / 真实模型 / 模拟器：用 fake 执行后端注入环境工具面。
 """
 from PIL import Image, ImageDraw

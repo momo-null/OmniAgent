@@ -1,6 +1,6 @@
 """环境注册表：按 ``kind`` 注册 / 构造环境（内核**不点名任何具体环境**）。
 
-设计（见 doc/plans/capability-unit-refactor-2026-09-24.md §5.5）：
+设计：
 - 各环境在 ``environments/<kind>/`` 里**自注册**：``register_environment(kind, create, bind_tools)``；
 - 本模块**不 import 任何具体环境**；首次使用懒发现（``import environments`` 触发自注册）；
 - 删除某个环境包 = 该 kind 消失，本模块行为不受影响。

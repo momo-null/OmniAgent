@@ -1,6 +1,6 @@
 """当前任务的临时工作目录（ContextVar）。
 
-设计（见 doc/plans/capability-unit-refactor-2026-09-24.md §6）：
+设计：
 - agent 自写的脚本 / 截图等**临时产物**默认落 ``tasks/<task_id>/tmp/``，**不进项目目录**；
 - 用 ContextVar（而非模块全局）绑定，保证 M6 并发子任务各自独立、不串；
 - run 起始由 ``graph_runner`` 绑定 task_id，任务终态由 finish 路径清理 ``tmp/``。

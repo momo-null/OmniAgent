@@ -1,4 +1,4 @@
-"""环境适配层 —— 内核唯一需要的契约（见 doc/plans/capability-unit-refactor-2026-09-24.md §5.5）。
+"""环境适配层 —— 内核唯一需要的契约。
 
 内核（`tool_loop` / `WorldModel` / `verify`）**只**通过三个成员使用"环境"：
 

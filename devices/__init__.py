@@ -1,6 +1,6 @@
 """``devices`` —— **环境适配层**（内核唯一需要的环境契约 + 注册 + 句柄）。
 
-职责（见 doc/plans/capability-unit-refactor-2026-09-24.md §5.5）：
+职责：
 - ``base.Environment``：内核唯一契约（``kind`` / ``text_of`` / ``verify_done``）；
 - ``registry``：按 ``kind`` 注册 / 构造环境（不点名任何具体环境）；
 - ``module.ExecutionModule``：内核持有的当前环境句柄。

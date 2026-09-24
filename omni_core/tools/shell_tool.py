@@ -1,6 +1,6 @@
 """Shell 执行工具（内核 core · ① 执行原语）。
 
-设计（见 doc/plans/capability-unit-refactor-2026-09-24.md §3 / §5）：
+设计：
 - core 内部三分：**① 执行原语**（本模块 = `shell_exec`）/ ② 编排能力（`skill` + 元工具）/
   ③ 接入机制（`local_model` / `mcp` / 模型路由）。宿主命令执行属 ①，与设备层的键鼠面并列
   （键鼠面归**环境**），**归内核 core、常开**；

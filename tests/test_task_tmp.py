@@ -1,6 +1,6 @@
 """临时产物目录（§6）：默认落 `tasks/<task_id>/tmp/`，不进项目目录；任务终态自动清理。
 
-设计见 doc/plans/capability-unit-refactor-2026-09-24.md §6：
+设计：
 - `ContextVar` 绑定（并发子任务各自独立，不串）；
 - 工具默认解析到它（`shell_exec` 的 cwd、相对路径基准）；
 - 终态只删 `tmp/`，**绝不碰同目录持久资产**（task.json / trajectory / world_model / skills…）。

@@ -1,6 +1,6 @@
 """环境装载器：按 ``config.runtime.backend`` 激活环境并注册其自带工具。
 
-设计（见 doc/plans/capability-unit-refactor-2026-09-24.md §4 / §5.5）：
+设计：
 - 环境**单选**：激活的那个才注册它的工具；换后端需重启（重装）。
 - 环境自有配置读 ``~/.omniagent/environments/<kind>.yaml``（不进 core config）。
 - 内核与 ``devices/`` 都不点名任何具体环境（``devices.registry`` 懒发现 environments 包）。

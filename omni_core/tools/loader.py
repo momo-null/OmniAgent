@@ -1,6 +1,6 @@
 """工具插件加载器：从 plugin_dirs 发现并动态装载用户侧插件包。
 
-设计（见 doc/plans/capability-unit-refactor-2026-09-24.md）：
+设计：
 - **插件 = 自包含目录**：``<plugin_dirs>/<name>/plugin.json`` + ``plugin.py``；删掉该目录，
   系统里不再有它一丝痕迹（内核从不点名任何插件）。
 - **插件自持配置**：``~/.omniagent/plugins/<name>.yaml``（含 ``enabled`` 与插件自有参数）；

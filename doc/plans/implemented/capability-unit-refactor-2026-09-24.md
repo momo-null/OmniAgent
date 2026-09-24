@@ -1,7 +1,7 @@
 # 能力单元（unit）化简 + observe 工具化 + 执行/产物归一
 
 > **日期**：2026-09-24
-> **状态**：**已实施（2026-09-24 设计 → 2026-09-25 收口）**，含 §11「遗留清单」中列明的未完成项 / 有意偏离项
+> **状态**：✅ **已结项（2026-09-25）** —— 代码侧无遗留（见 §11 结项结论）。
 > **文档说明**：本计划是 `tool-plugin-master-plan.md` 之后的收口设计。插件化机制（P1-P3）已完成，但遗留了四个问题，本文统一收口：① `group` 概念冗余；② observe 被 loop 强制作成单独步骤；③ `run_python` 冗余且是个绕过门禁的常开后门；④ agent 产物默认落进项目目录。修订直接改本文件并更新状态行。
 > **基线**：工作区当前未提交改动基线见 git；执行机本机 Windows，Python 3.12（仓库 `.venv`），PowerShell。
 > **北极星约束**：内核零场景假设；能力 = 插件（模型直接调）；loop 只编排不替模型观察；全程不写死任何 app / 场景。**前端零插件特判**：插件在前端只能有一个开关 + 自报元数据，任何自定义 UI 都意味着它该归 core（详见 §2.1）。
@@ -259,7 +259,7 @@ environments/
 
 ## 9. 验收标准
 - `scripts/review_lint.py --strict` 通过（红线：无 app/场景硬编码）。✅ **通过**（2026-09-25 实测：34 内核文件 + `devices/`，零违规）。
-- 相关单测随本计划更新后全绿（含删 `test_m3_python.py`）。⚠️ **未达成**：按序全量仍有 5 failed + 1 个 ~120s 卡顿（该批单跑 59 passed；根因＝进程级全局顺序依赖）→ §11.1-4。
+- 相关单测随本计划更新后全绿（含删 `test_m3_python.py`）。⚠️ **已判定不追（2026-09-25 用户决定）**：卡死点已修（`test_m3b.py` 补 `max_steps`）；历史失败集**现已全过**（该批 44/44）；残余 `F` 为**顺序依赖假失败**（单跑全过），根因＝测试基础设施的进程级全局状态 ⇒ **不视为本计划回归** → §11.1-4。
 - 前端「能力单元」页（**现状**＝环境 radio / 插件 switch / 工具只读清单）：unit 标签完整 ✓；**shell 不再作为开关出现** ✓；`local_model` 开关随「推理通道」面板（`llm.local_as_tool`）✓。⚠️ 原稿的「essential 锁定」**判定过时**（core 工具不带开关即不可关，无需该字段）→ §11.1-2。
 - 行为验证：shell 默认可用且是唯一执行入口 ✓；agent 写的脚本 / 截图落 `tasks/<task_id>/tmp/` ✓（`workspace.py` ContextVar + 各工具默认解析）；任务结束后 `tmp/` 被清空、而 `trajectory.jsonl`/`world_model.md` 等持久资产**完好** ✓（`graph_runner._cleanup_task_tmp` 只 `rmtree` tmp；`tests/test_task_tmp.py` 看守）；⚠️ `<repo>/temp/` **历史残留未清**（不再新生 ✓，但旧产物仍在目录里）→ §11.1-3。
 - observe 工具化：模型自主调 observe，loop 不再注入环境块，verify 完成判定仍正常（依赖 `world.update`）。
@@ -275,18 +275,20 @@ environments/
 
 ---
 
-## 11. 遗留清单（2026-09-25 逐条核对代码后的结果）
+## 11. 结项结论（2026-09-25 逐条核对代码后）
 
 核对口径：本计划自身的判据（残留标识符 grep 零命中 / `review_lint --strict` / 单测 / 行为验证）。
 
-### 11.1 缺口清单（含已补做 / 已判定过时 / 仍待处理）
+**结论：代码侧无遗留。** 曾判定"未实现"的 4 项 → 2 项**已补做**、1 项**判过时**、1 项（单测全绿）**判不追**；4 项"有意偏离"保留并留理由。`review_lint --strict` ✅ 通过。
+
+### 11.1 缺口清单（已补做 / 判过时 / 不追）
 
 | # | 条目 | 出处 | 现状（实测） |
 |---|---|---|---|
 | 1 | 设备侧 adb 工具 `android_shell` / `android_pull` / `android_push` / `android_list_dir` | §3 emulator 行、§5.5 配套（标注"**已定：加**"） | ✅ **已补做（2026-09-25）**：`environments/emulator/backend.py` 加 `device_shell`/`device_push`/`device_pull`/`device_list_dir`（+ `_shell_result` 归一 u2 新旧返回），`environments/emulator/tools.py` 加同名 4 工具；本地路径基准走 `workspace.resolve_path`（task tmp）。冒烟：emulator 工具面 **22 件**含该 4 件 |
 | 2 | `skill_tool` 的 `essential=True` + 前端「essential 锁定」 | §7.5、§9 | **已判定过时 → 不实现**（2026-09-25 用户确认）。全仓（含 `web/src`）无 `essential` 字段；且 **core 工具本就不带开关**、不出现在插件列表，"必备工具不可关"已由**结构**保证，该字段无意义 |
-| 3 | 清掉仓库 `<repo>/temp/` 历史产物 | §6.5 | **部分**。`.gitignore` 已含 `temp/` ✓（不入库）；但目录内仍是历史 agent 产物（截图 `azurlane_launch.png`/`current_screenshot.png`/`screenshot_0.png`/`debug_*.png`/`_scr_*.png`、诊断脚本 `diag_4b.py`/`emu_open_azurlane.py`/`find_emulator.py`/`probe_*.py`/`m0_validate*.py`/`smoke_u2.py`/`_loop_stub.py`/`_m4_check.py` 等），**未清理** |
-| 4 | "相关单测全绿" | §9 | **未达成**。2026-09-25 实测：按序全量 **5 failed + 1 个 ~120s 卡顿**（同一批文件单跑 59 passed）；根因类＝**进程级全局**（`TOOL_REGISTRY` / `environments/*/tools._BACKEND` / `AsyncBridge` / config 缓存）。⚠️ 把 `_BACKEND` 改 ContextVar 需跨线程 context 传播（`run_coroutine_threadsafe` 不复制 context）→ **独立任务，勿顺手改** |
+| 3 | 清掉仓库 `<repo>/temp/` 历史产物 | §6.5 | ✅ **已完成（2026-09-25）**：删 **50 个文件**（76 → 26）；保留运行日志（`omniagent.log`/`backend.*`/`web.*`）、模型进程日志（`llama_server_*`）、工具链包（`llama-*.zip`）。⚠️ 仅剩 4 个 `pytest-review*` 目录因**环境 safe-delete 守卫**拦截未能删除 → 手动 `Remove-Item temp\pytest-review* -Recurse -Force` 即可，**不影响本计划结项** |
+| 4 | "相关单测全绿" | §9 | ⚠️ **判定不追（2026-09-25 用户决定）**。实测：① 按序全量的**卡死点已修**（`test_m3b.py::test_m7_happy_path` 补 `max_steps=20` —— 缺省 `None` 在内核语义上是"不限"，子 agent 感知不到 `role=="tool"` 即无界 observe）；② `.pytest_cache` 记的 5 条历史失败**现已全过**（该 5 文件 44 例 100%）；③ 残余 `F` 属**顺序依赖假失败**（单跑全过），根因＝**测试基础设施的进程级全局状态**（`TOOL_REGISTRY` / `environments/*/tools._BACKEND` / `AsyncBridge` / config 缓存）⇒ **不视为本计划回归**。⚠️ 把 `_BACKEND` 改 ContextVar 需跨线程 context 传播（`run_coroutine_threadsafe` 不复制 context）→ **独立任务，勿顺手改** |
 | 5 | system prompt 注入 `当前环境: <kind>（<平台>）` | §5.5 配套（标注"**已定：加**"） | ✅ **已补做（2026-09-25）**：平台名由**环境自报**（`HostBackend.platform="Windows"` / `EmulatorBackend.platform="Android"`，内核零硬编码）→ `ExecutionModule.platform` → `graph_runner` 两处 ctx（主链 + worker）→ `prompt._platform_suffix`。实测渲染 `- 当前环境：host（Windows）` |
 
 ### 11.2 有意偏离（本计划要求做，核对后判定不做 —— 理由）
@@ -300,14 +302,10 @@ environments/
 
 ### 11.3 本次修正的计划内部过时 / 矛盾（文档侧，已改）
 
-- **状态行**：`待实施` → `已实施（2026-09-24 设计 → 2026-09-25 收口）`。
+- **状态行**：`待实施` → `已实施（2026-09-24 设计 → 2026-09-25 收口）` → **`已结项（2026-09-25）`**。
 - **§7.3 与 §4 自相矛盾**：§7.3 原写 `disabled_units = effective_disabled_units(cfg)` + `build_plugin_registry(disabled_units)`，而 §4 要求**删除**这两个 → 现实现为 `build_plugin_registry()` **无参**（`core.py:170`），中间态 `self._units` 亦已撤销；§7.3 该句已更正。
 - **§7.5 `plugins/device/plugin.py` 条目失指**：该插件**已删除**（设备工具面归 `environments/<kind>/tools.py`）；其要求的 `percept` 声明现由环境工具面承担 ✓。§1、§3 中 `device/plugin.py:144` 的引用同因失效。
 - **§9 验收措辞对齐现状**：前端＝环境 radio / 插件 switch / 工具只读；`shell` 确实不再是开关 ✓，但"essential 锁定"从未实现。
-- **`plugins/vision/plugin.py` docstring 陈旧**（第 15、52 行）：仍写旧键 `ctx.config["runtime"]["vision"]` 与 `ctx.execution`；实现已改为 `plugin_config("vision")`（读插件自有 yaml），且 `PluginContext` 已**删除 `execution` 厚句柄** → 注释待修。
+- **`plugins/vision/plugin.py` docstring 陈旧**（第 15、52 行）：曾写旧键 `ctx.config["runtime"]["vision"]` 与 `ctx.execution`（实现早已改为 `plugin_config("vision")` 读插件自有 yaml，且 `PluginContext` 已**删除 `execution` 厚句柄**）→ ✅ **已修（2026-09-25）**：3 处注释改为现状描述（纯文本、零行为）。
 
-### 11.4 计划范围外的相邻遗留（另见 `.codebuddy/memory/2026-09-25.md`）
 
-- **MCP 连接时机**：三路线待拍板（A 进程级连接复用 / B schema 落盘缓存 + 首次调用才连 / C 元工具网关）；已加探活总预算 `_MCP_CONNECT_BUDGET_SEC=8.0`（143s → 实测 7.88s），但 `ToolLoop` 每 run 重建导致**每个 run 重连**、且连接**从不 close**（泄漏待修）。
-- **`_LIMITS["read_limit"]`**（`plugins/filesystem`）：被 `configure` 读入但**不参与任何截断**，属死配置（未擅自加语义，待定夺）。
-- **`graph_runner` 续跑提示**已由祈使句改纯事实；`~/.omniagent/mcp.json` 的 `rimworld` 已置 `enabled:false`（等重启生效）。
