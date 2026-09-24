@@ -35,7 +35,7 @@ class _MemStore:
 
 
 def _make_store(path):
-    from omni_core.local.tool_loop import _TodoStore
+    from omni_core.local.loop import _TodoStore
 
     return _TodoStore(str(path))
 

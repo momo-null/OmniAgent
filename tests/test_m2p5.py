@@ -13,10 +13,24 @@ from omni_core.brain.prompt import (
     tool_catalog_block,
     build_system_prompt,
 )
-from omni_core.tools.vision_runtime import VisionRuntime
+from plugins.vision.runtime import VisionRuntime
 
 
 # --- 能力动态注入 ----------------------------------------------------------
+from tests._env import install_fake_env  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _load_vision_plugin(enable_plugin):
+    """本文件直接用 vision 插件的运行时 / 工具：先**显式打开**它再装载。
+
+    vision 默认 `enabled: false`（治"每次都用 vision"），且装载是进程级幂等——
+    必须显式打开并主动装载，不能依赖别的测试文件先跑过（旧版正是这么偶然通过的）。
+    """
+    enable_plugin("vision")
+    load_plugins({})
+
+
 def test_capability_block_text_only():
     block = capability_block({"vision": False})
     assert "无原生视觉" in block
@@ -156,7 +170,7 @@ def test_tool_loop_observe_routes_to_backend(monkeypatch):
     """observe 必须走当前执行后端，不能硬编码宿主机 observer（否则模拟器场景
     会读到宿主机桌面，与截图/vision 矛盾）。"""
     from omni_core.brain.llm import BrainReply, ToolCall
-    from omni_core.local.tool_loop import ToolLoop, TaskSpec
+    from omni_core.local.loop import ToolLoop, TaskSpec
 
     class _FakeBackend:
         # 注：M4 起后端不再声明 tool_schemas（能力清单由 tool 插件层提供）
@@ -164,7 +178,7 @@ def test_tool_loop_observe_routes_to_backend(monkeypatch):
         def __init__(self):
             self.observe_calls = 0
             self.backend = _FakeBackendInner()
-            self.backend_kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
+            self.kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
 
         def observe(self):
             self.observe_calls += 1
@@ -213,10 +227,10 @@ def test_tool_loop_observe_routes_to_backend(monkeypatch):
 
     captured = []
     fb = _FakeBackend()
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", lambda *a, **k: fb)
+    install_fake_env(monkeypatch, lambda *a, **k: fb)
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", _FakeBrain)
 
-    loop = ToolLoop({"model": "m", "base_url": "http://x", "capabilities": {}}, verbose=False)
+    loop = ToolLoop({"model": "m", "base_url": "http://127.0.0.1:9", "capabilities": {}}, verbose=False)
     loop.run_task(TaskSpec(objective="o", max_steps=2))
 
     assert fb.observe_calls >= 1

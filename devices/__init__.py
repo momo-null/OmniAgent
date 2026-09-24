@@ -1,31 +1,29 @@
-"""devices —— L1 设备能力层（屏幕/键鼠/模拟器驱动）。
+"""``devices`` —— **环境适配层**（内核唯一需要的环境契约 + 注册 + 句柄）。
 
-物理位置说明（设计 §7-M3/M4）：
-本包已**从内核 `omni_core/` 迁出**。`ExecutionBackend` 及其两个实现类
-（Host / Emulator）属于「能力实现」，不是通用 agent 内核：
+职责（见 doc/plans/capability-unit-refactor-2026-09-24.md §5.5）：
+- ``base.Environment``：内核唯一契约（``kind`` / ``text_of`` / ``verify_done``）；
+- ``registry``：按 ``kind`` 注册 / 构造环境（不点名任何具体环境）；
+- ``module.ExecutionModule``：内核持有的当前环境句柄。
 
-    L3 框架层        LangGraph / OpenAI Agents SDK（循环驱动）
-    L2 护城河        omni_core/local/*（WorldModel / Curator / verify_done …）
-    L1 能力层        omni_core/tools/*（tool 插件）+ devices/*（设备驱动）
-
-能力怎么暴露给 LLM：由 `omni_core/tools/device_tool.py` 的 `function_tool`
-插件声明 schema；本包只负责**执行**，不向内核反向注入任何工具清单。
-
-内核与设备的唯一契约（去场景化 §9，属 L2 护城河）：
-    backend.text_of(percept)            -> 感知文本化（后端自定形状）
-    backend.verify_done(cond, percept)  -> 完成判定（后端自定语义）
-内核永不读取 percept 内部字段。
+具体环境实现（host / emulator …）在顶层 ``environments/`` 包里，各自自包含
+（driver + 自带工具面）；**本包不 import 它们**（懒发现）。
 """
-from devices.base import ExecutionBackend, ExecutionModuleProtocol
-from devices.factory import ExecutionModule, create_backend
-from devices.host import HostBackend
-from devices.emulator import EmulatorBackend
+from devices.base import Environment
+from devices.registry import (
+    register_environment,
+    create_backend,
+    registered_kinds,
+    list_environments,
+    bind_tools,
+)
+from devices.module import ExecutionModule
 
 __all__ = [
-    "ExecutionBackend",
-    "ExecutionModuleProtocol",
-    "ExecutionModule",
+    "Environment",
+    "register_environment",
     "create_backend",
-    "HostBackend",
-    "EmulatorBackend",
+    "registered_kinds",
+    "list_environments",
+    "bind_tools",
+    "ExecutionModule",
 ]

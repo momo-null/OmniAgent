@@ -83,6 +83,54 @@ def _isolated_home(monkeypatch, tmp_path):
     _clear_cfg_cache(_cfg)
 
 
+#: 环境包（各自 `tools.py` 有一个模块级后端全局）
+_ENV_KINDS = ("host", "emulator")
+
+
+@pytest.fixture(autouse=True)
+def _unbind_env_tool_backends():
+    """用例间**解绑**环境工具后端，消除顺序依赖。
+
+    `environments/<kind>/tools.py` 的后端是**模块级全局**（`bind()` 注入；工具跑在
+    AsyncBridge 的后台线程上，故不能用 ContextVar——见 MEMORY）。若 A 用例绑了真实
+    后端、B 用例只 patch 了内核句柄，B 的工具调用就会打到 A 的后端（真实屏幕 / 失效 fake）。
+
+    只做解绑（**不碰 `TOOL_REGISTRY`**，风险最低）：用例自己 `_bind(...)` 或
+    `install_fake_env(...)`；没绑就用 → 立即报「未绑定后端」，而不是静默用别人的。
+    """
+    yield
+    for kind in _ENV_KINDS:
+        mod = sys.modules.get(f"environments.{kind}.tools")
+        if mod is not None:
+            bind = getattr(mod, "bind", None)
+            if callable(bind):
+                bind(None)
+
+
+@pytest.fixture
+def enable_plugin():
+    """打开一个插件：写它的自有配置 ``~/.omniagent/plugins/<name>.yaml`` 的 ``enabled``。
+
+    插件默认开关写在各自 ``plugin.json``（`vision` 默认 ``false``，治"每次都用 vision"）；
+    测试要用它的工具时，先显式打开（全局根已由 ``_isolated_home`` 隔离）。
+    """
+
+    def _enable(name: str) -> None:
+        import yaml
+
+        from omni_core.local import runtime_paths as _P
+
+        path = _P.plugin_config_file(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {}
+        if path.is_file():
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data["enabled"] = True
+        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    return _enable
+
+
 @pytest.fixture
 def mock_model_hub():
     """ModelManager 替身：覆盖 router_models 依赖的所有方法（扫描式，无注册表）

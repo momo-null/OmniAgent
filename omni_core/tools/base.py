@@ -14,9 +14,13 @@
 
 为什么还保留一张进程内表：
 - 供 `GET /api/runtime/tools` 做只读枚举；
-- 供同步调用方（单测、脚本）按名 invoke；
-- 能力分组（config.runtime.tools.groups）需要一张可按 group 过滤的清单。
+- 供同步调用方（单测、脚本）按名 invoke。
 它不是"派发器"——派发是 SDK Runner 的事。
+
+工具来源（`ToolPlugin.source`）：``core``（内核内置）/ ``env``（环境自带）/
+``plugin``（``plugins/``）/ ``mcp``（外部 MCP）。是否注册由各自的装载器决定
+（插件按自身 ``enabled``、环境按 ``runtime.backend``）；**本注册表不做过滤**，
+只记录"当前进程里存在哪些工具"。
 """
 import json
 from dataclasses import dataclass, field
@@ -30,12 +34,17 @@ from omni_core.async_bridge import run_async
 
 @dataclass
 class ToolPlugin:
-    """一个平级 tool 插件：SDK FunctionTool + 能力分组元数据。"""
+    """一个平级 tool 插件：SDK FunctionTool + 来源元数据。
+
+    ``unit``  提供者标识：``core`` / 环境 kind（host、emulator…）/ 插件名 / MCP server 名。
+    ``source`` 来源类别：``core`` | ``env`` | ``plugin`` | ``mcp``。
+    ``meta``  提供者自声明元数据（如 ``percept="state"/"collected"``，供内核分发世界模型）。
+    """
 
     name: str
     tool: FunctionTool
-    group: str = "generic"        # 能力分组（config 驱动启停，不写死）
-    source: str = "builtin"       # builtin | mcp（仅可观测性，二者平级）
+    unit: str = "core"            # 提供者标识（不写死具体名字；由各自装载器赋值）
+    source: str = "core"          # core | env | plugin | mcp
     meta: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -80,7 +89,9 @@ def _tool_error_result(ctx: Any, error: Exception) -> str:
 def function_tool(
     name: Optional[str] = None,
     description: Optional[str] = "",
-    group: str = "generic",
+    unit: str = "core",
+    source: str = "core",
+    percept: Optional[str] = None,
     timeout: Optional[float] = None,
 ) -> Callable[[Callable], Callable]:
     """把业务函数注册为平级 tool 插件（**用 SDK 的 function_tool**）。
@@ -91,11 +102,14 @@ def function_tool(
     Args:
         name: 对外工具名（缺省用函数名）。
         description: 工具描述（缺省用 docstring 首段）。
-        group: 能力分组，供 config.runtime.tools.groups 过滤。
+        unit: 提供者标识（缺省 "core"；插件/环境由各自装载器覆盖）。
+        source: 来源类别 core | env | plugin | mcp（缺省 "core"）。
+        percept: 世界模型感知类型——``"state"`` → 结果并入环境状态文本；
+            ``"collected"`` → 结果并入采集清单。内核据此分发，**零工具名字面量**。
         timeout: 单次工具调用超时（秒）。
 
     Usage::
-        @function_tool(description="点击归一化坐标", group="device")
+        @function_tool(description="点击归一化坐标", unit="host")
         def click(x: float, y: float) -> dict:
             \"\"\"点击屏幕。
 
@@ -118,7 +132,10 @@ def function_tool(
             timeout=timeout,
             failure_error_function=_tool_error_result,
         )
-        register_tool(ToolPlugin(name=tool.name, tool=tool, group=group))
+        meta = {"percept": percept} if percept else {}
+        register_tool(ToolPlugin(
+            name=tool.name, tool=tool, unit=unit, source=source, meta=meta,
+        ))
         return func
     return deco
 
@@ -137,33 +154,23 @@ def unregister_tool(name: str) -> None:
     TOOL_REGISTRY.pop(name, None)
 
 
-def _plugins(groups: Optional[List[str]] = None,
-             excluded: Optional[List[str]] = None) -> List[ToolPlugin]:
-    """按能力组过滤的插件视图（只读枚举用）。
+def _plugins() -> List[ToolPlugin]:
+    """当前进程内已注册的工具视图（只读枚举用）。
 
-    excluded：视图级禁用名单（config.runtime.tools.disabled），在分组过滤
-    **之后**执行——高权限放行的工具（如 full_access 放行的 shell）仍可被单工具禁用。
-    空/None = 不过滤，默认行为不变。
+    注册与否已由各装载器决定（插件按 enabled、环境按 runtime.backend），
+    本函数不再做任何过滤。
     """
-    if not groups:
-        result = list(TOOL_REGISTRY.values())
-    else:
-        wanted = set(groups)
-        result = [p for p in TOOL_REGISTRY.values() if p.group in wanted]
-    if excluded:
-        ex = set(excluded)
-        result = [p for p in result if p.name not in ex]
-    return result
+    return list(TOOL_REGISTRY.values())
 
 
-def sdk_tools(groups: Optional[List[str]] = None) -> List[FunctionTool]:
+def sdk_tools() -> List[FunctionTool]:
     """给 SDK Agent 用的工具清单（派发由 Runner 原生接管）。"""
-    return [p.tool for p in _plugins(groups)]
+    return [p.tool for p in _plugins()]
 
 
-def schemas(groups: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+def schemas() -> List[Dict[str, Any]]:
     """OpenAI function schema 视图列表（只读枚举用）。"""
-    return [p.schema for p in _plugins(groups)]
+    return [p.schema for p in _plugins()]
 
 
 def _ctx(tool_name: str, arguments: str) -> ToolContext:
@@ -218,19 +225,13 @@ def _normalize(raw: Any) -> Dict[str, Any]:
 class PluginRegistry:
     """agent 外层 tool 插件注册表视图（内核持有的唯一句柄）。
 
-    只暴露：按能力分组过滤的清单（`sdk_tools` 给 Runner / `schemas` 给枚举），
+    只暴露：已注册工具的清单（`sdk_tools` 给 Runner / `schemas` 给枚举），
     以及同步场景的按名 invoke（`dispatch`）。派发本身由 SDK Runner 负责。
     """
 
-    def __init__(self, groups: Optional[List[str]] = None,
-                 excluded: Optional[List[str]] = None):
-        self.groups = list(groups) if groups else None
-        # 视图级禁用名单（config.runtime.tools.disabled），默认空=不过滤
-        self.excluded = list(excluded) if excluded else None
-
     @property
     def plugins(self) -> List[ToolPlugin]:
-        return _plugins(self.groups, self.excluded)
+        return _plugins()
 
     @property
     def schemas(self) -> List[Dict[str, Any]]:
@@ -249,14 +250,6 @@ class PluginRegistry:
         return call_tool(name, args)
 
 
-def build_plugin_registry(groups: Optional[List[str]] = None,
-                           excluded: Optional[List[str]] = None) -> PluginRegistry:
-    """构造插件注册表视图（groups=None 表示不过滤，全部启用）。
-
-    excluded：视图级禁用名单（config.runtime.tools.disabled），在分组过滤之后执行。
-    """
-    return PluginRegistry(groups, excluded)
-
-
-# 便捷别名（与旧 ToolRegistry 语义对齐）
-tool_registry = TOOL_REGISTRY
+def build_plugin_registry() -> PluginRegistry:
+    """构造插件注册表视图（启停已由各装载器决定，此处不过滤）。"""
+    return PluginRegistry()

@@ -23,7 +23,6 @@ from omni_core.local.skill_library import SkillLibrary
 _WEAKEN_HINT = "历史记忆/技能（可能过时，以实际观测为准）"
 
 _SUMMARY_TRUNCATE = 20000
-_SKILL_OP_LIMIT = 12
 
 
 def load_memory_text() -> str:
@@ -154,32 +153,6 @@ def load_agents_snapshot(layers: List[Tuple[str, Any]], limit: int = 8192) -> Ag
     block, labels = compose_injection_block(parts, limit=limit, title=_AGENTS_HEADER)
     return AgentsSnapshot(block=block, labels=labels, layers=norm,
                           digests=digests, limit=int(limit or 0))
-
-
-def load_matching_skills(objective: str, task_id: str, limit: int = 3) -> List[Dict[str, Any]]:
-    """基于当前任务弱匹配召回技能；异常兜底返回空列表。
-
-    严格传递真实 task_id（SkillLibrary 内部已做路径安全校验），规避路径报错。
-    上限 ``limit`` 条，技能条目统一抽取「名称 + 匹配规则 + 核心操作序列」。
-    """
-    try:
-        if not objective:
-            return []
-        lib = SkillLibrary(task_id=task_id)
-        matched = lib.find_by_pattern(objective)
-        out: List[Dict[str, Any]] = []
-        for s in matched[:limit]:
-            steps = getattr(s, "substeps", None) or []
-            ops = " → ".join(getattr(st, "tool", "") for st in steps[:_SKILL_OP_LIMIT])
-            out.append({
-                "name": getattr(s, "name", ""),
-                "objective_pattern": getattr(s, "objective_pattern", ""),
-                "description": getattr(s, "description", ""),
-                "ops": ops,
-            })
-        return out
-    except Exception:
-        return []
 
 
 def build_knowledge_block(memory_text: str, skills: List[Dict[str, Any]]) -> str:

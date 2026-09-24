@@ -31,7 +31,7 @@ def _gate():
 
 
 def _brain():
-    return {"model": "m", "base_url": "http://x", "api_key": "k"}
+    return {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}
 
 
 # --- 1. 长任务分块续跑（模型持续输出工具调用） -------------------------------

@@ -9,7 +9,7 @@ import types
 
 import pytest
 
-from omni_core.local.tool_loop import (
+from omni_core.local.loop import (
     _ARTIFACT_ITEM_CHARS, _WORLD_SUMMARY_CHARS, _failure_point, _format_prev_results,
     _subtask_artifacts,
 )
@@ -94,9 +94,9 @@ def test_no_prev_results_means_no_append():
 # --- 全链路：_run_subtask 补齐三键 -------------------------------------------
 def test_run_subtask_adds_handoff_fields(monkeypatch):
     """子任务返回字典应补齐 done_when_hit / artifacts / failure_point 三键。"""
-    from omni_core.local.tool_loop import TaskSpec, ToolLoop
+    from omni_core.local.loop import TaskSpec, ToolLoop
 
-    loop = ToolLoop({"model": "m", "base_url": "http://x", "api_key": "k"}, verbose=False)
+    loop = ToolLoop({"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}, verbose=False)
     monkeypatch.setattr(loop, "_run_via_sdk", lambda *a, **k: {
         "success": False, "reason": "首行原因\n第二行细节",
         "steps": 1, "escalated": False,

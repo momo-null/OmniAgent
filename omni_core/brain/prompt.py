@@ -88,6 +88,21 @@ THINK_TAG_INSTRUCTION = (
 )
 
 
+def _platform_suffix(platform: str = "") -> str:
+    """环境平台的展示后缀（由环境自报；缺省零注入）。
+
+    平台名（Windows / Android…）由各环境自行声明，**内核不硬编码任何环境知识**。
+
+    Args:
+        platform: 环境自报的平台展示名。
+
+    Returns:
+        形如 ``（Windows）`` 的后缀；无平台信息时为空串。
+    """
+    p = str(platform or "").strip()
+    return f"（{p}）" if p else ""
+
+
 def _runtime_context_block(ctx: dict) -> str:
     """渲染运行时上下文块：仅注入任务级目录等通用路径信息，无领域/场景硬编码
     （符合北极星红线：内核零场景硬编码，路径只接收 task_id 派生的通用目录）。
@@ -97,6 +112,7 @@ def _runtime_context_block(ctx: dict) -> str:
     return (
         "\n# 运行时上下文\n"
         f"- 当前任务 ID：{ctx.get('task_id', '')}\n"
+        f"- 当前环境：{ctx.get('env_kind', '')}{_platform_suffix(ctx.get('env_platform', ''))}\n"
         f"- 任务工作目录：{ctx.get('task_dir', '')}\n"
         "  （内含 trajectory.jsonl / world_model.md / collected.json / skills/ 等任务资产）\n"
         f"- 任务级技能目录：{ctx.get('task_skills_dir', '')}\n"

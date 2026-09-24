@@ -11,8 +11,9 @@ from omni_core.tools.loader import load_plugins, plugin_module
 
 
 @pytest.fixture(autouse=True)
-def _load_official_plugins():
-    """P3：vision 已迁为官方插件（plugins/vision），按名访问前需先装载。"""
+def _load_official_plugins(enable_plugin):
+    """vision 是官方插件且**默认停用**（治"每次都用 vision"）；按名访问前先显式打开。"""
+    enable_plugin("vision")
     load_plugins({})
 
 
@@ -59,7 +60,9 @@ def test_function_tool_auto_schema():
 def test_all_vision_tools_registered_as_plugins():
     for name in ("vision_describe", "som_ground", "som_marks", "tap_by_mark"):
         assert name in TOOL_REGISTRY, f"{name} 应为平级插件"
-        assert TOOL_REGISTRY[name].group == "vision"
+        # unit = 插件名、source = plugin（由 loader 归属，不靠插件自报）
+        assert TOOL_REGISTRY[name].unit == "vision"
+        assert TOOL_REGISTRY[name].source == "plugin"
 
 
 def test_dispatch_routes_to_plugin_no_core_branch():

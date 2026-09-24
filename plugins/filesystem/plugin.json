@@ -1,7 +1,8 @@
 {
   "name": "filesystem",
-  "version": "1.0.0",
-  "description": "文件系统操作：读取 / 写入 / 编辑 / 列举 / 递归检索 / 建目录 / 生成报告",
-  "group": "filesystem",
+  "version": "1.1.0",
+  "title": "文件系统",
+  "description": "文件系统操作：读取（可分页）/ 写入 / 编辑 / 列举 / 递归检索（可带上下文）/ 建目录",
+  "enabled": true,
   "permissions": ["fs_read", "fs_write"]
 }

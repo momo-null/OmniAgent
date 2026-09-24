@@ -5,8 +5,11 @@
 import json
 
 from omni_core.brain.llm import BrainReply, ToolCall
-from omni_core.local.tool_loop import ToolLoop, TaskSpec
+from omni_core.local.loop import ToolLoop, TaskSpec
 from omni_core.local.states import AgentState, LEGAL_TRANSITIONS
+
+
+from tests._env import install_fake_env  # noqa: E402
 
 
 class _FakeBackend:
@@ -16,7 +19,7 @@ class _FakeBackend:
         self.observe_calls = 0
         self.ocr = []
         self.backend = _FakeBackendInner()  # M4a.3: 可配置 OCR 文本
-        self.backend_kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
+        self.kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
 
     def observe(self):
         self.observe_calls += 1
@@ -80,11 +83,12 @@ def _think():
 def _make_loop(monkeypatch, tmp_path, brain_mapping, executor_mapping=None):
     fb = _fake_brain_factory({BRAIN: brain_mapping, EXEC: executor_mapping or []})
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", fb)
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _FakeBackend)
+    install_fake_env(monkeypatch, _FakeBackend)
     loop = ToolLoop(
-        {"model": BRAIN, "base_url": "http://x", "capabilities": {}},
+        {"model": BRAIN, "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
-        executor_cfg={"enabled": True, "model": EXEC, "base_url": "http://x", "capabilities": {"vision": True}},
+        executor_cfg={"enabled": True, "model": EXEC, "base_url": "http://127.0.0.1:9",
+                      "capabilities": {"vision": True}},
     )
     loop.traj_dir = str(tmp_path)
     return loop
@@ -107,8 +111,12 @@ def test_single_brain_success_sequence(monkeypatch, tmp_path):
 
 
 def test_single_brain_failure_sequence(monkeypatch, tmp_path):
-    # 大脑一直只思考不 task_done -> max_steps 用尽 -> FAILED（单大脑无 escalate）
-    loop = _make_loop(monkeypatch, tmp_path, brain_mapping=[_think(), _think()])
+    """大脑一直调工具却不 task_done -> max_steps 用尽 -> FAILED（单大脑无 escalate）。
+
+    注：SDK 语义下**纯文本回复＝最终答案**（会被判成功），所以"消耗预算"必须靠持续
+    调工具（这里用 observe）。旧版用 `_think()`（纯文本）走这条路，前提已不成立。
+    """
+    loop = _make_loop(monkeypatch, tmp_path, brain_mapping=[_observe(), _observe(), _observe()])
     res = loop.run_task(TaskSpec(objective="o", max_steps=2))
     assert res["success"] is False
     assert loop._state_seq[-1] == "FAILED"

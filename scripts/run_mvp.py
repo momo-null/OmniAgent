@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import yaml
-from omni_core.local.tool_loop import ToolLoop, TaskSpec
+from omni_core.local.loop import ToolLoop, TaskSpec
 
 
 def load_brain_cfg(config_path: str) -> dict:

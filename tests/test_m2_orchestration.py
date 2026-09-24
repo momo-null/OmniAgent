@@ -176,7 +176,7 @@ def test_no_dispatch_and_not_done_is_failure():
 def test_graph_has_no_hardcoded_layering():
     import inspect
     from omni_core.orchestration import graph as G
-    from omni_core.local import tool_loop as TL
+    from omni_core.local import loop as TL
 
     src = inspect.getsource(G)
     src = src.split('"""', 2)[-1]        # 去掉模块 docstring（里面会解释性提到旧名词）

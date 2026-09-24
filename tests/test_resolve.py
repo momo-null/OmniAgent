@@ -44,9 +44,9 @@ def test_resolve_new_schema_main():
     assert out["model"] == "demo-model"
     assert out["base_url"] == "https://example/v1"
     assert out["api_key"] == "sk-online"
-    # agent 自身字段保留，model 引用被剔除
+    # agent 自身字段保留，provider 引用（model_ref）已被解析剔除
     assert out.get("max_steps") == 40
-    assert "model_ref" not in out and "model" not in out.get("model", "")  # model 已是端点 model
+    assert "model_ref" not in out
     # 新 schema 默认启用
     assert out.get("enabled") is True
 

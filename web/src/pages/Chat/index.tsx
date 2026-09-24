@@ -565,15 +565,16 @@ export default function Chat() {
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>要开启完全访问权限吗？</Typography>
           </Stack>
           <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1.5 }}>
-            开启后，Agent 在<strong>本次任务</strong>中可直接执行系统命令（cmd / powershell / bash）。这包括但不限于：
+            开启后，Agent 在<strong>本次任务</strong>中执行<strong>危险动作</strong>时<strong>不再弹出确认卡片</strong>，直接放行。
+            关闭时（默认），每个危险动作都需要你点头。本开关即审批总闸。
           </Typography>
           <Stack spacing={1.25} sx={{ mb: 1.5 }}>
-            <CapabilityRow icon={<FolderRounded />} label="文件和文件夹" desc="读取、创建、修改、上传或删除任意位置的文件" tag="默认已启用" />
-            <CapabilityRow icon={<TerminalIcon />} label="终端命令" desc="运行命令、安装软件、更改系统设置" tag="本次新增" tagTone="warning" />
+            <CapabilityRow icon={<FolderRounded />} label="文件和文件夹" desc="读取、创建、修改或删除任意位置的文件" tag="默认已启用" />
+            <CapabilityRow icon={<TerminalIcon />} label="命令执行" desc="在宿主机运行系统命令" tag="默认已启用" />
             <CapabilityRow icon={<PublicRounded />} label="互联网和已连接的应用" desc="访问网站、发送数据并使用已启用的工具" tag="默认已启用" />
           </Stack>
           <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1.5 }}>
-            这会带来敏感数据丢失或泄露、提示注入等风险。仅对当前任务生效，切换任务后自动关闭。
+            仅对当前任务生效，切换任务后自动关闭。
           </Typography>
           <Stack direction="row" justifyContent="flex-end" spacing={1}>
             <Button size="small" onClick={() => setConfirmAnchorEl(null)}>取消</Button>

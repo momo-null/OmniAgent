@@ -19,12 +19,10 @@ from omni_core.brain.llm import LLMClient, model_health_ok
 from omni_core.brain.prompt import build_system_prompt
 from omni_core.brain import tools as brain_tools
 from omni_core.local.world_model import WorldModel
-from omni_core.tools.vision_runtime import VisionRuntime
 from omni_core.local.states import AgentState
 from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local import telemetry
 from omni_core.local.curator import Curator
-from devices import ExecutionModule
 from omni_core.local.runtime_paths import (
     task_trajectory, task_collected, auto_project_id,
 )
@@ -182,7 +180,7 @@ class SdkBridgeMixin:
             except Exception:
                 todo_store = None
         # T2.4：绑定当前 task_id，供 load_skill「私有优先、全局兜底」定位任务私有技能；
-        # 总开关（runtime.tools.groups 含 skill）打开时才生成技能目录消息。
+        # 技能目录消息始终生成（skill 属 core 常开；分组门禁已删）。
         try:
             from omni_core.tools.skill_tool import set_skill_task_context
 
@@ -193,14 +191,13 @@ class SdkBridgeMixin:
         catalog: Optional[List[Dict[str, Any]]] = None
         if skill_catalog is None:
             try:
-                if "skill" in (getattr(self, "_groups", None) or []):
-                    from omni_core.local.knowledge_inject import (
-                        build_skill_catalog,
-                        format_skill_catalog_message,
-                    )
+                from omni_core.local.knowledge_inject import (
+                    build_skill_catalog,
+                    format_skill_catalog_message,
+                )
 
-                    catalog = build_skill_catalog(spec.task_id)
-                    skill_catalog = format_skill_catalog_message(catalog)
+                catalog = build_skill_catalog(spec.task_id)
+                skill_catalog = format_skill_catalog_message(catalog)
             except Exception:
                 skill_catalog = None
                 catalog = None
@@ -312,9 +309,12 @@ class SdkBridgeMixin:
             if not isinstance(result, dict):
                 return
             world.log_action({"tool": tool_name, "args": {}}, result)
-            if tool_name in ("observe", "read_screen_text", "ocr_screenshot"):
-                world.update(result, self.exec.backend)
-            if tool_name == "collect_list":
+            # 世界模型分发：按工具**自声明的 percept 元数据**，内核零工具名字面量。
+            from omni_core.tools.base import TOOL_REGISTRY
+            _percept = getattr(TOOL_REGISTRY.get(tool_name), "meta", {}).get("percept")
+            if _percept == "state":
+                world.update(result, self.exec)
+            elif _percept == "collected":
                 try:
                     world.add_collected_bulk(result.get("entries") or [])
                 except Exception:

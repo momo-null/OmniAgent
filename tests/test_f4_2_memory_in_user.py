@@ -9,11 +9,11 @@
 3. 子 agent（is_sub=True）不入记忆（保持既有「记忆仅主链」语义）。
 """
 import config as config_mod
-from omni_core.local.tool_loop import ToolLoop
+from omni_core.local.loop import ToolLoop
 
 
 def _loop():
-    loop = ToolLoop({"model": "m", "base_url": "http://x", "api_key": "k"}, verbose=False)
+    loop = ToolLoop({"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}, verbose=False)
     loop.knowledge_cfg["memory"] = True     # 打开 memory 能力
     return loop
 

@@ -40,7 +40,7 @@ def skill_load_limit() -> int:
     name="load_skill",
     description=("按名称加载技能的完整指令（frontmatter + 正文）。"
                  "仅当技能目录摘要不足以指导执行时调用。"),
-    group="skill",
+    unit="skill",
 )
 def load_skill(skill_name: str) -> Dict[str, Any]:
     """加载指定技能的完整指令内容。

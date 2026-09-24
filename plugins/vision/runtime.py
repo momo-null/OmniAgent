@@ -1,17 +1,18 @@
-"""视觉能力实现（**L1 工具插件层**，已从 `omni_core/local/` 迁出）。
+"""视觉能力实现（**L1 工具插件层**，已从 `omni_core/tools/vision_runtime.py` 完全迁出至
+`plugins/vision/`，内核零残留）。
 
 设计（见 doc/plans/refactor-agent-core-framework-design-2026-09-12.md §5.4）：
-本文件是视觉/SoM 的**能力实现**，与 `devices/` 同属 L1，不在内核里。
+本文件是视觉 / SoM 的**能力实现**，与 `devices/` 同属 L1，不在内核里。
 
 职责边界：
 - 本地 VLM 仅做「视觉工具」，控制权在大脑；大脑可自主选择用原生视觉还是调用本工具。
 - 两套 SoM 对称陈列，agent 按界面类型选用：
   * ``som_ground``：基于 u2 结构化 UI 树编号（原生 App，有层级时）。
   * ``som_marks``：视觉 Set-of-Marks，把截图送本地视觉模型直接在像素层面标区域，
-    返回归一化坐标（无结构化层级、自绘/Unity 渲染等界面时）。
+    返回归一化坐标（无结构化层级、自绘 / Unity 渲染等界面时）。
 
 **α 决策（SoM 状态归属）**：marks 的跨步状态**不在这里**，由 tool 插件
-``omni_core/tools/vision_tool.py`` 自持（`som://last_result`），内核零感知。
+``plugins/vision/plugin.py`` 自持（``som://last_result``），内核零感知。
 因此本运行时的 `som_ground` / `visual_so_m` 只负责产出 marks，
 `tap_mark(mark)` 接收一个具体的 mark 并执行落点——不持有任何跨步状态。
 
@@ -20,6 +21,9 @@
   视觉模型 server；``describe(image_path, prompt) -> str``。
 - ``parse_ui_nodes`` / ``build_som``：u2 hierarchy XML -> 编号框（纯 PIL）。
 - ``VisionRuntime``：把 ExecutionModule 与 LocalVision 粘起来。
+
+`VisionRuntime` 由 `plugins/vision/plugin.py` 的 `startup` 在 `runtime.vision.enabled`
+时自构造（不再由内核 `tool_loop` 构造），内核不再 import 本模块。
 """
 import base64
 import os
@@ -128,16 +132,18 @@ def build_som(
     Args:
         image_path: 原始截图路径。
         elements: ``parse_ui_nodes`` 产出的元素列表（含 bounds）。
-        out_path: 标注图保存路径；缺省落到 temp/som_<name>.png。
+        out_path: 标注图保存路径；缺省落到**当前任务临时目录** ``tasks/<id>/tmp/som_<name>.png``。
     Returns:
         ``(marked_path, marks)``，marks[i] = ``{id, ref, label, bounds, center}``。
     """
     from PIL import Image, ImageDraw
 
     if out_path is None:
+        # §6：产物默认落当前任务 tmp，**不进项目目录**（未绑定任务时回退 cwd）
+        from omni_core.tools.workspace import task_tmp_dir
+
         base = os.path.basename(image_path)
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        out_path = os.path.join(root, "temp", f"som_{base}")
+        out_path = str(task_tmp_dir() / f"som_{base}")
         os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
     img = Image.open(image_path).convert("RGB")
@@ -233,7 +239,8 @@ class LocalVision:
 class VisionRuntime:
     """把执行后端（截图 / UI 树）与本地 VLM 粘起来的运行时。
 
-    由 ``tool_loop`` 在 ``runtime.vision.enabled`` 时构造并注入 ``runtime["vision"]``。
+    由 ``plugins/vision/plugin.py`` 的 ``startup`` 在 ``runtime.vision.enabled`` 时
+    自构造并注入（不再由内核 ``tool_loop`` 构造）；内核不 import 本类。
     """
 
     def __init__(self, exec_module: Any, cfg: Optional[dict] = None, client: Any = None):
@@ -246,7 +253,7 @@ class VisionRuntime:
         # 部分视觉模型默认开启思考链，执行层要直接答案；可由 vision.disable_thinking 关闭
         self.disable_thinking = bool(self.cfg.get("disable_thinking", True))
         self._vision: Optional[LocalVision] = None
-        # 注意：这里**不**持有 SoM marks（α 决策：状态归 vision_tool 插件自持）
+        # 注意：这里**不**持有 SoM marks（α 决策：状态归 vision 插件自持）
 
     # --- 解析 server 地址（缺省走 model_hub 实际端口）------------------------
     def _resolve_base_url(self) -> Optional[str]:
@@ -342,7 +349,7 @@ class VisionRuntime:
     def tap_mark(self, mark: Dict[str, Any]) -> Dict[str, Any]:
         """按一个具体的 SoM mark 落点。
 
-        marks 的跨步状态由 `vision_tool` 插件自持（α 决策），本运行时不持有；
+        marks 的跨步状态由 vision 插件自持（α 决策），本运行时不持有；
         调用方先从自己的状态里解析出 mark，再交给这里执行。
 
         结构化 mark（som_ground）映射到 resource-id；视觉 mark（som_marks）
@@ -505,8 +512,10 @@ class VisionRuntime:
             img = Image.open(image_path).convert("RGB")
             W, H = img.size
             draw = ImageDraw.Draw(img)
-            root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            out_path = os.path.join(root, "temp", "vsom_" + os.path.basename(image_path))
+            # §6：产物默认落当前任务 tmp，**不进项目目录**（未绑定任务时回退 cwd）
+            from omni_core.tools.workspace import task_tmp_dir
+
+            out_path = str(task_tmp_dir() / ("vsom_" + os.path.basename(image_path)))
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             r = max(12, min(W, H) // 40)
             for m in marks:

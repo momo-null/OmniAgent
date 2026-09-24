@@ -9,11 +9,14 @@
 6. verify 工具失败计 verify_fail
 """
 from omni_core.brain.llm import BrainReply, ToolCall
-from omni_core.local.tool_loop import ToolLoop, TaskSpec
+from omni_core.local.loop import ToolLoop, TaskSpec
 from omni_core.local.states import AgentState
 
 
 # --- 假后端 ---------------------------------------------------------------
+from tests._env import install_fake_env  # noqa: E402
+
+
 class _FakeBackend:
     tool_schemas = []
 
@@ -21,7 +24,7 @@ class _FakeBackend:
         self.observe_calls = 0
         self.ocr = []
         self.backend = _FakeBackendInner()
-        self.backend_kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
+        self.kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
 
     def observe(self):
         self.observe_calls += 1
@@ -92,9 +95,9 @@ def _make_loop(monkeypatch, brain_script=None, ocr=None):
 
     _FakeBrain.__init__ = _init
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", _FakeBrain)
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _FakeBackend)
+    install_fake_env(monkeypatch, _FakeBackend)
     loop = ToolLoop(
-        {"model": "brain", "base_url": "http://x", "capabilities": {}},
+        {"model": "brain", "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
     )
     if ocr is not None:

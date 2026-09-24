@@ -19,12 +19,15 @@ from omni_core.brain.llm import BrainReply, ToolCall
 from omni_core.local import runtime_paths  # noqa: F401  (确保路径模块已导入)
 from omni_core.local.runtime_paths import task_collected
 from omni_core.local.task_store import TaskStore
-from omni_core.local.tool_loop import ToolLoop, TaskSpec
+from omni_core.local.loop import ToolLoop, TaskSpec
 
 
 # --- 假后端 / 假大脑（最小可执行，不依赖真实模型 / 网络） -------------------
+from tests._env import install_fake_env  # noqa: E402
+
+
 class _FakeBackend:
-    backend_kind = "host"  # ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
+    kind = "host"  # ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
 
     def __init__(self, *a, **k):
         self.ocr = []
@@ -88,9 +91,9 @@ def _make_loop(monkeypatch):
             pass
 
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", _FakeBrain)
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _FakeBackend)
+    install_fake_env(monkeypatch, _FakeBackend)
     loop = ToolLoop(
-        {"model": "brain", "base_url": "http://x", "capabilities": {}},
+        {"model": "brain", "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
         executor_cfg={"enabled": False},
     )
@@ -101,7 +104,7 @@ def _make_loop(monkeypatch):
 # --- 1. 单源：_make_store 透传统一 run_id -----------------------------------
 def test_make_store_unified_run_id_passthrough():
     """B2 修复点 1：TrajectoryStore 收到的 run_id 必须等于调用方透传的统一 run_id。"""
-    loop = ToolLoop({"model": "m", "base_url": "http://x", "api_key": "k"}, verbose=False)
+    loop = ToolLoop({"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}, verbose=False)
     store = loop._make_store("t_b2_unit", "fixed_run_xyz")
     assert store is not None
     assert store.run_id == "fixed_run_xyz", "TrajectoryStore 应复用统一 run_id，而非自生成"
@@ -139,7 +142,9 @@ def test_finish_appends_run_via_add_run(monkeypatch):
     # update/add_run 依赖其存在（否则 update 会抛 KeyError 被吞，跳过 add_run）。
     created = TaskStore.create("o", done_when="ALL")
     task_id = created["task_id"]
-    spec = TaskSpec(objective="o", done_when="ALL", task_id=task_id)
+    # max_steps 显式给上：本用例只验 add_run，不该依赖「预算兜底」——
+    # 缺了它，一旦 verify 不过就会无界循环（生产 /chat 恒回退 default_max_steps=40）。
+    spec = TaskSpec(objective="o", done_when="ALL", task_id=task_id, max_steps=5)
     res = loop.run_task(spec)
     assert res["success"] is True, res
 

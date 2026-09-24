@@ -22,15 +22,14 @@ from omni_core.brain.llm import LLMClient, model_health_ok
 from omni_core.brain.prompt import build_system_prompt
 from omni_core.brain import tools as brain_tools
 from omni_core.local.world_model import WorldModel
-from omni_core.tools.vision_runtime import VisionRuntime
 from omni_core.local.states import AgentState
 from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local import telemetry
 from omni_core.local.curator import Curator
-from devices import ExecutionModule
 from omni_core.tools import (
     build_plugin_registry,
-    configure_python,
+    configure_shell,
+    activate_environment,
     build_mcp_servers,
     configure_local_model_from_config,
 )
@@ -90,7 +89,6 @@ class ToolLoop(
         full_access: Optional[bool] = None,
         config_snapshot: Optional[dict] = None,
         agent_id: str = "main",
-        tool_registry: Any = None,
     ):
         # 详细日志通道：内核把 prompt/response/react 旁路推给前端（右栏「运行日志」）
         self.on_debug = on_debug
@@ -115,10 +113,9 @@ class ToolLoop(
         self.brain_model = (brain_cfg or {}).get("model", "?")
         # T3.2：保留大脑端点配置原样，供读取模型级上下文上限（maxInputTokens）
         self.brain_cfg = dict(brain_cfg or {})
-        self.exec = ExecutionModule()
-        # M3：设备能力已外置为 agent 外层 tool 插件（plugins/device）；P3 起
-        # 「运行时注入」也由插件 startup(ctx) 承接（见下方 load_plugins），内核不再
-        # 点名具体绑定函数——插件迁出不会让内核 ImportError。
+        # 环境（host / emulator …）：按 runtime.backend 单选激活；内核只经
+        # ExecutionModule 使用契约三成员（kind / text_of / verify_done）。
+        self.exec = activate_environment(_cfg)
         self.exec_model = "none"
         # max_history: 单大脑模式保留最近 N 轮（0=不裁剪，适合云端大脑大上下文）。
         # 本地小模型（如 4B@8K ctx）设为较小值可防止多步后上下文溢出；
@@ -136,63 +133,31 @@ class ToolLoop(
             ((_rt.get("long_task") or {}).get("budget_hint_ratio", 0.75)) or 0.0
         )
 
-        # M2 视觉通道：runtime.vision.enabled 时构造 VisionRuntime 注入 runtime
-        self.vision_enabled = False
-        self.vision = None
-        _vision_cfg = (_rt.get("vision") or {})
-        try:
-            if _vision_cfg.get("enabled"):
-                self.vision = VisionRuntime(self.exec, _vision_cfg)
-                self.vision_enabled = True
-                # P3：视觉工具的运行时注入 + 「关闭即注销」都由 plugins/vision 的
-                # startup(ctx) 承接（load_plugins 在本段之后、句柄已就绪时调用）。
-            else:
-                # M-fix：vision 关闭 → 依赖 VLM 的视觉工具被注销（由 vision 插件
-                # startup 执行）；这里只保留给前端的陈述性事件（内核不点名工具）。
-                dbg = self._dbg("vision")
-                if dbg:
-                    dbg("vision_disabled", {
-                        "title": "视觉通道已关闭",
-                        "reason": "依赖 VLM 的视觉工具已从可用工具移除，大脑将不再调用",
-                    })
-        except Exception as e:
-            self._log(f"vision 通道初始化跳过: {type(e).__name__}: {e}")
+        # 视觉通道已彻底插件化（plugins/vision）：运行时由插件 startup 自构造，
+        # 内核不再构造 / 读取 runtime.vision，也不注入 runtime["vision"]。
         self.runtime = {
             "exec": self.exec,
-            "vision": self.vision,
-            "vision_enabled": self.vision_enabled,
         }
 
-        # 工具清单：agent 外层 tool 插件层（自研 vision/device/python + 外部 MCP 平级）。
-        # 内核只做「能力分组配置」，零持有、零派发（设计 §5.0 / §7-M3）。
+        # 工具清单 = 环境自带（env）+ 插件（plugin）+ 内核 builtin（core）。
+        # 环境已在上方按 runtime.backend 激活；下面装载插件与内建限流。
         _tools_cfg = (_rt.get("tools") or {})
-        configure_python(_rt.get("python_exec") or {})
-        # filesystem / shell / web 已迁为官方插件（plugins/），其限流参数由各插件
-        # 自己的 startup(ctx) 读取 runtime 下的旧配置键注入（用户配置零改动）。
-        # M9：本地模型以工具形态注入（未配置时回退到 runtime.executor 的端点）；
-        # 是否暴露由 llm.local_as_tool.enabled + runtime.tools.groups 共同决定。
+        configure_shell(_rt.get("shell_exec") or {})
+        # M9：本地模型以工具形态注入（是否暴露由 llm.local_as_tool.enabled 决定）。
         self.local_model_as_tool = configure_local_model_from_config(_cfg, on_debug=self._dbg("local_model"))
-        # 外部 MCP：交给 SDK 原生 MCPServer；连接生命周期由 sdk_loop 在运行期负责
-        # connect()/复用（本版 SDK 的 Runner 不会自动 connect），发现与派发交 SDK 接管。
-        # MCP 配置已抽离到 ~/.omniagent/mcp.json（见 config.load_mcp_config）。
+        # 外部 MCP：交给 SDK 原生 MCPServer；连接生命周期由 sdk_loop 在运行期负责。
         _mcp_cfg = config.load_mcp_config()
         self.mcp_servers = (
             build_mcp_servers(_mcp_cfg.get("servers"), log=self._log)
             if _mcp_cfg.get("enabled")
             else []
         )
-        # P1 工具插件：builtin 之后扫描 plugin_dirs 动态装载用户侧插件包。
-        # 顺序刻意如此——插件可依赖 PluginContext 提供的绑定句柄（vision/execution），
-        # 反向不成立；单包失败只降级、不阻断（loader 内部已隔离并记录 failed）。
+        # 插件装载：扫 plugin_dirs，按各插件自有 enabled 决定注册与否；单包失败只降级。
+        # 插件只拿到只读 env_kind，**不拿环境厚句柄**（见 PluginContext）。
         from omni_core.tools.loader import PluginContext, load_plugins
         self.plugin_report = load_plugins(
             _cfg,
-            ctx=PluginContext(
-                vision=self.vision,
-                execution=self.exec,
-                config=_cfg,
-                wired=True,
-            ),
+            ctx=PluginContext(config=_cfg, wired=True, env_kind=self.exec.kind),
         )
         if self.plugin_report.failed:
             self._log(
@@ -202,35 +167,9 @@ class ToolLoop(
                     ", ".join(str(f.get("name")) for f in self.plugin_report.failed),
                 )
             )
-        # 设备工具按后端收窄：emulator 专属工具（device_emulator 组，含 Android 专用）
-        # 仅在 backend=emulator 时暴露；host 模式下内核不向模型下发任何 Android 工具，
-        # 从根上杜绝「预设 Android」（红线：内核零场景假设，设备由用户按需配置）。
-        from omni_core.tools.base import TOOL_REGISTRY
-        # 阶段 1 目标 3：工具 registry 优先用运行体注入的实例，否则回退全局（向后兼容）。
-        _plugin_src = tool_registry if tool_registry is not None else TOOL_REGISTRY
-        _groups = _tools_cfg.get("groups")
-        if _groups is None:
-            _groups = sorted({p.group for p in _plugin_src.values() if p.group != "shell"})
-        else:
-            _groups = list(_groups)
-        if self.exec.backend_kind == "emulator":
-            if "device_emulator" not in _groups:
-                _groups.append("device_emulator")
-        else:
-            _groups = [g for g in _groups if g != "device_emulator"]
-        # 前端「完全访问」开关：开启后放行高危组（当前仅 shell）。
-        # 优先级：按请求覆盖 full_access（仅当前 task 生效）> 全局 runtime.tools.full_access 兜底。
-        _fa = full_access if full_access is not None else _tools_cfg.get("full_access")
-        if _fa:
-            if "shell" not in _groups:
-                _groups.append("shell")
-        # 视图级工具禁用（config.runtime.tools.disabled）：在分组过滤之后执行，
-        # 高权限放行工具仍可被单工具禁用。空列表=不过滤，默认行为不变。
-        _disabled = list(_tools_cfg.get("disabled") or [])
-        self.registry = build_plugin_registry(_groups, excluded=_disabled)
+        self.registry = build_plugin_registry()
         self.tool_schemas = self.registry.schemas
-        # T2.4：留存本次生效的工具组，供技能目录总开关判定（groups 含 skill 才注入目录）
-        self._groups = list(_groups)
+        self.env_kind = self.exec.kind
 
         # 第二路模型：子 agent（worker）用的模型，可配本地高频模型
         self.executor = None
@@ -431,10 +370,9 @@ class ToolLoop(
     def _verify(self, spec: TaskSpec, world: WorldModel, condition: str = "") -> tuple:
         """M4a.3 / §9 显式校验：目标是否已达成。
 
-        去场景化：完成判定委托给 backend.verify_done(condition, percept)，
-        内核不再直接读取 ocr_text / active_window 等屏幕字段（红线）。
-        默认实现为通用文本子串命中；EmulatorBackend 覆盖为 OCR 列表元素命中
-        （逻辑原样搬入 backend，行为不变）。
+        去场景化：完成判定委托给环境（``self.exec.verify_done``），
+        内核不再直接读取 ocr_text / active_window 等屏幕字段（红线）；
+        各环境自定命中语义（host 子串 / emulator 文字列表元素命中等）。
 
         无可校验条件时返回 (False, '无可校验条件')——verify 工具据此计 verify_fail；
         task_done 门控调用方须自行判断「无条件→信任大脑」。
@@ -446,7 +384,7 @@ class ToolLoop(
         if not cond:
             return False, "无可校验条件"
         percept = world.current_percept if hasattr(world, "current_percept") else {}
-        return self.exec.backend.verify_done(cond, percept)
+        return self.exec.verify_done(cond, percept)
 
     def _recheck_batch(self, prev_results, world) -> None:
         """T4.4（U5c）：对标记 ``need_verify`` 的子任务批次做二次校验（下一轮前）。
@@ -470,30 +408,24 @@ class ToolLoop(
             r["recheck_reason"] = str(why or "")
 
     def _build_user(self, spec: TaskSpec, world: WorldModel, step: int = 0) -> str:
-        """组装给大脑的用户消息。首轮仅含目标（大脑自主选择感知/工具）；
-        后续轮次大脑已有历史上下文，仅简要提示当前步骤。
+        """组装给大脑的用户消息。首轮仅含**任务目标与完成条件**；后续轮次仅一句中性继续。
 
-        去场景化（§9）：不点名任何具体感知工具（observe/ocr_screenshot…），
-        不假设「屏幕」——措辞改为通用的「当前环境状态」。具体能调哪些感知
-        工具由 backend.tool_schemas 决定（内核零场景假设）。
+        §9 / B1（loop 只编排、不替模型观察）：**不命令模型何时观察**——
+        感知工具（observe / read_screen_text / …）与其它工具平级，由模型按需自主调用；
+        环境身份已由 system prompt 的「运行时上下文 - 当前环境」给出。
         """
         if step == 0:
             base = (
                 f"【任务目标】{spec.objective}\n"
-                f"【完成条件】{spec.done_when or '(由你判断)'}\n"
-                f"请先了解当前环境状态，再决定操作。"
+                f"【完成条件】{spec.done_when or '(由你判断)'}"
             )
-            # B1：续跑提示（N8 崩溃恢复）置于目标之后，让大脑先知道已完成的部分
+            # B1：续跑上下文（N8 崩溃恢复）置于目标之后，让大脑先知道已完成的部分；
+            # 仅陈述事实、不含行为命令（同一原则见本函数 docstring / §9）
             hint = getattr(world, "_resume_hint", "") or ""
             if hint:
                 base = f"{base}\n\n{hint}"
             return base
-        # 后续轮次：不需要重复目标，大脑从历史消息中已有完整上下文
-        env_text = world.current_state_text()
-        env_preview = env_text[:120] + "..." if len(env_text) > 120 else env_text
-        env_preview = env_text[:120] + "..." if len(env_text) > 120 else env_text
-        return (
-            f"[步骤 {step}] 当前环境状态:\n{env_preview or '(尚无感知数据，请先调用感知工具获取)'}\n"
-            f"请决定下一步。若已达成，调 task_done。"
-        )
+        # 后续轮次：**不再注入任何环境块**——observe 已是被声明为 percept 的普通工具，
+        # 由大脑自主调用；也不重复目标，大脑从历史消息中已有完整上下文。
+        return "继续。若已达成，调 task_done。"
 

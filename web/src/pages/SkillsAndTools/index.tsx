@@ -15,6 +15,7 @@ import {
   TextField,
   Button,
   Switch,
+  Radio,
   FormControlLabel,
   Divider,
   Tooltip,
@@ -39,7 +40,6 @@ import { skillApi, runtimeApi, settingsApi, memoryApi, signalsApi } from "../../
 import { useTaskStore } from "../../store/taskStore.tsx";
 import type {
   SkillInfo,
-  ToolInfo,
   ToolsResponse,
   MemoryIndex,
   RolloutInfo,
@@ -103,19 +103,6 @@ function SkillsTab() {
   );
 }
 
-const GROUP_LABEL: Record<string, string> = {
-  device: "设备/通用",
-  vision: "视觉/SoM",
-  python: "Python 执行",
-  shell: "Shell 执行（高危）",
-  mcp: "外部 MCP",
-  generic: "其它",
-  filesystem: "文件系统",
-  web: "联网",
-  local_model: "本地模型",
-  skill: "技能（按需加载）",
-};
-
 function useTools() {
   const [data, setData] = useState<ToolsResponse | null>(null);
   const [error, setError] = useState("");
@@ -145,20 +132,13 @@ function ToolsTab() {
   const { data, error, setError, reload } = useTools();
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState("");
-  const [filter, setFilter] = useState("");
 
-  // 单工具禁用名单：以每个工具自带的 disabled 标记为准（接口返回全部工具，含已禁用的）
-  const disabled = new Set((data?.tools || []).filter((t) => t.disabled).map((t) => t.name));
-  const groupSet = new Set(data?.active_groups || data?.groups || []);
-
-  const toggleGroup = async (g: string) => {
-    const next = new Set(groupSet);
-    if (next.has(g)) { next.delete(g); } else { next.add(g); }
+  const setEnv = async (kind: string) => {
     setBusy(true); setSaved("");
     try {
-      await settingsApi.put({ runtime: { tools: { groups: [...next].sort() } } });
+      await runtimeApi.setEnvironment(kind);
       await reload();
-      setSaved(next.has(g) ? `已启用分组 ${g}` : `已关闭分组 ${g}`);
+      setSaved(`已切换环境：${kind}（重启后生效）`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -166,14 +146,12 @@ function ToolsTab() {
     }
   };
 
-  const toggle = async (name: string) => {
-    const next = new Set(disabled);
-    if (next.has(name)) { next.delete(name); } else { next.add(name); }
+  const togglePlugin = async (name: string, enabled: boolean) => {
     setBusy(true); setSaved("");
     try {
-      await runtimeApi.setDisabledTools([...next]);
+      await runtimeApi.setPluginEnabled(name, enabled);
       await reload();
-      setSaved(next.has(name) ? `已禁用 ${name}` : `已启用 ${name}`);
+      setSaved(enabled ? `已启用插件 ${name}` : `已停用插件 ${name}`);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -185,67 +163,60 @@ function ToolsTab() {
     return <Typography variant="body2" color="text.secondary">加载中…</Typography>;
   }
 
-  const byGroup = new Map<string, ToolInfo[]>();
-  for (const t of data.tools) {
-    if (filter && !t.name.toLowerCase().includes(filter.toLowerCase())) { continue; }
-    const list = byGroup.get(t.group) || [];
-    list.push(t);
-    byGroup.set(t.group, list);
-  }
-
   return (
     <Box>
       <Alert severity="info" sx={{ mb: 2 }}>
-        工具=插件：自研工具与外部 MCP 工具在同一层完全平级，由 LLM 直接调用；内核零持有、零派发。
-        右侧开关为「视图级单工具禁用」，写入 <code>runtime.tools.disabled</code>，重启后生效。
+        三类：<b>环境</b>（单选，自带整套工具，写 <code>runtime.backend</code>）、
+        <b>插件</b>（各自一个开关，写 <code>~/.omniagent/plugins/&lt;name&gt;.yaml</code>）、
+        <b>工具</b>（只读）。切换 / 开关重启后生效。
       </Alert>
-      <Typography variant="subtitle2" gutterBottom>能力分组（runtime.tools.groups）</Typography>
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
-        {(data.all_groups || [...groupSet]).map((g) => (
-          <FormControlLabel key={g} sx={{ mr: 0 }}
-            control={<Switch size="small" disabled={busy} checked={groupSet.has(g)}
-              onChange={() => void toggleGroup(g)} />}
-            label={<Chip size="small" variant="outlined" label={GROUP_LABEL[g] || g}
-              color={g === "shell" ? "error" : (groupSet.has(g) ? "primary" : "default")}
-              sx={{ opacity: groupSet.has(g) ? 1 : 0.6 }} />} />
+
+      <Typography variant="subtitle2" gutterBottom>环境（单选）</Typography>
+      <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
+        {data.environments.map((e) => (
+          <FormControlLabel key={e.kind} sx={{ mr: 0 }}
+            control={<Radio size="small" disabled={busy} checked={e.active}
+              onChange={() => { if (!e.active) void setEnv(e.kind); }} />}
+            label={<Chip size="small" variant="outlined" label={e.title}
+              color={e.active ? "primary" : "default"}
+              sx={{ opacity: e.active ? 1 : 0.6 }} />} />
         ))}
       </Stack>
-      <Typography variant="caption" color="text.secondary">
-        分组开关写入 <code>runtime.tools.groups</code>，重启构建注册表后生效；shell 为高危分组，默认关闭。
-      </Typography>
 
-      <Stack direction="row" spacing={1} sx={{ mb: 2, mt: 2, maxWidth: 320 }} alignItems="center">
-        <TextField label="筛选工具名" size="small" fullWidth value={filter}
-          onChange={(e) => setFilter(e.target.value)} />
-        <Button size="small" disabled={busy} onClick={() => { void runtimeApi.setDisabledTools([]).then(reload); setSaved("已全部恢复启用"); }}>
-          全部启用
-        </Button>
+      <Typography variant="subtitle2" gutterBottom>插件（各自一个开关）</Typography>
+      <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
+        {data.plugins.map((p) => (
+          <FormControlLabel key={p.name} sx={{ mr: 0 }}
+            control={<Switch size="small" disabled={busy} checked={p.enabled}
+              onChange={(_e, v) => void togglePlugin(p.name, v)} />}
+            label={<Tooltip title={p.description || p.name}>
+              <Chip size="small" variant="outlined" label={p.title}
+                color={p.enabled ? "primary" : "default"}
+                sx={{ opacity: p.enabled ? 1 : 0.6 }} />
+            </Tooltip>} />
+        ))}
+        {data.plugins.length === 0 && (
+          <Typography variant="caption" color="text.secondary">（无插件）</Typography>
+        )}
       </Stack>
+
       {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
       {saved && <Alert severity="success" sx={{ mb: 1 }}>{saved}</Alert>}
-      {[...byGroup.entries()].map(([group, tools]) => (
-        <Box key={group} sx={{ mb: 2 }}>
-          <Typography variant="subtitle2" gutterBottom>
-            {GROUP_LABEL[group] || group}（{tools.length}）
-          </Typography>
-          <Stack spacing={0.5}>
-            {tools.map((t) => (
-              <Stack key={t.name} direction="row" alignItems="center" spacing={1}>
-                <Switch size="small" disabled={busy}
-                  checked={!disabled.has(t.name)}
-                  onChange={() => void toggle(t.name)} />
-                <Tooltip title={t.description || t.name}>
-                  <Chip size="small" variant="outlined" label={t.name}
-                    color={disabled.has(t.name) ? "default" : (t.source === "mcp" ? "secondary" : "primary")}
-                    sx={{ opacity: disabled.has(t.name) ? 0.5 : 1 }} />
-                </Tooltip>
-                {t.source === "mcp" && <Chip size="small" label="MCP" variant="outlined" />}
-                {t.group_enabled === false && <Chip size="small" color="warning" variant="outlined" label="分组未启用" />}
-              </Stack>
-            ))}
+
+      <Typography variant="subtitle2" gutterBottom>当前可用工具（只读）</Typography>
+      <Stack spacing={0.5}>
+        {data.tools.map((t) => (
+          <Stack key={t.name} direction="row" alignItems="center" spacing={1}>
+            <Tooltip title={t.description || t.name}>
+              <Chip size="small" variant="outlined" label={t.name}
+                color={t.source === "mcp" ? "secondary" : (t.source === "plugin" ? "success" : "primary")} />
+            </Tooltip>
+            <Chip size="small" variant="outlined" label={t.source} />
+            {t.source === "env" && <Chip size="small" variant="outlined" label={t.unit} />}
+            {t.source === "mcp" && t.server && <Chip size="small" label={t.server} variant="outlined" />}
           </Stack>
-        </Box>
-      ))}
+        ))}
+      </Stack>
     </Box>
   );
 }

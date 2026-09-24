@@ -12,7 +12,8 @@ from agents.tool import function_tool as sdk_function_tool
 
 from omni_core.brain.llm import BrainReply, ToolCall
 from omni_core.brain.sdk_loop import build_budget_hint, run_subtask_sdk
-from omni_core.local.tool_loop import ToolLoop, TaskSpec
+from omni_core.local.loop import ToolLoop, TaskSpec
+from tests._env import install_fake_env  # noqa: E402
 
 BRAIN = "demo-model"
 EXEC = "qwen3.5-4b-vl"
@@ -138,10 +139,9 @@ def _make_loop(monkeypatch, brain_mapping=None, executor_mapping=None, ocr=None,
         EXEC: executor_mapping if executor_mapping is not None else [],
     })
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", fb)
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule",
-                        backend_class or _FakeBackend)
+    install_fake_env(monkeypatch, backend_class or _FakeBackend)
     loop = ToolLoop(
-        {"model": BRAIN, "base_url": "http://x", "capabilities": {}},
+        {"model": BRAIN, "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
         executor_cfg={"enabled": True, "model": EXEC, "base_url": "http://y", "capabilities": {}},
     )
@@ -157,7 +157,7 @@ class _SlowBackend:
         self.observe_calls = 0
         self.ocr: list = []
         self.backend = _SlowInner()
-        self.backend_kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
+        self.kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
 
     def observe(self):
         self.observe_calls += 1
@@ -210,10 +210,10 @@ def test_soft_injection_reaches_main_without_interrupting(monkeypatch, tmp_path)
             return super().chat(messages, tools, tool_choice)
 
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", _RecFactory)
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _SlowBackend)
+    install_fake_env(monkeypatch, _SlowBackend)
 
     loop = ToolLoop(  # noqa: F821
-        {"model": BRAIN, "base_url": "http://x", "capabilities": {}},
+        {"model": BRAIN, "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
         executor_cfg={"enabled": True, "model": EXEC, "base_url": "http://y", "capabilities": {}},
     )

@@ -9,7 +9,8 @@ M4 后的职责边界：
 - **不含任何能力实现**：能力以平级 tool 插件形式挂在 `omni_core/tools/`
   （自研 device/vision/python + 外部 MCP），内核零持有、零按名分支派发。
 """
-from devices import ExecutionModule
+# 环境句柄由 omni_core.tools.activate_environment 在 ToolLoop 装配时构造
+# （按 runtime.backend 单选环境）；本包不再直接 import devices。
 
 __all__ = [
     "ExecutionModule",

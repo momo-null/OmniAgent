@@ -24,7 +24,7 @@ router.include_router(snapshot_api.router)
 from backend.api.routers.helpers import (  # noqa: F401
     ROOT, CONFIG_PATH, manager, AGENT_MAIN, _traj_cursor, _cursor_lock,
     _EXEC_TOOLS, _append_task_name, _call_skill, _collect_user_corrections,
-    _config, _config_hash, _enabled_groups, _ensure_outbox, _finish_task,
+    _config, _config_hash, _ensure_outbox, _finish_task,
     _is_any_running, _is_task_running, _make_brain_cfg, _memory_enabled,
     _merge_message_step, _merge_thinking_step, _paths, _project_store,
     _read_latest_collected, _read_memory_master, _read_memory_summary_chars,
@@ -40,7 +40,9 @@ from backend.api.routers.chat_runtime import (  # noqa: F401
     _dispatch_chat, _sse, _stream_gen, api_chat, api_inject, api_stop,
     api_wake, live, stream,
 )
-from backend.api.routers.tools_api import (list_tools, set_disabled_tools)  # noqa: F401
+from backend.api.routers.tools_api import (  # noqa: F401
+    list_tools, set_environment, set_plugin_enabled,
+)
 from backend.api.routers.memory_api import (  # noqa: F401
     delete_memory_rollout, get_memory, get_memory_rollout, list_memory_rollouts,
     put_memory, reset_memory,

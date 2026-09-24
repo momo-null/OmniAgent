@@ -1,21 +1,25 @@
 """M3 设备能力 tool 化单测：键鼠路由 / 感知 / 通用件（template_match、wait_for、drag）。
 
-设备能力已从 `brain/providers/*` 的手搓派发平移为 agent 外层 tool 插件
-（现为 plugins/device 插件包），与视觉/Python/外部 MCP 平级。
-不依赖 GPU / 真实模型 / 模拟器：用 fake 执行后端注入插件层。
+设备能力是**环境的工具面**（`environments/<kind>/tools.py`）：激活哪个环境，
+就注册哪个环境的工具（见 doc/plans/capability-unit-refactor-2026-09-24.md §3/§5.5）。
+不依赖 GPU / 真实模型 / 模拟器：用 fake 执行后端注入环境工具面。
 """
 from PIL import Image, ImageDraw
 
 import pytest
 
 from omni_core.tools.base import TOOL_REGISTRY, call_tool, schemas
-from omni_core.tools.loader import load_plugins, plugin_module
+from tests._env import install_fake_env  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _load_official_plugins():
-    """P3：device 已迁为官方插件（plugins/device），按名访问前需先装载。"""
-    load_plugins({})
+def _load_host_env_tools():
+    """设备工具＝host 环境工具面：**import 该模块即注册**。
+
+    刻意不用 ``activate_environment``：那会构造并绑定**真实** HostBackend，
+    用例若漏了 ``_bind`` 就会操作真实桌面（也慢）。这里只登记，由用例自绑 fake。
+    """
+    from environments.host import tools  # noqa: F401  (import 即注册工具)
 
 
 class _FakeBackendInner:
@@ -67,34 +71,34 @@ class _FakeExec:
 
 
 def _bind(exec_mod):
-    module = plugin_module("device")
-    assert module is not None, "device 插件未装载"
-    module.bind_execution_module(exec_mod)
+    """把 fake 后端注入 host 环境工具面（工具经 `_BACKEND` 调用原语）。"""
+    from environments.host import tools as host_tools
+
+    host_tools.bind(exec_mod)
     return exec_mod
 
 
-# --- 注册与分组 -------------------------------------------------------------
-def test_device_tools_registered_as_plugins():
-    """设备工具按后端可移植性分两组：
+# --- 注册与环境归属 ---------------------------------------------------------
+def test_host_env_tools_registered():
+    """激活 host → 它的整套工具进注册表（unit=host、source=env）。
 
-    - ``device``：通用键鼠/感知（host 与 emulator 都可用）
-    - ``device_emulator``：Android 专属原语（UI 层级 / resource-id 点击 / keycode / 包名启动…），
-      host 后端下由 tool_loop 的设备组收窄逻辑剔除，不暴露给模型。
+    Android 专属原语不属于 host 环境（换环境＝重装，见 §4）。
     """
     for name in (
         "press", "hotkey", "type", "wait", "click", "drag",
         "observe", "read_screen_text", "screenshot",
         "template_match", "wait_for",
     ):
-        assert name in TOOL_REGISTRY, f"{name} 应为平级插件"
-        assert TOOL_REGISTRY[name].group == "device", f"{name} 应属通用 device 组"
+        assert name in TOOL_REGISTRY, f"{name} 应为 host 环境工具"
+        plugin = TOOL_REGISTRY[name]
+        assert plugin.unit == "host", f"{name} 应属 host 环境"
+        assert plugin.source == "env", f"{name} 来源应为 env"
 
     for name in (
         "ocr_screenshot", "get_ui_tree", "tap_by_id", "tap_text",
         "launch_app", "press_keycode", "collect_list",
     ):
-        assert name in TOOL_REGISTRY, f"{name} 应为平级插件"
-        assert TOOL_REGISTRY[name].group == "device_emulator", f"{name} 应属 emulator 专属子组"
+        assert name not in TOOL_REGISTRY, f"{name} 是 Android 专属，不该出现在 host 环境"
 
 
 def test_device_schema_has_param_description():
@@ -216,7 +220,7 @@ def test_wait_for_timeout():
 
 # --- 兜底 -------------------------------------------------------------------
 def test_unsupported_capability_returns_error_dict_not_raise():
-    """后端不支持的原语（fake 无 tap_text）→ 错误 dict 回填，不中断循环。"""
+    """当前环境没有的原语（如 Android 专属 tap_text 在 host 环境）→ 错误 dict，不中断循环。"""
     _bind(_FakeExec())
     res = call_tool("tap_text", {"text": "确定"})
     assert res["ok"] is False
@@ -229,7 +233,7 @@ def test_kernel_has_no_handrolled_dispatch():
     from pathlib import Path
 
     import omni_core.brain.tools as brain_tools
-    import omni_core.local.tool_loop as tool_loop
+    import omni_core.local.loop.core as tool_loop
 
     assert not hasattr(brain_tools, "build_registry")
     assert not hasattr(brain_tools, "dispatch_tool")
@@ -244,8 +248,8 @@ def test_kernel_has_no_handrolled_dispatch():
     assert "build_plugin_registry" in src
 
 
-def test_tool_loop_schemas_come_from_plugin_layer(monkeypatch):
-    """内核工具清单由插件层聚合（含 device / python 分组），不由后端硬塞。"""
+def test_tool_loop_schemas_come_from_registry(monkeypatch):
+    """内核工具清单由**注册表**聚合（环境工具 + 插件工具 + core），不由后端硬塞 schema。"""
 
     class _FakeBrain:
         def __init__(self, *a, **k):
@@ -258,30 +262,32 @@ def test_tool_loop_schemas_come_from_plugin_layer(monkeypatch):
             pass
 
     class _FakeExecModule:
-        tool_schemas = []
-
         def __init__(self, *a, **k):
             self.backend = _FakeBackendInner()
-            self.backend_kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
+            self.kind = "host"
 
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _FakeExecModule)
+    install_fake_env(monkeypatch, _FakeExecModule)
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", _FakeBrain)
 
-    from omni_core.local.tool_loop import ToolLoop
+    from omni_core.local.loop import ToolLoop
 
-    loop = ToolLoop({"model": "m", "base_url": "http://x", "capabilities": {}}, verbose=False)
+    loop = ToolLoop({"model": "m", "base_url": "http://127.0.0.1:9", "capabilities": {}}, verbose=False)
     names = {s["function"]["name"] for s in loop.tool_schemas}
-    # 设备能力已 tool 化（内核零持有）
+    # 环境工具（autouse 已激活 host）
     assert {"press", "click", "observe", "template_match"}.issubset(names)
-    # Python 执行能力（§5.5）
-    assert "run_python" in names
-    # 内核元工具不在插件层（由 tool_loop 门控）
-    assert "task_done" not in names
-
-
-def test_device_group_filter():
-    names = {s["function"]["name"] for s in schemas(["device"])}
-    assert {"press", "click", "template_match"}.issubset(names)
-    # 视觉/Python 分组不在 device 视图内
-    assert "vision_describe" not in names
+    # 执行能力只剩内核 builtin shell（run_python 已删）
+    assert "shell_exec" in names
     assert "run_python" not in names
+    # 内核元工具不在插件层（由循环门控）
+    assert "task_done" not in names
+    # 后端不再提供 schema（能力暴露唯一来源是注册表）
+    assert not hasattr(_FakeExecModule, "tool_schemas")
+
+
+def test_registry_is_unfiltered_view():
+    """注册表是只读视图：无分组/排除过滤参数（门禁＝环境单选 + 插件开关）。"""
+    from omni_core.tools.base import sdk_tools
+
+    names = {s["function"]["name"] for s in schemas()}
+    assert names == {t.name for t in sdk_tools()}
+    assert names, "注册表不应为空"

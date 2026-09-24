@@ -214,7 +214,7 @@ class SkillLibrary:
         """仅列全局通用 skill（~/.omniagent/skills/），不含 task 私有。
 
         用于 Web 面板展示：task 私有 skill 不进全局列表、不共享，只在所属 task 内被消费
-        （注入经 load_matching_skills / SkillLibrary(task_id) 仍可见）。
+        （召回经 SkillLibrary(task_id) / `load_skill` 工具可见）。
         """
         out: List[Skill] = []
         for f in sorted(self._global_dir().glob("*.md")):

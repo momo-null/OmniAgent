@@ -1,12 +1,16 @@
 """工具插件加载器：从 plugin_dirs 发现并动态装载用户侧插件包。
 
-设计（见 doc/plans/tool-plugin-master-plan.md §0.4 / §0.5）：
-- 单个插件包 = ``<plugin_dirs>/<name>/plugin.json`` + ``plugin.py``；
-- 入口与 builtin 完全同构：模块级 ``@function_tool`` 装饰器在 import 时自动
-  注册进 ``TOOL_REGISTRY``（机制不变，loader 不碰派发）；
-- 可选生命周期钩子：``configure(cfg)`` / ``startup(ctx)`` / ``shutdown()``；
-- 单包失败只回滚该包已注册工具并记 ``failed``，绝不向外抛（C-P2）；
-- 本模块**不 import 任何具体插件**（C-P1）。
+设计（见 doc/plans/capability-unit-refactor-2026-09-24.md）：
+- **插件 = 自包含目录**：``<plugin_dirs>/<name>/plugin.json`` + ``plugin.py``；删掉该目录，
+  系统里不再有它一丝痕迹（内核从不点名任何插件）。
+- **插件自持配置**：``~/.omniagent/plugins/<name>.yaml``（含 ``enabled`` 与插件自有参数）；
+  ``enabled`` 缺省取 ``plugin.json`` 的 ``enabled``（缺省 ``true``）。关＝不注册其工具。
+- 入口与 builtin 完全同构：模块级 ``@function_tool`` 装饰器在 import 时自动注册进
+  ``TOOL_REGISTRY``（机制不变，loader 不碰派发）；装载后把工具的 ``unit`` 设为插件名、
+  ``source`` 设为 ``"plugin"``。
+- 可选生命周期钩子：``configure(cfg)``（收到本插件自有配置 dict）/ ``startup(ctx)`` / ``shutdown()``。
+- **环境绑定（可选）**：``plugin.json`` 的 ``requires_env``（环境 kind 列表）；当前环境不匹配则不装载。
+- 单包失败只回滚该包并记 ``failed``，绝不向外抛（C-P2）；本模块**不 import 任何具体插件**（C-P1）。
 """
 from __future__ import annotations
 
@@ -28,6 +32,8 @@ __all__ = [
     "shutdown_plugins",
     "last_report",
     "plugin_module",
+    "plugin_config",
+    "list_plugins",
 ]
 
 logger = get_logger("tools.loader")
@@ -35,7 +41,7 @@ logger = get_logger("tools.loader")
 #: 注册表保留名：插件不得占用（内核能力 / 循环元工具语义）
 RESERVED_TOOL_NAMES = frozenset(
     {
-        "run_python",
+        "shell_exec",
         "task_done",
         "verify",
         "escalate",
@@ -63,14 +69,15 @@ class PluginContext:
 
     ``wired`` 区分两类装载：``True`` = 来自真实装配（ToolLoop，句柄已就绪）；
     ``False`` = 只读枚举等旁路（GET /api/runtime/tools、测试）。
-    插件**不得**在 ``wired=False`` 时做破坏性动作（如注销工具），否则会把全局
-    注册表改坏且幂等装载不会补回来。
+    插件**不得**在 ``wired=False`` 时做破坏性动作（如注销工具）。
+
+    ``env_kind``：当前环境标识（``"host"`` / ``"emulator"`` …）只读；插件可据此做
+    环境分支，但**拿不到环境厚句柄**（键鼠 / 截图等原语一律走工具）。
     """
 
-    vision: Any = None
-    execution: Any = None
     config: Dict[str, Any] = field(default_factory=dict)
     wired: bool = False
+    env_kind: str = ""
 
 
 @dataclass
@@ -127,11 +134,10 @@ def load_plugins(cfg: Optional[Dict[str, Any]] = None, ctx: Optional[PluginConte
                 continue
             if not (directory / "plugin.py").is_file():
                 continue  # 无入口文件的普通目录静默跳过
+            plugin_cfg = plugin_config(name)
             if name in _loaded_packages:
                 # 已装载：不再 import / 不再注册（幂等），但**仍要把新的运行时句柄
-                # 交给插件**——bind 类钩子（device 的执行后端、vision 的视觉运行时）
-                # 必须跟随每个 ToolLoop 实例刷新；只跑一次会让第 2 个 ToolLoop 仍
-                # 绑在上一轮的 ExecutionModule / VisionRuntime 上。
+                # 交给插件**——bind 类钩子（视觉运行时等）必须跟随每个 ToolLoop 实例刷新。
                 try:
                     _call_hook(_loaded_modules.get(name), "startup", ctx)
                 except Exception as e:
@@ -143,13 +149,70 @@ def load_plugins(cfg: Optional[Dict[str, Any]] = None, ctx: Optional[PluginConte
             if isinstance(manifest, str):
                 report.fail(name, manifest)
                 continue
-            if manifest.get("disabled"):
-                report.skip(name, "manifest 声明 disabled")
+            # 环境绑定：requires_env 非空且当前环境已知且不匹配 → 不装载
+            requires = manifest.get("requires_env") or []
+            if requires and ctx.env_kind and ctx.env_kind not in requires:
+                report.skip(name, f"requires_env 不含当前环境 {ctx.env_kind}")
                 continue
-            _load_one(directory, name, manifest, cfg, ctx, report)
+            # 开关：plugin.yaml 优先，缺省取 manifest.enabled（缺省 true）
+            if not _enabled(name, plugin_cfg, manifest):
+                report.skip(name, "插件已停用（enabled=false）")
+                continue
+            _load_one(directory, name, manifest, plugin_cfg, ctx, report)
 
     _last_report = report
     return report
+
+
+def plugin_config(name: str) -> Dict[str, Any]:
+    """读取插件自有配置 ``~/.omniagent/plugins/<name>.yaml``（缺失返回空 dict）。"""
+    try:
+        from omni_core.local.runtime_paths import plugin_config_file
+        path = plugin_config_file(name)
+    except Exception:
+        return {}
+    if not path.is_file():
+        return {}
+    try:
+        import yaml
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("插件 %s 配置读取失败（忽略）: %s", name, e)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def list_plugins(cfg: Optional[Dict[str, Any]] = None, env_kind: str = "") -> List[Dict[str, Any]]:
+    """枚举发现到的插件（含停用 / 环境不匹配的），供前端渲染「一个开关」。
+
+    返回 ``[{name, title, description, enabled, requires_env, available}]``。
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    out: List[Dict[str, Any]] = []
+    for root in _plugin_dirs(cfg):
+        if not root.is_dir():
+            continue
+        for directory in sorted(root.iterdir(), key=lambda p: p.name):
+            if not directory.is_dir() or directory.name.startswith("."):
+                continue
+            name = directory.name
+            if not name.isidentifier() or not (directory / "plugin.py").is_file():
+                continue
+            manifest = _read_manifest(directory, name)
+            if isinstance(manifest, str):
+                continue
+            pcfg = plugin_config(name)
+            requires = list(manifest.get("requires_env") or [])
+            available = (not requires) or (not env_kind) or (env_kind in requires)
+            out.append({
+                "name": name,
+                "title": manifest.get("title") or name,
+                "description": manifest.get("description", ""),
+                "enabled": _enabled(name, pcfg, manifest),
+                "requires_env": requires,
+                "available": available,
+            })
+    return out
 
 
 def shutdown_plugins() -> None:
@@ -190,6 +253,15 @@ def _plugin_dirs(cfg: Dict[str, Any]) -> List[Path]:
     return out
 
 
+def _enabled(name: str, plugin_cfg: Dict[str, Any], manifest: Dict[str, Any]) -> bool:
+    """有效启用状态：plugin.yaml 的 enabled 优先，缺省取 manifest.enabled，缺省 True。"""
+    if "enabled" in plugin_cfg:
+        return bool(plugin_cfg.get("enabled"))
+    if "enabled" in manifest:
+        return bool(manifest.get("enabled"))
+    return True
+
+
 def _read_manifest(directory: Path, name: str) -> Any:
     """读 plugin.json；返回 manifest dict，或错误信息字符串（fail 用）。"""
     path = directory / "plugin.json"
@@ -210,7 +282,7 @@ def _load_one(
     directory: Path,
     name: str,
     manifest: Dict[str, Any],
-    cfg: Dict[str, Any],
+    plugin_cfg: Dict[str, Any],
     ctx: PluginContext,
     report: LoadReport,
 ) -> None:
@@ -238,16 +310,15 @@ def _load_one(
         report.fail(name, f"覆盖已注册工具: {', '.join(sorted(overridden))}")
         return
 
-    # manifest 的 group 作为缺省能力组（工具级 @function_tool(group=...) 优先）
-    default_group = manifest.get("group")
-    if default_group:
-        for tool_name in added:
-            plugin = TOOL_REGISTRY.get(tool_name)
-            if plugin is not None and plugin.group == "generic":
-                plugin.group = str(default_group)
+    # 工具归属：unit = 插件名，source = "plugin"（覆盖 @function_tool 的缺省）
+    for tool_name in added:
+        plugin = TOOL_REGISTRY.get(tool_name)
+        if plugin is not None:
+            plugin.unit = name
+            plugin.source = "plugin"
 
     try:
-        _call_hook(module, "configure", _plugin_section(cfg, name))
+        _call_hook(module, "configure", plugin_cfg)
         _call_hook(module, "startup", ctx)
     except Exception as e:
         _rollback(snapshot, module_name)
@@ -277,14 +348,6 @@ def _call_hook(module: Any, hook_name: str, arg: Any) -> None:
     hook = getattr(module, hook_name, None)
     if callable(hook):
         hook(arg)
-
-
-def _plugin_section(cfg: Dict[str, Any], name: str) -> Dict[str, Any]:
-    """``config.runtime.plugins.<name>``（缺省空 dict）。"""
-    runtime = (cfg.get("runtime") or {})
-    plugins = (runtime.get("plugins") or {})
-    section = plugins.get(name)
-    return section if isinstance(section, dict) else {}
 
 
 def _rollback(snapshot: Dict[str, Any], module_name: str) -> None:

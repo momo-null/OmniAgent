@@ -85,8 +85,8 @@ def load_mcp_config() -> Dict[str, Any]:
                     return _mcp_cache
     except Exception:
         pass
-    # 回退旧位置：config.runtime.mcp（历史遗留，后续清理）
-    _mcp_cache = (load_config().get("runtime") or {}).get("mcp") or {}
+    # 只认 ~/.omniagent/mcp.json（旧位置 config.runtime.mcp 已废弃，不读）
+    _mcp_cache = {}
     return _mcp_cache
 
 
@@ -206,11 +206,9 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
             "no_confidence_hard": True, # 无置信度时按硬失败处理
             "worker_history_keep": 3,   # 升级时保留的子任务历史条数
         },
-        # 工具限流（缺省见各工具的 _LIMITS；配置缺项即用缺省，不会报错）
-        "python_exec": {"timeout_sec": 10.0, "max_output": 4000},
+        # 内核工具限流（缺省见 shell_tool._LIMITS；配置缺项即用缺省，不会报错）
+        # 插件自有配置（filesystem / web / vision …）一律不进本文件，见 ~/.omniagent/plugins/<name>.yaml
         "shell_exec": {"timeout_sec": 30.0, "max_output": 8000},
-        "filesystem": {"read_limit": 2000, "max_output": 8000},
-        "web": {"timeout_sec": 20.0, "max_output": 12000},
         "long_task": {
             "repeat_guard": 3,
             # F2.4 主链墙钟（秒）：0 = 不检查（大步数预算下默认不检查，避免被 120s 子任务墙钟腰斩）

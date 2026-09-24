@@ -219,7 +219,7 @@ def _run_with_spies(monkeypatch, max_input_tokens, ctx_window=20000):
     monkeypatch.setattr(sl, "run_async", fake_run_async)
 
     run_subtask_sdk(
-        {"model": "m", "base_url": "http://x", "api_key": "k"},
+        {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"},
         instructions="do it",
         user_input="hi",
         tools=[],

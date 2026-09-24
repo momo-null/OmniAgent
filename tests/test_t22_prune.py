@@ -122,7 +122,7 @@ def _run_prune_scenario(monkeypatch, compress_threshold, ctx_window=20000):
         {"type": "function_call_output", "call_id": "c1", "output": "x" * 40000},
     ]))
 
-    brain = {"model": "m", "base_url": "http://x", "api_key": "k"}
+    brain = {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}
     run_subtask_sdk(
         brain,
         instructions="do it",

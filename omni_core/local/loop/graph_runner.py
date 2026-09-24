@@ -19,12 +19,10 @@ from omni_core.brain.llm import LLMClient, model_health_ok
 from omni_core.brain.prompt import build_system_prompt
 from omni_core.brain import tools as brain_tools
 from omni_core.local.world_model import WorldModel
-from omni_core.tools.vision_runtime import VisionRuntime
 from omni_core.local.states import AgentState
 from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local import telemetry
 from omni_core.local.curator import Curator
-from devices import ExecutionModule
 from omni_core.local.runtime_paths import (
     task_trajectory, task_collected, auto_project_id,
 )
@@ -62,14 +60,31 @@ class GraphRunnerMixin:
         只有一条路径——「主 agent + 可选派发子 agent」的编排图：
         - 默认单 agent：主 agent 自己把任务做完就结束；
         - 需要并行时主 agent 调 `dispatch`，编排层用 Send 扇出子 agent 并发执行。
-
-        旧的「单大脑直跑」与「两层编排」两条路径已合并为此入口
-        （`run_task_two_layer` 降级为兼容别名）。
         """
+        # 绑定当前任务的临时工作目录：脚本 / 截图等临时产物默认落 tasks/<task_id>/tmp/。
+        from omni_core.tools.workspace import set_task
+        set_task(spec.task_id)
         try:
             return self._run_graph(spec)
         finally:
             WorldModel.release(spec.task_id)
+            self._cleanup_task_tmp(spec.task_id)
+            set_task(None)
+
+    @staticmethod
+    def _cleanup_task_tmp(task_id: str) -> None:
+        """任务终态：清理临时产物目录 ``tasks/<task_id>/tmp/``。
+
+        只删 ``tmp/``，**绝不碰同目录的持久资产**（trajectory / world_model / skills…）。
+        """
+        if not task_id:
+            return
+        try:
+            import shutil
+            from omni_core.local.runtime_paths import task_tmp
+            shutil.rmtree(task_tmp(task_id), ignore_errors=True)
+        except Exception:
+            pass
 
     @staticmethod
     def _normalize_subtasks(raw) -> list:
@@ -164,6 +179,8 @@ class GraphRunnerMixin:
         from omni_core.local.runtime_paths import task_dir, task_skills, global_skills
         _runtime_ctx = {
             "task_id": spec.task_id,
+            "env_kind": self.exec.kind,
+            "env_platform": getattr(self.exec, "platform", ""),
             "task_dir": str(task_dir(spec.task_id)),
             "task_skills_dir": str(task_skills(spec.task_id)),
             "global_skills_dir": str(global_skills()),
@@ -175,7 +192,6 @@ class GraphRunnerMixin:
         # T2.4（O4'）：技能摘要不再注入 system prompt——改由新机制提供：
         # 技能目录以固定模板 User 消息注入（knowledge_inject.build_skill_catalog），
         # 模型按需调用 load_skill 工具加载完整指令（omni_core.tools.skill_tool.load_skill）。
-        # 原 load_matching_skills 函数保留（兼容存量调用），此处不再使用。
         # 历史记忆注入逻辑保留；F4.2（KJ-1）：memory_in_user=true 时迁至尾部重插（见
         # _build_memory_injection），此处仅作 false 回退（一键回退到 system 注入）。
         # 注：纪律文件（AGENTS.md）**不在此处**——F4.1b 起由 _run_via_sdk 统一在 run 起始
@@ -289,10 +305,12 @@ class GraphRunnerMixin:
                 _cp = WorldModel.load_checkpoint(spec.task_id, _cps[0])
                 if _cp:
                     _sg = (_cp.get("subgoal") or {}).get("desc", "")
+                    # 只陈述事实（已完成什么 + 当前进度），**不下命令**：
+                    # 「接着推进 / 不要重复」属模型自主判断，loop 不替模型决策
+                    # （同一原则见 core._build_user：任务消息只放事实）。
                     world._resume_hint = (
-                        f"（续跑提示）上一轮已完成子目标「{_sg}」。"
-                        f"当前世界进度：\n{world.summary()[:600]}\n"
-                        f"请接着推进原始目标，不要重复已完成的部分。"
+                        f"（续跑上下文）上一轮已完成子目标「{_sg}」。\n"
+                        f"当前世界进度：\n{world.summary()[:600]}"
                     )
         except Exception:
             pass
@@ -539,6 +557,8 @@ class GraphRunnerMixin:
         from omni_core.local.runtime_paths import task_dir, task_skills, global_skills
         _exec_runtime_ctx = {
             "task_id": inner_spec.task_id,
+            "env_kind": self.exec.kind,  # 与主链一致：worker 也要知道自己所在环境
+            "env_platform": getattr(self.exec, "platform", ""),
             "task_dir": str(task_dir(inner_spec.task_id)),
             "task_skills_dir": str(task_skills(inner_spec.task_id)),
             "global_skills_dir": str(global_skills()),
@@ -580,7 +600,7 @@ class GraphRunnerMixin:
         # 大脑反思时看到空状态，误判目标应用未打开而放弃）。
         # M6: 回传 = flush 到共享黑板，facts 带来源（子任务目标），供 view(scope) 溯源。
         if parent_world is not None and sub_world.state_text:
-            parent_world.update(sub_world.current_percept, self.exec.backend)
+            parent_world.update(sub_world.current_percept, self.exec)
         if parent_world is not None:
             # M5: 子任务采集到的条目/备注也要回传（否则父 world 看不到采数据，整任务会误判漏采）
             parent_world.merge_collection(sub_world, source=inner_spec.objective[:40])

@@ -17,7 +17,7 @@ import pytest
 from omni_core.brain import sdk_loop as sl
 from omni_core.local.knowledge_inject import build_skill_catalog
 from omni_core.local.runtime_paths import global_skills, task_skills
-from omni_core.local.tool_loop import ToolLoop
+from omni_core.local.loop import ToolLoop
 
 
 class _Rec:
@@ -50,7 +50,7 @@ def _write(dirpath, filename, name, desc, body="技能正文"):
 
 
 def _loop():
-    return ToolLoop({"model": "m", "base_url": "http://x", "api_key": "k"}, verbose=False)
+    return ToolLoop({"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}, verbose=False)
 
 
 def _fake_run_subtask_sdk(captured):

@@ -155,9 +155,12 @@ export const runtimeApi = {
     http.post("/api/runtime/skill/delete", payload),
   // 工具插件层枚举（自研 + 外部 MCP 平级）
   tools: () => http.get("/api/runtime/tools"),
-  // U2：视图级单工具禁用（物理关闭，重启构建注册表后生效）
-  setDisabledTools: (disabled: string[]) =>
-    http.patch("/api/runtime/tools/disabled", { disabled }),
+  // 环境单选（写 runtime.backend；重启后生效）
+  setEnvironment: (kind: string) =>
+    http.patch("/api/runtime/tools/environment", { kind }),
+  // 插件开关（写 ~/.omniagent/plugins/<name>.yaml；重启后生效）
+  setPluginEnabled: (name: string, enabled: boolean) =>
+    http.patch("/api/runtime/tools/plugins", { name, enabled }),
   // SSE 流地址（EventSource 用，无需 axios）；支持 task_id 订阅特定 task 事件
   streamUrl: (taskId?: string) =>
     taskId ? `/api/runtime/stream?task_id=${encodeURIComponent(taskId)}` : "/api/runtime/stream",

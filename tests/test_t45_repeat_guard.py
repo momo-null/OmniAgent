@@ -162,7 +162,7 @@ def test_run_subtask_disabled_by_config(monkeypatch):
         return types.SimpleNamespace(to_input_list=lambda: [])
 
     run_subtask_sdk(
-        {"model": "m", "base_url": "http://x", "api_key": "k"},
+        {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"},
         instructions="do", user_input="hi", tools=[],
         gate=types.SimpleNamespace(verify_done=lambda: (True, ""), peek=lambda: (False, ""),
                                    verify_count=0, has_condition=False),

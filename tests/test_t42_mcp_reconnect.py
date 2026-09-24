@@ -4,7 +4,8 @@
 1. 间歇性连接失败可自动重试恢复（指数退避：0.5s → 1s → …）。
 2. 连续 10 次失败自动放弃当前服务，且不影响其他 MCP 服务。
 3. 探活成功后计数清零，后续异常仍可正常重试。
-4. 超时透传：连接/探活带上 SDK 原生 client_session_timeout_seconds。
+4. 超时透传：连接/探活带上 SDK 原生 client_session_timeout_seconds（且被总预算封顶）。
+5. 总预算：不可达 server 最坏只等 _MCP_CONNECT_BUDGET_SEC，不挡首次大脑调用。
 """
 import pytest
 
@@ -40,8 +41,16 @@ class _FakeServer:
 
 @pytest.fixture(autouse=True)
 def _reset_state(monkeypatch):
+    """每例重置重连状态，并用假 sleep 免真等。
+
+    本节多数用例验证的是**退避/放弃语义本身**（0.5→30s、满 10 次放弃），
+    故把总预算设为 0=不限——否则 8s 预算会提前掐断重试，语义不可达。
+    预算本身的行为由 test_dead_server_gives_up_within_budget /
+    test_attempt_timeout_capped_by_budget 单独覆盖。
+    """
     sl._MCP_FAIL_STREAK.clear()
     sl._MCP_ABANDONED.clear()
+    monkeypatch.setattr(sl, "_MCP_CONNECT_BUDGET_SEC", 0)
     sleeps = []
     monkeypatch.setattr(sl, "_MCP_SLEEP", lambda d: sleeps.append(d))
     return sleeps
@@ -114,7 +123,7 @@ def test_success_resets_counter_for_later_retries(monkeypatch):
     assert sl._MCP_ABANDONED.get("fs") is None
 
 
-# --- 4. 超时透传 --------------------------------------------------------------
+# --- 4. 超时透传（且在总预算内）------------------------------------------------
 def test_timeout_passed_to_connect_and_probe(monkeypatch):
     seen = []
 
@@ -127,9 +136,47 @@ def test_timeout_passed_to_connect_and_probe(monkeypatch):
         return []
 
     monkeypatch.setattr(sl, "run_async", fake_run_async)
-    srv = _FakeServer("fs", timeout_s=12.0)
+    # 配置超时（2s）小于总预算（8s）→ 原样透传
+    srv = _FakeServer("fs", timeout_s=2.0)
     sl._ensure_mcp_connected([srv])
-    assert seen == [12.0, 12.0], f"连接与探活都应带上超时: {seen}"
+    assert seen == [2.0, 2.0], f"连接与探活都应带上超时: {seen}"
+
+
+def test_attempt_timeout_capped_by_budget(monkeypatch):
+    """配置超时再大也不能击穿总预算：单次超时被压到剩余预算内。"""
+    monkeypatch.setattr(sl, "_MCP_CONNECT_BUDGET_SEC", 8.0)  # 覆盖 fixture 的"不限"
+    seen = []
+
+    def fake_run_async(coro, timeout=None):
+        seen.append(timeout)
+        try:
+            coro.close()
+        except Exception:
+            pass
+        return []
+
+    monkeypatch.setattr(sl, "run_async", fake_run_async)
+    srv = _FakeServer("fs", timeout_s=999.0)
+    sl._ensure_mcp_connected([srv])
+    assert seen, "应至少尝试一次"
+    assert all(t <= sl._MCP_CONNECT_BUDGET_SEC for t in seen), \
+        f"单次超时必须 ≤ 总预算: {seen}"
+
+
+# --- 5. 总预算：不可达 server 不得挡住「首次大脑调用」---------------------------
+def test_dead_server_gives_up_within_budget(monkeypatch):
+    """回归：曾有不可达 server 让 10 次退避累计空等 ~143s 且全过程零输出
+    （用户表现为「发消息后什么都不返回」）。现在最坏只等总预算。"""
+    import time as _t
+    srv = _FakeServer("dead", plan=[True] * 100)      # 永远连不上
+    monkeypatch.setattr(sl, "_MCP_SLEEP", _t.sleep)   # 用真 sleep 实测耗时
+    monkeypatch.setattr(sl, "_MCP_CONNECT_BUDGET_SEC", 0.6)
+    t0 = _t.monotonic()
+    got = sl._ensure_mcp_connected([srv])
+    elapsed = _t.monotonic() - t0
+    assert got == [], "不可达 server 不应进入 agent"
+    assert elapsed <= 1.5, f"应在预算 0.6s 附近放弃，实测 {elapsed:.2f}s"
+    assert srv.connect_calls < 10, "不应跑满 10 次重试"
 
 
 def test_timeout_ms_config_parsing():

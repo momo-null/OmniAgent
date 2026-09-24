@@ -1,9 +1,13 @@
-"""P1：工具插件加载器契约测试（17 例）。
+"""P1：工具插件加载器契约测试。
 
-覆盖（见 doc/plans/tool-plugin-master-plan.md §1.7）：
-装载/派发、configure 私有节、钩子顺序与 PluginContext、失败隔离与回滚、
-保留名与重名保护、manifest 校验、目录过滤、幂等、last_report、shutdown，
-以及真实装载仓库 ``plugins/``（fs_pro 分页读取 + 带上下文检索）。
+覆盖（见 doc/plans/tool-plugin-master-plan.md §1.7 与 capability-unit-refactor §3/§4）：
+装载/派发、**插件自持配置**（`~/.omniagent/plugins/<name>.yaml` → `configure(cfg)`）、
+钩子顺序与 PluginContext（只读 `config` / `wired` / `env_kind`）、失败隔离与回滚、
+保留名与重名保护、manifest 校验、`enabled` 开关、`requires_env` 环境绑定、
+目录过滤、幂等、last_report、shutdown，以及真实装载仓库 ``plugins/``。
+
+关掉一个插件的唯一方式是它的 `enabled`（`plugin.yaml` 优先，缺省 `plugin.json`，缺省 true）：
+**关 = 不注册它的任何工具**，内核不留痕迹。
 """
 import json
 import sys
@@ -14,8 +18,8 @@ from typing import Any, Dict
 import pytest
 
 import omni_core.tools  # noqa: F401  确保 builtin 工具已注册（保留名/覆盖用例依赖）
-from omni_core.tools.base import TOOL_REGISTRY, call_tool, function_tool
 from omni_core.tools import loader
+from omni_core.tools.base import TOOL_REGISTRY, call_tool, function_tool
 
 #: 模块导入时的内核工具基线（此刻尚无任何 load_plugins 调用）。
 #: 每个用例都从这份基线起步：否则「其它用例/其它测试文件已装载过插件」会让
@@ -27,7 +31,7 @@ _BASE_REGISTRY = dict(TOOL_REGISTRY)
 _ECHO_BODY = """
     from omni_core.tools.base import function_tool
 
-    @function_tool(description="回声", group="demo")
+    @function_tool(description="回声", unit="demo")
     def demo_echo(text: str) -> dict:
         \"\"\"回声。
 
@@ -45,7 +49,7 @@ _CONFIGURE_BODY = """
     def configure(cfg):
         SEEN.update(cfg)
 
-    @function_tool(description="回声", group="demo")
+    @function_tool(description="回声", unit="demo")
     def demo_cfg_echo(text: str) -> dict:
         \"\"\"回声。
 
@@ -66,11 +70,13 @@ _HOOK_ORDER_BODY = """
 
     def startup(ctx):
         ORDER.append("startup")
-        CTX["vision"] = getattr(ctx, "vision", "MISSING")
-        CTX["execution"] = getattr(ctx, "execution", "MISSING")
+        CTX["env_kind"] = getattr(ctx, "env_kind", "MISSING")
+        CTX["wired"] = getattr(ctx, "wired", "MISSING")
         CTX["config_is_dict"] = isinstance(getattr(ctx, "config", None), dict)
+        # 环境厚句柄已删：插件只拿得到只读 env_kind
+        CTX["has_execution"] = hasattr(ctx, "execution")
 
-    @function_tool(description="回声", group="demo")
+    @function_tool(description="回声", unit="demo")
     def demo_hook_echo(text: str) -> dict:
         \"\"\"回声。
 
@@ -86,7 +92,7 @@ _STARTUP_FAIL_BODY = """
     def startup(ctx):
         raise RuntimeError("startup boom")
 
-    @function_tool(description="回声", group="demo")
+    @function_tool(description="回声", unit="demo")
     def demo_rb_echo(text: str) -> dict:
         \"\"\"回声。
 
@@ -102,7 +108,7 @@ def _named_tool_body(func_name: str, tool_name: str) -> str:
     return f"""
     from omni_core.tools.base import function_tool
 
-    @function_tool(name={tool_name!r}, description="回声", group="demo")
+    @function_tool(name={tool_name!r}, description="回声", unit="demo")
     def {func_name}(text: str) -> dict:
         \"\"\"回声。
 
@@ -124,7 +130,7 @@ def _shutdown_body(func_name: str, raising: bool) -> str:
     def shutdown():
         {body}
 
-    @function_tool(description="回声", group="demo")
+    @function_tool(description="回声", unit="demo")
     def {func_name}(text: str) -> dict:
         \"\"\"回声。
 
@@ -135,12 +141,20 @@ def _shutdown_body(func_name: str, raising: bool) -> str:
 """
 
 
-def _cfg(root: Any, plugins: Dict[str, Any] = None) -> Dict[str, Any]:
-    """构造最小 cfg：plugin_dirs 指向 root，可选注入各插件私有节。"""
-    runtime: Dict[str, Any] = {"tools": {"plugin_dirs": [str(root)]}}
-    if plugins:
-        runtime["plugins"] = plugins
-    return {"runtime": runtime}
+def _cfg(root: Any) -> Dict[str, Any]:
+    """构造最小 cfg：plugin_dirs 指向 root（插件配置一律走自有 yaml，不进 cfg）。"""
+    return {"runtime": {"tools": {"plugin_dirs": [str(root)]}}}
+
+
+def _write_plugin_cfg(name: str, data: Dict[str, Any]) -> None:
+    """写插件自有配置 ``~/.omniagent/plugins/<name>.yaml``（测试已隔离全局根）。"""
+    import yaml
+
+    from omni_core.local.runtime_paths import plugin_config_file
+
+    path = plugin_config_file(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
 def _make_plugin(root: Path, name: str, body: str = None, manifest: Any = None,
@@ -173,20 +187,23 @@ def _clean_loader_state():
     _restore()
 
 
-# ① 装载成功 → 组注册 + 按名派发 -------------------------------------------
+# ① 装载成功 → unit/source 归属 + 按名派发 -----------------------------------
 def test_load_registers_and_dispatches(tmp_path):
     _make_plugin(tmp_path, "demo", _ECHO_BODY, {"name": "demo"})
     report = loader.load_plugins(_cfg(tmp_path))
     assert report.loaded == ["demo"]
     assert report.failed == []
-    assert TOOL_REGISTRY["demo_echo"].group == "demo"
+    plugin = TOOL_REGISTRY["demo_echo"]
+    assert plugin.unit == "demo"     # loader 把 unit 归为插件名
+    assert plugin.source == "plugin"  # source 归为 plugin
     assert call_tool("demo_echo", {"text": "hi"})["echo"] == "hi"
 
 
-# ② configure 收到插件私有节 -----------------------------------------------
-def test_configure_receives_private_section(tmp_path):
+# ② configure 收到插件自有配置（yaml） --------------------------------------
+def test_configure_receives_own_config(tmp_path):
     _make_plugin(tmp_path, "demo", _CONFIGURE_BODY, {"name": "demo"})
-    report = loader.load_plugins(_cfg(tmp_path, plugins={"demo": {"max_output": 5}}))
+    _write_plugin_cfg("demo", {"max_output": 5})
+    report = loader.load_plugins(_cfg(tmp_path))
     assert report.loaded == ["demo"]
     assert loader.plugin_module("demo").SEEN == {"max_output": 5}
 
@@ -194,17 +211,19 @@ def test_configure_receives_private_section(tmp_path):
 # ③ 钩子顺序 configure→startup 且收到 PluginContext ------------------------
 def test_hook_order_and_plugin_context(tmp_path):
     _make_plugin(tmp_path, "demo", _HOOK_ORDER_BODY, {"name": "demo"})
-    vision, execution = object(), object()
     report = loader.load_plugins(
         _cfg(tmp_path),
-        ctx=loader.PluginContext(vision=vision, execution=execution, config={"k": 1}),
+        ctx=loader.PluginContext(config={"k": 1}, wired=True, env_kind="host"),
     )
     assert report.loaded == ["demo"]
     module = loader.plugin_module("demo")
     assert module.ORDER == ["configure", "startup"]
-    assert module.CTX["vision"] is vision
-    assert module.CTX["execution"] is execution
-    assert module.CTX["config_is_dict"] is True
+    assert module.CTX == {
+        "env_kind": "host",
+        "wired": True,
+        "config_is_dict": True,
+        "has_execution": False,  # 环境厚句柄已删
+    }
 
 
 # ④ 单包 import 炸不殃及同批 ----------------------------------------------
@@ -228,20 +247,19 @@ def test_startup_failure_rolls_back_registration(tmp_path):
 
 # ⑥ 占用保留名 → 拒载 -----------------------------------------------------
 def test_reserved_tool_name_rejected(tmp_path):
-    original = TOOL_REGISTRY["run_python"]
-    _make_plugin(tmp_path, "reserved", _named_tool_body("rp_echo", "run_python"),
+    original = TOOL_REGISTRY["shell_exec"]
+    _make_plugin(tmp_path, "reserved", _named_tool_body("rp_echo", "shell_exec"),
                  {"name": "reserved"})
     report = loader.load_plugins(_cfg(tmp_path))
     assert report.loaded == []
     assert "保留名" in report.failed[0]["error"]
-    assert TOOL_REGISTRY["run_python"] is original  # 原对象未被替换
+    assert TOOL_REGISTRY["shell_exec"] is original  # 原对象未被替换
 
 
 # ⑦ 覆盖 builtin → 拒载且原对象未替换 -------------------------------------
 def test_override_builtin_rejected(tmp_path):
-    # 现造一个"已注册的内核工具"作靶子：不依赖具体 builtin 名单
-    # （P2 起 filesystem/shell/web 已迁出内核，不能再拿 shell_exec 当 builtin）。
-    @function_tool(name="fake_builtin_tool", description="占位 builtin", group="demo")
+    # 现造一个"已注册的内核工具"作靶子：不依赖具体 builtin 名单。
+    @function_tool(name="fake_builtin_tool", description="占位 builtin", unit="demo")
     def _fake_builtin(text: str = "") -> dict:
         """占位。"""
         return {"ok": True}
@@ -273,13 +291,58 @@ def test_manifest_name_mismatch_fails(tmp_path):
     assert "不一致" in report.failed[0]["error"]
 
 
-# ⑩ manifest disabled → skip ----------------------------------------------
+# ⑩ 开关：yaml 优先于 manifest.enabled（关 = 不注册） ----------------------
 def test_manifest_disabled_skipped(tmp_path):
-    _make_plugin(tmp_path, "demo_off", _ECHO_BODY, {"name": "demo_off", "disabled": True})
+    _make_plugin(tmp_path, "demo_off", _ECHO_BODY, {"name": "demo_off", "enabled": False})
     report = loader.load_plugins(_cfg(tmp_path))
     assert report.loaded == [] and report.failed == []
     assert [s["name"] for s in report.skipped] == ["demo_off"]
     assert "demo_echo" not in TOOL_REGISTRY
+
+
+def test_yaml_enabled_overrides_manifest(tmp_path):
+    # manifest 默认关，yaml 打开 → 装载
+    _make_plugin(tmp_path, "demo_ovr", _ECHO_BODY, {"name": "demo_ovr", "enabled": False})
+    _write_plugin_cfg("demo_ovr", {"enabled": True})
+    assert loader.load_plugins(_cfg(tmp_path)).loaded == ["demo_ovr"]
+
+
+def test_yaml_disabled_overrides_manifest(tmp_path):
+    # manifest 默认开，yaml 关 → 不装载
+    _make_plugin(tmp_path, "demo_off2", _ECHO_BODY, {"name": "demo_off2"})
+    _write_plugin_cfg("demo_off2", {"enabled": False})
+    report = loader.load_plugins(_cfg(tmp_path))
+    assert report.loaded == []
+    assert [s["name"] for s in report.skipped] == ["demo_off2"]
+    assert "demo_echo" not in TOOL_REGISTRY
+
+
+# ⑩b requires_env 环境绑定：不匹配则不装载 --------------------------------
+def test_requires_env_filters_by_current_env(tmp_path):
+    _make_plugin(tmp_path, "emu_only", _ECHO_BODY,
+                 {"name": "emu_only", "requires_env": ["emulator"]})
+    report = loader.load_plugins(_cfg(tmp_path), ctx=loader.PluginContext(env_kind="host"))
+    assert report.loaded == []
+    assert [s["name"] for s in report.skipped] == ["emu_only"]
+    assert "demo_echo" not in TOOL_REGISTRY
+    # 匹配的环境则装载
+    report2 = loader.load_plugins(_cfg(tmp_path), ctx=loader.PluginContext(env_kind="emulator"))
+    assert report2.loaded == ["emu_only"]
+
+
+# ⑩c list_plugins 自报元数据（前端「一个开关」的数据源） -------------------
+def test_list_plugins_self_reports_metadata(tmp_path):
+    _make_plugin(tmp_path, "demo", _ECHO_BODY,
+                 {"name": "demo", "title": "演示插件", "description": "说明"})
+    row = next(r for r in loader.list_plugins(_cfg(tmp_path)) if r["name"] == "demo")
+    assert row["title"] == "演示插件"
+    assert row["description"] == "说明"
+    assert row["enabled"] is True and row["available"] is True
+    assert row["requires_env"] == []
+
+    _write_plugin_cfg("demo", {"enabled": False})
+    row2 = next(r for r in loader.list_plugins(_cfg(tmp_path)) if r["name"] == "demo")
+    assert row2["enabled"] is False
 
 
 # ⑪ 目录过滤：点开头/无入口静默忽略，非标识符记 skip ----------------------
@@ -316,8 +379,8 @@ def test_missing_plugin_dir_gives_empty_report(tmp_path):
 
 # ⑭ 保留名集合定义 --------------------------------------------------------
 def test_reserved_tool_names_defined():
-    expected = {"run_python", "task_done", "verify", "escalate", "record", "plan"}
-    assert expected <= set(loader.RESERVED_TOOL_NAMES)
+    expected = {"shell_exec", "task_done", "verify", "escalate", "record", "plan"}
+    assert expected == set(loader.RESERVED_TOOL_NAMES)
 
 
 # ⑮ last_report 缓存 ------------------------------------------------------
@@ -342,16 +405,17 @@ def test_shutdown_called_and_errors_swallowed(tmp_path):
     assert loader.plugin_module("demo_sd_ok").SHUT == [1]
 
 
-# ⑰ 真实装载仓库 plugins/：fs_pro 分页语义 + 带上下文检索 -----------------
-def test_repo_plugins_fs_pro(tmp_path):
+# ⑰ 真实装载仓库 plugins/：文件操作归一后的分页 + 带上下文检索 ---------------
+def test_repo_plugins_filesystem(tmp_path):
     report = loader.load_plugins({})  # 缺省 plugin_dirs = ["plugins"]（相对仓库根）
-    assert "fs_pro" in report.loaded, report.as_dict()
+    assert "filesystem" in report.loaded, report.as_dict()
+    assert "fs_pro" not in report.loaded, "fs_pro 已并入 filesystem（零兼容：目录已删）"
     assert report.failed == []
 
     repo_root = Path(__file__).resolve().parents[1]
     req = repo_root / "requirements.txt"
 
-    page = call_tool("read_range", {"path": str(req), "offset": 2, "limit": 3})
+    page = call_tool("read_file", {"path": str(req), "offset": 2, "limit": 3})
     assert page["ok"] is True, page
     assert page["offset"] == 2 and page["end_line"] == 5
     assert page["has_more"] is True
@@ -359,9 +423,17 @@ def test_repo_plugins_fs_pro(tmp_path):
     first_line = page["content"].splitlines()[0]
     assert first_line.split("\t")[0].strip() == "3", page["content"][:80]
 
-    found = call_tool("search_with_context",
+    full = call_tool("read_file", {"path": str(req)})
+    assert full["ok"] is True and full["offset"] == 0
+    assert full["end_line"] == full["total_lines"] and full["has_more"] is False
+
+    found = call_tool("search_content",
                       {"pattern": "openai-agents", "path": str(req), "context": 1})
     assert found["ok"] is True, found
     assert found["count"] >= 1
     assert isinstance(found["matches"][0]["context"], list)
     assert found["matches"][0]["context"], "命中应带上下文行数组"
+
+    # context 缺省 0 -> 不带上下文（原 search_content 行为）
+    plain = call_tool("search_content", {"pattern": "openai-agents", "path": str(req)})
+    assert plain["ok"] is True and plain["matches"][0]["context"] == []

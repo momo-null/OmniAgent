@@ -4,6 +4,9 @@ __pycache__/
 models/
 # temp artifacts
 temp/
+# vision 标注图（默认落 tasks/<id>/tmp/；未绑定任务时会回退 cwd，这里兜底）
+som_*.png
+vsom_*.png
 # OS/editor
 .DS_Store
 Thumbs.db

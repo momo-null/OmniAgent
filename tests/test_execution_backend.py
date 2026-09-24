@@ -1,159 +1,78 @@
-"""M1/M4：设备驱动层（devices/）单测。
+"""环境层单测（`devices/` 适配层 + `environments/`）。
 
-M4：设备实现已从内核 omni_core/ 迁出到顶层 devices/ 包（L1 能力层），
-且后端不再声明 tool_schemas——能力暴露的唯一来源是 tool 插件层。
-
-覆盖：
-- create_backend 按 config.runtime.backend 选 host / emulator
-- EmulatorBackend 构造不要求设备在线（u2 懒导入）
-- HostBackend 坐标归一化
-- 设备工具经插件层 call_tool 按名派发（内核零分支）
+设计见 doc/plans/capability-unit-refactor-2026-09-24.md §5.5：
+- `devices/` 只剩内核需要的三件契约（`kind` / `text_of` / `verify_done`）+ 注册表 + 句柄；
+- 具体环境（host / emulator）在 `environments/` **自注册**，自带 driver 与工具面；
+- 内核**不点名任何环境**（按 `runtime.backend` 查表）；
+- 环境工具随环境激活而注册（`source="env"`），不激活的不注册。
 """
-import sys
 import os
+import sys
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from devices import create_backend, ExecutionModule, HostBackend, EmulatorBackend
-from omni_core.tools.base import call_tool, TOOL_REGISTRY
-from omni_core.tools.loader import load_plugins, plugin_module
+from devices import (
+    ExecutionModule,
+    create_backend,
+    list_environments,
+    registered_kinds,
+)
+from omni_core.tools.base import TOOL_REGISTRY
 
 
-@pytest.fixture(autouse=True)
-def _load_official_plugins():
-    """P3：device 已迁为官方插件（plugins/device），按名访问前需先装载。"""
-    load_plugins({})
+# === 注册表：环境自报，内核零硬编码 ==========================================
+
+def test_registered_environments_self_report():
+    kinds = registered_kinds()
+    assert "host" in kinds and "emulator" in kinds
+    titles = {e["kind"]: e["title"] for e in list_environments()}
+    assert titles["host"] and titles["emulator"]
 
 
-def _device():
-    """取已装载的 device 插件模块句柄。"""
-    module = plugin_module("device")
-    assert module is not None, "device 插件未装载"
-    return module
+def test_create_backend_unknown_kind_raises():
+    with pytest.raises(KeyError):
+        create_backend("nope", {})
 
 
-def test_create_backend_default_host():
-    b = create_backend({})
-    assert isinstance(b, HostBackend)
-    assert b.name == "host"
+def test_create_backend_by_kind():
+    assert create_backend("host", {}).kind == "host"
 
 
-def test_create_backend_emulator():
-    b = create_backend({"runtime": {"backend": "emulator"}})
-    assert isinstance(b, EmulatorBackend)
-    assert b.name == "emulator"
-    # 构造不应连接设备，adb_serial 来自配置
-    assert b.adb_serial == "emulator-5554"
+# === 契约面：只有 kind / text_of / verify_done ==============================
+
+def test_execution_module_is_thin_contract():
+    em = ExecutionModule("host", create_backend("host", {}))
+    assert em.kind == "host"
+    assert callable(em.text_of) and callable(em.verify_done)
+    # 兼容别名 `backend_kind` 已删（零兼容）
+    assert not hasattr(em, "backend_kind")
 
 
-def test_device_driver_exposes_no_tool_schemas():
-    """M4：后端不再声明 tool_schemas——能力暴露唯一来源是 tool 插件层。
+def test_backends_declare_no_tool_schemas():
+    """环境不向内核塞 schema：能力暴露的唯一来源是工具注册表。
 
-    反向依赖被切断：设备层不 import 内核的 brain/tools，也不向内核塞 schema。
+    键鼠 / 截图 / OCR 等原语是各环境**内部**实现（供本环境工具调用），
+    不再是 `devices/` 共享层的厚接口。
     """
-    emu = EmulatorBackend({"runtime": {"emulator": {"adb_serial": "emulator-5554"}}})
-    assert not hasattr(emu, "tool_schemas")
-    host = HostBackend({})
-    assert not hasattr(host, "tool_schemas")
-    # 等价能力由插件层声明：通用设备工具 group=device；
-    # Android 专属原语为 device_emulator 子组（host 后端下不暴露）
-    for t in ("screenshot", "type", "click"):
-        assert t in TOOL_REGISTRY
-        assert TOOL_REGISTRY[t].group == "device"
-    for t in ("get_ui_tree", "tap_by_id", "launch_app", "press_keycode"):
-        assert t in TOOL_REGISTRY
-        assert TOOL_REGISTRY[t].group == "device_emulator"
+    import devices
+
+    backend = create_backend("host", {})
+    assert not hasattr(backend, "tool_schemas")
+    # 共享层不再定义厚接口基类
+    assert not hasattr(devices, "ExecutionBackend")
 
 
-def test_execution_module_reads_config_backend():
-    # ExecutionModule() 无参时读取 config.yaml 的 runtime.backend，
-    # 不再假定固定默认；与当前活动配置（emulator/host）解耦。
-    import yaml
-    cfg_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml")
-    with open(cfg_path, "r", encoding="utf-8") as fh:
-        cfg = yaml.safe_load(fh)
-    expected = (cfg.get("runtime") or {}).get("backend", "host")
-    em = ExecutionModule()
-    assert em.backend_kind == expected
-    # 去场景化契约（§9）：内核只经这两个抽象方法用后端
-    assert callable(em.backend.text_of)
-    assert callable(em.backend.verify_done)
+# === 环境工具面：随激活而注册 ==============================================
 
+def test_environment_activation_registers_its_tools():
+    from omni_core.tools.env_loader import activate_environment
 
-def test_host_normalize_coordinate():
-    # HostBackend 用真实屏幕分辨率覆盖配置；这里直接给定尺寸验证纯数学
-    h = HostBackend({})
-    h.screen_width, h.screen_height = 1000, 500
-    h.coordinate_normalization = True
-    assert h.normalize_coordinate(0.5, 0.5) == (500, 250)
-    # 绝对坐标原样
-    assert h.normalize_coordinate(10, 20) == (10, 20)
-    # 关闭归一化：相对坐标也按绝对处理
-    h.coordinate_normalization = False
-    assert h.normalize_coordinate(10, 20) == (10, 20)
-
-
-class _FakeExec:
-    """记录被调用的方法，用于验证 dispatch 路由。"""
-    def __init__(self):
-        self.calls = []
-
-    def observe(self):
-        self.calls.append(("observe",))
-        return {"active_window": "x", "ocr_text": ["1"]}
-
-    def read_screen_text(self):
-        self.calls.append(("read_screen_text",))
-        return {"ocr_text": ["1"]}
-
-    def get_ui_tree(self):
-        self.calls.append(("get_ui_tree",))
-        return {"ok": True, "ui_tree": "<node/>"}
-
-    def tap_by_id(self, resource_id):
-        self.calls.append(("tap_by_id", resource_id))
-        return {"ok": True}
-
-    def launch_app(self, package):
-        self.calls.append(("launch_app", package))
-        return {"ok": True}
-
-    def press_keycode(self, code):
-        self.calls.append(("press_keycode", code))
-        return {"ok": True}
-
-    def screenshot(self, save_path=None):
-        self.calls.append(("screenshot", save_path))
-        return {"ok": True, "path": "p.png"}
-
-
-def test_dispatch_routes_emulator_tools():
-    """M3：设备工具已外置为平级插件，派发走插件层 call_tool（内核零分支）。"""
-    fake = _FakeExec()
-    _device().bind_execution_module(fake)
-    r1 = call_tool("get_ui_tree", {})
-    r2 = call_tool("tap_by_id", {"resource_id": "com.x:id/y"})
-    r3 = call_tool("launch_app", {"package": "com.calc"})
-    r4 = call_tool("press_keycode", {"code": 4})
-    r5 = call_tool("screenshot", {})
-    assert r1 == {"ok": True, "ui_tree": "<node/>"}
-    assert r2 == {"ok": True}
-    assert r3 == {"ok": True}
-    assert r4 == {"ok": True}
-    assert r5 == {"ok": True, "path": "p.png"}
-    assert fake.calls == [
-        ("get_ui_tree",),
-        ("tap_by_id", "com.x:id/y"),
-        ("launch_app", "com.calc"),
-        ("press_keycode", 4),
-        ("screenshot", None),
-    ]
-
-
-def test_dispatch_observe_via_exec():
-    fake = _FakeExec()
-    _device().bind_execution_module(fake)
-    res = call_tool("observe", {})
-    assert res == {"active_window": "x", "ocr_text": ["1"]}
+    activate_environment({"runtime": {"backend": "host"}})
+    host_tools = {n for n, p in TOOL_REGISTRY.items() if p.source == "env"}
+    assert {"press", "click", "observe", "screenshot"} <= host_tools
+    # Android 专属工具不属于 host 环境
+    assert "press_keycode" not in host_tools
+    # 环境工具 unit = 环境 kind
+    assert TOOL_REGISTRY["click"].unit == "host"

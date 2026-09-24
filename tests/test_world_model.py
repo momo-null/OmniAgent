@@ -14,9 +14,12 @@ from pathlib import Path
 import pytest
 
 from omni_core.brain.llm import BrainReply, ToolCall
-from omni_core.local.tool_loop import ToolLoop, TaskSpec
+from omni_core.local.loop import ToolLoop, TaskSpec
 from omni_core.local.world_model import WorldModel
 import omni_core.local.runtime_paths as _RP
+
+from tests._env import install_fake_env  # noqa: E402
+
 
 def _redirect(tmp_path):
     """把所有 task 资产重定向到临时目录（不污染真实 ~/.omniagent）。"""
@@ -46,7 +49,7 @@ class _FakeBackend:
         self.observe_calls = 0
         self.ocr = []
         self.backend = _FakeBackendInner()
-        self.backend_kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
+        self.kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
 
     def observe(self):
         self.observe_calls += 1
@@ -250,10 +253,10 @@ def test_two_layer_world_model_persistence(monkeypatch, tmp_path):
         EXEC: [_auto_observe_then_done("ok")],
     })
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", fb)
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _FakeBackend)
+    install_fake_env(monkeypatch, _FakeBackend)
 
     loop = ToolLoop(
-        {"model": BRAIN, "base_url": "http://x", "capabilities": {}},
+        {"model": BRAIN, "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
         executor_cfg={"enabled": True, "model": EXEC, "base_url": "http://y", "capabilities": {"vision": True}},
     )
@@ -285,10 +288,10 @@ def test_two_layer_world_model_early_save_on_abort(monkeypatch, tmp_path):
         EXEC: [_observe()],  # observe → world 有 OCR → verify 通过 → success
     })
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", fb)
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _FakeBackend)
+    install_fake_env(monkeypatch, _FakeBackend)
 
     loop = ToolLoop(
-        {"model": BRAIN, "base_url": "http://x", "capabilities": {}},
+        {"model": BRAIN, "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
         executor_cfg={"enabled": True, "model": EXEC, "base_url": "http://y", "capabilities": {"vision": True}},
     )

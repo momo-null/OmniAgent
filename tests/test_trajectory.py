@@ -6,8 +6,11 @@ import json
 from pathlib import Path
 
 from omni_core.brain.llm import BrainReply, ToolCall
-from omni_core.local.tool_loop import ToolLoop, TaskSpec
+from omni_core.local.loop import ToolLoop, TaskSpec
 from omni_core.local.trajectory import TrajectoryStore
+
+
+from tests._env import install_fake_env  # noqa: E402
 
 
 class _FakeBackend:
@@ -15,7 +18,7 @@ class _FakeBackend:
 
     def __init__(self, *a, **k):
         self.observe_calls = 0
-        self.backend_kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
+        self.kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
 
     def observe(self):
         self.observe_calls += 1
@@ -64,8 +67,8 @@ def _task_done():
 def _make_loop(monkeypatch, tmp_path, brain_mapping):
     fb = _fake_brain_factory({BRAIN: brain_mapping})
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", fb)
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _FakeBackend)
-    loop = ToolLoop({"model": BRAIN, "base_url": "http://x", "capabilities": {}}, verbose=False)
+    install_fake_env(monkeypatch, _FakeBackend)
+    loop = ToolLoop({"model": BRAIN, "base_url": "http://127.0.0.1:9", "capabilities": {}}, verbose=False)
     return loop
 
 

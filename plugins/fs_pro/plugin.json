@@ -1,6 +1,0 @@
-{
-  "name": "fs_pro",
-  "version": "0.1.0",
-  "description": "文件系统增强：按行区间分页读取 + 带上下文的递归正则检索",
-  "group": "fs_pro"
-}

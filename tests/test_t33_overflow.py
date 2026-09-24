@@ -47,12 +47,12 @@ class _ScriptedRunner:
 
 
 def _overflow_exc(msg="maximum context length exceeded"):
-    resp = httpx.Response(400, request=httpx.Request("POST", "http://x"))
+    resp = httpx.Response(400, request=httpx.Request("POST", "http://127.0.0.1:9"))
     return BadRequestError(msg, response=resp, body=None)
 
 
 def _plain_400_exc(msg="invalid parameter 'temperature'"):
-    resp = httpx.Response(400, request=httpx.Request("POST", "http://x"))
+    resp = httpx.Response(400, request=httpx.Request("POST", "http://127.0.0.1:9"))
     return BadRequestError(msg, response=resp, body=None)
 
 
@@ -83,7 +83,7 @@ def _run(monkeypatch, script, *, should_stop=None, max_steps=6, on_raise=None):
     runner = _ScriptedRunner(script, on_raise=on_raise)
     monkeypatch.setattr(sl, "Runner", runner)
     res = run_subtask_sdk(
-        {"model": "m", "base_url": "http://x", "api_key": "k"},
+        {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"},
         instructions="do it",
         user_input="hi",
         tools=[],
@@ -101,11 +101,11 @@ def test_is_context_overflow_matches_generic_signature():
     assert _is_context_overflow(_plain_400_exc()) is False           # 无 context 关键字
     assert _is_context_overflow(_overflow_exc("no such keyword")) is False
     # 413 Payload Too Large 同样视为超限
-    resp = httpx.Response(413, request=httpx.Request("POST", "http://x"))
+    resp = httpx.Response(413, request=httpx.Request("POST", "http://127.0.0.1:9"))
     assert _is_context_overflow(
         APIStatusError("request context too large", response=resp, body=None)) is True
     # 429 / 类名不符不视为溢出（走 U3 服务商降级）
-    resp429 = httpx.Response(429, request=httpx.Request("POST", "http://x"))
+    resp429 = httpx.Response(429, request=httpx.Request("POST", "http://127.0.0.1:9"))
     assert _is_context_overflow(
         APIStatusError("context quota", response=resp429, body=None)) is False
 

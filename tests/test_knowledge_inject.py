@@ -8,7 +8,6 @@ from omni_core.local import runtime_paths as _RP
 from omni_core.local.knowledge_inject import (
     build_knowledge_block,
     load_memory_text,
-    load_matching_skills,
 )
 from omni_core.local.skill_library import SkillLibrary, Skill, SkillSubstep, SkillMetadata
 
@@ -61,13 +60,14 @@ class TestLoadMemoryText:
         assert "历史事实一" in load_memory_text()
 
 
-# === load_matching_skills（磁盘 + SkillLibrary） ===========================
+# === 技能弱匹配召回（SkillLibrary.find_by_pattern） =========================
+# 旧 `load_matching_skills` 注入助手已删（技能目录 + load_skill 工具取代它）。
 
-class TestLoadMatchingSkills:
+class TestSkillRecallByPattern:
     def test_empty_objective_returns_blank(self):
-        assert load_matching_skills("", "t1") == []
+        assert SkillLibrary(task_id="t1").find_by_pattern("") == []
 
-    def test_matches_and_formats(self):
+    def test_matches_objective(self):
         lib = SkillLibrary(task_id="t_match")
         lib.save(Skill(
             name="skill_open",
@@ -75,20 +75,5 @@ class TestLoadMatchingSkills:
             substeps=[SkillSubstep(tool="observe", args={}), SkillSubstep(tool="click", args={"x": 1})],
             metadata=SkillMetadata(status="active"),
         ))
-        skills = load_matching_skills("请打开应用主页", "t_match", limit=3)
-        assert len(skills) == 1
-        assert skills[0]["name"] == "skill_open"
-        assert "observe" in skills[0]["ops"]
-        assert "click" in skills[0]["ops"]
-
-    def test_limit_caps(self):
-        for i in range(5):
-            lib = SkillLibrary(task_id="t_limit")
-            lib.save(Skill(
-                name=f"s{i}",
-                objective_pattern=f"目标{i}",
-                substeps=[SkillSubstep(tool="observe", args={})],
-                metadata=SkillMetadata(status="active"),
-            ))
-        skills = load_matching_skills("目标", "t_limit", limit=3)
-        assert len(skills) <= 3
+        matched = lib.find_by_pattern("请打开应用主页")
+        assert [s.name for s in matched] == ["skill_open"]

@@ -153,57 +153,44 @@ class TestKeyMasking:
 
 # === M3 工具插件层枚举（前端 Skills&Tools 面板数据源） ===
 class TestToolsEndpoint:
-    def test_tools_lists_plugin_layer(self, client):
-        """GET /api/runtime/tools 枚举插件层：自研 + 外部 MCP 平级。"""
+    def test_tools_lists_three_classes(self, client):
+        """GET /api/runtime/tools 枚举三类：环境（radio）+ 插件（switch）+ 工具（只读）。"""
         r = client.get("/api/runtime/tools")
         assert r.status_code == 200, r.text
         data = r.json()
 
-        names = {t["name"] for t in data["tools"]}
-        # 自研 device / python / vision 分组
-        for t in ("press", "click", "template_match", "run_python", "som_marks"):
-            assert t in names, f"{t} 应来自 tool 插件层"
+        # ① 环境：自报标题 + 恰好一个 active
+        kinds = {e["kind"] for e in data["environments"]}
+        assert {"host", "emulator"} <= kinds
+        assert sum(1 for e in data["environments"] if e["active"]) == 1
+        assert all(e.get("title") for e in data["environments"])
 
+        # ② 插件：自报元数据 + 各自的 enabled（前端只渲染一个开关）
+        plugins = {p["name"]: p for p in data["plugins"]}
+        assert {"filesystem", "web", "vision"} <= set(plugins)
+        assert "fs_pro" not in plugins, "fs_pro 已并入 filesystem"
+        assert plugins["vision"]["enabled"] is False, "vision 默认停用（治'每次都用 vision'）"
+        assert plugins["filesystem"]["enabled"] is True
+
+        # ③ 工具：只读清单，来源三类
         by_name = {t["name"]: t for t in data["tools"]}
-        assert by_name["run_python"]["source"] == "builtin"
-        assert by_name["run_python"]["server"] is None
-        assert by_name["press"]["group"] == "device"
-        # 描述与参数结构可用（前端 tooltip 直接用）
+        assert by_name["press"]["source"] == "env"       # 当前环境（host）自带
+        assert by_name["press"]["unit"] == "host"
+        assert by_name["press"]["server"] is None
         assert isinstance(by_name["press"]["parameters"], dict)
-        assert "device" in data["groups"]
+        assert by_name["shell_exec"]["source"] == "core"  # 内核 builtin
+        plugin_tools = [t for t in data["tools"] if t["source"] == "plugin"]
+        assert plugin_tools, "应有已启用插件的工具（filesystem / web）"
+        assert all(t["source"] != "plugin" or t["unit"] in plugins for t in data["tools"])
+        # 停用的 vision 插件不贡献工具
+        assert "vision_describe" not in by_name
+        # 没有 per-tool 开关这回事
+        assert all("disabled" not in t for t in data["tools"])
 
         # MCP 段结构固定，未启用时为空
         assert "enabled" in data["mcp"]
         assert isinstance(data["mcp"]["servers"], list)
         assert isinstance(data["mcp"]["connected"], list)
-
-    def test_tools_respects_group_filter(self, client, monkeypatch):
-        """config.runtime.tools.groups 收窄为 ["python"] 后：只有 python 组生效。
-
-        注意端点的视图契约（085776d 起）：**始终返回全部插件**并逐项带
-        `group_enabled` 标记——否则被禁用分组的工具会从设置页彻底消失、无法重新打开。
-        因此这里断言的是「生效分组 ⊆ 标记语义」，而不是「返回列表被过滤」。
-        """
-        import config
-        monkeypatch.setattr(
-            config,
-            "load_config",
-            lambda: {"runtime": {"tools": {"groups": ["python"]}}},
-        )
-        r = client.get("/api/runtime/tools")
-        assert r.status_code == 200
-        data = r.json()
-        # 生效分组只含 python（顶层 groups / active_groups 与逐项标记同源）
-        assert data["active_groups"] == ["python"]
-        assert data["groups"] == ["python"]
-        flags = {}
-        for t in data["tools"]:
-            flags.setdefault(t["group"], set()).add(bool(t["group_enabled"]))
-        assert "python" in flags, "python 组工具应仍在列表中（视图契约：不过滤）"
-        assert flags["python"] == {True}, "python 组应全部标记为启用"
-        other = {g: v for g, v in flags.items() if g != "python"}
-        assert other, "应存在其它分组，否则本断言无意义"
-        assert all(v == {False} for v in other.values()), "非 python 组应一律标记为未启用"
 
 
 # === M3 MCP server 配置写入校验 ===

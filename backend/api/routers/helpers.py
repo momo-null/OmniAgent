@@ -123,11 +123,6 @@ def _config_hash(cfg: dict) -> str:
         s = repr(cfg)
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
 
-def _enabled_groups(cfg: dict) -> List[str]:
-    """运行级启用的能力组（取自 config.runtime.tools.groups；未显式收窄则为空表）。"""
-    groups = ((cfg.get("runtime") or {}).get("tools") or {}).get("groups")
-    return list(groups) if isinstance(groups, list) else []
-
 def _config() -> dict:
     """加载生效配置（config.yaml 为 base，~/.omniagent/config.yaml 覆盖）。
 
@@ -461,7 +456,6 @@ def _snapshot(task_id: str) -> dict:
         "task_id": task_id or _running_task_id() or "",
         "project_id": ctx.project_id if ctx else "",
         "config_hash": ctx.config_hash if ctx else "",
-        "enabled_capability_groups": ctx.enabled_capability_groups if ctx else [],
         # 阶段 1：每个 run 可完整导出运行配置
         "context": ctx.export() if ctx else None,
     }

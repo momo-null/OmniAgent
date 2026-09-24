@@ -15,9 +15,10 @@ from omni_core.tools.loader import load_plugins, plugin_module
 
 
 @pytest.fixture(autouse=True)
-def _load_official_plugins():
-    """P3：vision 已迁为官方插件（plugins/vision）；build_omni_agent 的默认工具
-    与 vision_describe 函数体都改从注册表/插件模块取，故需先装载。"""
+def _load_official_plugins(enable_plugin):
+    """vision 是官方插件且默认停用；build_omni_agent 的工具来自注册表/插件模块，
+    故先显式打开 vision 再装载。"""
+    enable_plugin("vision")
     load_plugins({})
 
 

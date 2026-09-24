@@ -14,7 +14,7 @@
 约束域（M4 起「自动发现」，新增文件默认受约束，不用再手工登记）：
   KERNEL_DIRS   omni_core/**/*.py        -> 强制 R1 + R2
   PLUGIN_EXEMPT omni_core/tools/**       -> 豁免（L1 能力插件层，本就是能力实现）
-  CAPA_EXEMPT   —— 无（SoM/VLM 实现已随 §5.4 迁到 omni_core/tools/vision_runtime.py）
+  CAPA_EXEMPT   —— 无（SoM/VLM 实现已随 §5.4 迁到 plugins/vision/runtime.py）
   DEVICE_DIRS   devices/**/*.py          -> 豁免 R1/R2（设备驱动）；base.py 额外强制 R3
 
 用法：
@@ -34,7 +34,7 @@ KERNEL_DIRS = ["omni_core"]
 DEVICE_DIRS = ["devices"]
 
 # L1 能力层豁免（相对仓库根的目录前缀 / 具体文件）
-PLUGIN_EXEMPT_DIRS = ["omni_core/tools"]   # 含 vision_runtime.py（SoM/VLM 实现，§5.4）
+PLUGIN_EXEMPT_DIRS = ["omni_core/tools"]   # L1 能力插件层（视觉/设备/Python 等实现，§5.4）；视觉运行时现位于 plugins/vision/runtime.py
 PLUGIN_EXEMPT_FILES: list[str] = []
 
 

@@ -19,12 +19,10 @@ from omni_core.brain.llm import LLMClient, model_health_ok
 from omni_core.brain.prompt import build_system_prompt
 from omni_core.brain import tools as brain_tools
 from omni_core.local.world_model import WorldModel
-from omni_core.tools.vision_runtime import VisionRuntime
 from omni_core.local.states import AgentState
 from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local import telemetry
 from omni_core.local.curator import Curator
-from devices import ExecutionModule
 from omni_core.local.runtime_paths import (
     task_trajectory, task_collected, auto_project_id,
 )

@@ -195,9 +195,35 @@ def task_skills(task_id: str) -> Path:
     return task_dir(task_id) / "skills"
 
 
+def task_tmp(task_id: str) -> Path:
+    """任务临时产物目录 ``tasks/<task_id>/tmp/``（脚本 / 截图等；任务终态由系统清理）。"""
+    return task_dir(task_id) / "tmp"
+
+
 def task_agents_file(task_id: str) -> Path:
     """任务级纪律文件 ``tasks/<task_id>/AGENTS.md``（不存在则零注入）。"""
     return task_dir(task_id) / "AGENTS.md"
+
+
+# ---- 插件 / 环境 自持配置（用户全局，按名字一文件） --------------------------
+def plugins_root() -> Path:
+    """插件自有配置根 ``~/.omniagent/plugins/``（每个插件一个 ``<name>.yaml``）。"""
+    return _GLOBAL / "plugins"
+
+
+def plugin_config_file(name: str) -> Path:
+    """插件自有配置文件 ``plugins/<name>.yaml``（内置路径安全校验）。"""
+    return _child(plugins_root(), name, "plugin_name").with_suffix(".yaml")
+
+
+def environments_root() -> Path:
+    """环境自有配置根 ``~/.omniagent/environments/``。"""
+    return _GLOBAL / "environments"
+
+
+def env_config_file(kind: str) -> Path:
+    """环境自有配置文件 ``environments/<kind>.yaml``（内置路径安全校验）。"""
+    return _child(environments_root(), kind, "env_kind").with_suffix(".yaml")
 
 
 # ---- 目录确保（幂等） ------------------------------------------------------
@@ -209,11 +235,13 @@ def ensure_global_dirs() -> None:
         memory_rollouts(),
         projects_root(),
         tasks_root(),
+        plugins_root(),
+        environments_root(),
     ):
         d.mkdir(parents=True, exist_ok=True)
 
 
 def ensure_task_dirs(task_id: str) -> None:
-    """懒创建 task 目录（含 skills 子目录）。幂等。"""
-    for d in (task_dir(task_id), task_skills(task_id)):
+    """懒创建 task 目录（含 skills / tmp 子目录）。幂等。"""
+    for d in (task_dir(task_id), task_skills(task_id), task_tmp(task_id)):
         d.mkdir(parents=True, exist_ok=True)

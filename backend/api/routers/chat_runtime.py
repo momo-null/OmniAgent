@@ -14,7 +14,6 @@ from backend.api.routers.helpers import (
     _collect_user_corrections,
     _config_hash,
     _cursor_lock,
-    _enabled_groups,
     _ensure_outbox,
     _finish_task,
     _is_any_running,
@@ -77,7 +76,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     # 新的一轮：清空实时过程快照，避免 GET /live 把上一轮的残留过程回放给前端
     clear_live_snapshot(task_id)
     try:
-        from omni_core.local.tool_loop import ToolLoop, TaskSpec
+        from omni_core.local.loop import ToolLoop, TaskSpec
 
         brain_cfg, executor_cfg = _make_brain_cfg()
         # 阶段 0.5：运行级配置快照——一次性加载，运行期内 ToolLoop 不再重读全局 config
@@ -124,7 +123,6 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         loop = ToolLoop(brain_cfg, executor_cfg=executor_cfg, verbose=True,
                         full_access=full_access,
                         config_snapshot=cfg, agent_id=agent_id,
-                        tool_registry=TOOL_REGISTRY,
                         on_debug=_debug_push,
                         on_thinking=_on_thinking, on_tool_call=_on_tool_call,
                         on_llm_delta=_on_llm_delta)
@@ -144,12 +142,11 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         _pid = _meta.get("project_id", "") if _meta else ""
         _sid = _meta.get("session_id", "") if _meta else ""
 
-        # 阶段 1：把运行级配置快照哈希、project_id、能力组、工具 registry、设备后端
+        # 阶段 1：把运行级配置快照哈希、project_id、工具 registry、环境后端
         # 写入 context，使「每个 run 可完整导出运行配置」成立（阶段 1 验收项 + 目标 3）。
         if rec is not None:
             rec.config_hash = _config_hash(cfg)
             rec.project_id = _pid
-            rec.enabled_capability_groups = _enabled_groups(cfg)
             rec.tool_registry = TOOL_REGISTRY
             rec.execution_backend = loop.exec
 

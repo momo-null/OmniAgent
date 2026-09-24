@@ -5,7 +5,7 @@ web_search：自研联网搜索（默认走 DuckDuckGo lite 无密钥抓取并�
             标题 / 链接 / 摘要列表，覆盖"搜最新资讯、查资料、验证事实"。
 
 全部自研、无第三方搜索 API、无需 key（用户明确要求不自研之外接商业服务）。
-默认启用（`group="web"`）。注意：无密钥抓取偶发被搜索引擎限流，属已知代价。
+默认启用（`unit="web"`）。注意：无密钥抓取偶发被搜索引擎限流，属已知代价。
 """
 import re
 from typing import Any, Dict, List, Optional
@@ -44,17 +44,8 @@ def configure(cfg: Optional[dict]) -> None:
 
 
 def startup(ctx) -> None:
-    """内核装配后按旧配置键 config.runtime.web 注入限流参数。
-
-    迁移前该调用写在 ToolLoop.__init__ 里（内核点名 configure_web）；
-    现在由插件自己在 startup 时读取同一配置键，**用户配置零改动**。
-
-    Args:
-        ctx: PluginContext（读 ctx.config["runtime"]["web"]）。
-    """
-    cfg = getattr(ctx, "config", None)
-    runtime = (cfg.get("runtime") or {}) if isinstance(cfg, dict) else {}
-    configure(runtime.get("web") or {})
+    """保留空 startup（配置改由 loader 通过 configure 传入本插件自有配置）。"""
+    return
 
 
 def _clip(text: str, limit: int) -> str:
@@ -82,7 +73,7 @@ def _html_to_text(html: str) -> str:
 
 @function_tool(
     description="抓取网页 URL 并返回可读正文（HTML 转文本）。用于读文章、查文档、验证事实。",
-    group="web",
+    unit="web",
 )
 def web_fetch(url: str) -> Dict[str, Any]:
     """抓取网页。
@@ -116,7 +107,7 @@ def web_fetch(url: str) -> Dict[str, Any]:
 
 @function_tool(
     description="联网搜索（自研，无密钥）：返回标题/链接/摘要列表。用于搜最新资讯、查资料。",
-    group="web",
+    unit="web",
 )
 def web_search(query: str, max_results: int = 8) -> Dict[str, Any]:
     """联网搜索。

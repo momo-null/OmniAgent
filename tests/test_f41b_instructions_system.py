@@ -16,7 +16,7 @@ from omni_core.brain import sdk_loop as sl
 from omni_core.brain.sdk_loop import run_subtask_sdk
 from omni_core.local import knowledge_inject as ki
 from omni_core.local.knowledge_inject import load_agents_snapshot
-from omni_core.local.tool_loop import ToolLoop, _request_fingerprint
+from omni_core.local.loop import ToolLoop, _request_fingerprint
 
 
 class _Rec:
@@ -49,7 +49,7 @@ class _Rec:
 
 
 def _loop():
-    return ToolLoop({"model": "m", "base_url": "http://x", "api_key": "k"}, verbose=False)
+    return ToolLoop({"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}, verbose=False)
 
 
 def _spec(task_id="f41b", max_steps=None):
@@ -247,7 +247,7 @@ def test_run_keeps_snapshot_and_warns_once_on_mid_run_change(monkeypatch, tmp_pa
     warns = []
 
     res = run_subtask_sdk(
-        {"model": "m", "base_url": "http://x", "api_key": "k"},
+        {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"},
         instructions=merged,
         user_input="执行任务",
         tools=[],
@@ -277,7 +277,7 @@ def test_no_drift_no_warning(monkeypatch, tmp_path):
     monkeypatch.setattr(sl, "Runner", runner)
     warns = []
     run_subtask_sdk(
-        {"model": "m", "base_url": "http://x", "api_key": "k"},
+        {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"},
         instructions=ToolLoop._merge_instructions("SYS", snap),
         user_input="执行任务", tools=[], gate=_gate(),
         max_steps=2, chunk_turns=1, should_stop=lambda: False,
@@ -297,7 +297,7 @@ def test_discipline_block_in_system_while_user_turn_stays_last(monkeypatch, tmp_
     runner = _MockRunner()
     monkeypatch.setattr(sl, "Runner", runner)
     run_subtask_sdk(
-        {"model": "m", "base_url": "http://x", "api_key": "k"},
+        {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"},
         instructions=merged,
         user_input="本轮明确允许使用 X",
         tools=[], gate=_gate(), max_steps=1, chunk_turns=1, should_stop=lambda: False,

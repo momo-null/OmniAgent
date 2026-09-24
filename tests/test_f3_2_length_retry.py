@@ -49,7 +49,7 @@ class _Gate:
 
 
 def _brain():
-    return {"model": "m", "base_url": "http://x", "api_key": "k"}
+    return {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}
 
 
 def _run(monkeypatch, fake_runner, max_steps=4):

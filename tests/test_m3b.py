@@ -15,10 +15,13 @@ M7 起不再是「planner 规划 + worker 执行」的固定两层：
 import json
 
 from omni_core.brain.llm import BrainReply, ToolCall
-from omni_core.local.tool_loop import ToolLoop, TaskSpec
+from omni_core.local.loop import ToolLoop, TaskSpec
 
 
 # --- 假后端（ExecutionModule 替身） -----------------------------------------
+from tests._env import install_fake_env  # noqa: E402
+
+
 class _FakeBackend:
     # 注：M4 起后端不再声明 tool_schemas（能力清单由 tool 插件层提供）
 
@@ -26,7 +29,7 @@ class _FakeBackend:
         self.observe_calls = 0
         self.ocr = []
         self.backend = _FakeBackendInner()  # 可配置 OCR 文本（M4a.3 verify 门控需要屏幕含 done_when）
-        self.backend_kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
+        self.kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
 
     def observe(self):
         self.observe_calls += 1
@@ -146,12 +149,12 @@ EXEC = "qwen3.5-4b-vl"
 def _make_loop(monkeypatch, brain_mapping, executor_mapping, *, executor_cfg=None, escalation_cfg=None, ocr=None):
     fb = _fake_brain_factory({BRAIN: brain_mapping, EXEC: executor_mapping})
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", fb)
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _FakeBackend)
+    install_fake_env(monkeypatch, _FakeBackend)
     ecfg = executor_cfg if executor_cfg is not None else {
-        "enabled": True, "model": EXEC, "base_url": "http://x", "capabilities": {"vision": True},
+        "enabled": True, "model": EXEC, "base_url": "http://127.0.0.1:9", "capabilities": {"vision": True},
     }
     loop = ToolLoop(
-        {"model": BRAIN, "base_url": "http://x", "capabilities": {}},
+        {"model": BRAIN, "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
         executor_cfg=ecfg,
         escalation_cfg=escalation_cfg,
@@ -340,8 +343,8 @@ def test_single_brain_run_task_backward_compat(monkeypatch):
     """单大脑先 observe 再 task_done -> 成功，且 observe 路由到后端。"""
     fb = _fake_brain_factory({BRAIN: [_observe(), _task_done("ok")]})
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", fb)
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _FakeBackend)
-    loop = ToolLoop({"model": BRAIN, "base_url": "http://x", "capabilities": {}}, verbose=False)
+    install_fake_env(monkeypatch, _FakeBackend)
+    loop = ToolLoop({"model": BRAIN, "base_url": "http://127.0.0.1:9", "capabilities": {}}, verbose=False)
     res = loop.run_task(TaskSpec(objective="o", max_steps=3))
     assert res["steps"] >= 1
     assert res["reason"] == "ok"
@@ -400,9 +403,9 @@ def test_brain_long_task_runs_to_completion(monkeypatch):
             pass
 
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", _RecBrain)
-    monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _FakeBackend)
+    install_fake_env(monkeypatch, _FakeBackend)
     loop = ToolLoop(
-        {"model": "brain", "base_url": "http://x", "capabilities": {},
+        {"model": "brain", "base_url": "http://127.0.0.1:9", "capabilities": {},
          "long_task": {"enabled": True, "max_turns": 2, "compress": True}},
         verbose=False,
     )

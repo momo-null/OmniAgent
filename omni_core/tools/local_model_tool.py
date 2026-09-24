@@ -33,7 +33,7 @@ from omni_core.tools.base import ToolPlugin, register_tool, unregister_tool, _to
 from omni_core.brain.llm import LLMClient, model_health_ok
 
 TOOL_NAME = "local_infer"
-GROUP = "local_model"
+UNIT = "local_model"
 
 # 未配置 boundary 时的中性兜底（不含任何领域词）
 _DEFAULT_GOOD_FOR: List[str] = ["短小明确的单次推理", "低成本重复推理"]
@@ -146,7 +146,7 @@ def configure(cfg: Optional[dict], client: Any = None, on_debug: Any = None) -> 
     register_tool(ToolPlugin(
         name=TOOL_NAME,
         tool=tool,
-        group=GROUP,
+        unit=UNIT,
         meta={"model": cfg.get("model", ""), "source_cfg": "llm.local_as_tool"},
     ))
     return True
@@ -159,17 +159,14 @@ def configure_from_app_config(app_cfg: Optional[dict], on_debug: Any = None) -> 
     tool_loop 与只读枚举接口（``GET /api/runtime/tools``）都走这里，避免两处各写一套。
     """
     app_cfg = app_cfg or {}
-    rt = app_cfg.get("runtime") or {}
     cfg = (app_cfg.get("llm") or {}).get("local_as_tool") or {}
     if not cfg:
-        # 回退：优先旧 runtime.executor 端点（过渡期），无则经 resolver 取新 schema 的 worker 端点
-        ex = rt.get("executor") or {}
-        if not ex:
-            try:
-                from omni_core.brain.resolve import resolve_agent_model
-                ex = resolve_agent_model(app_cfg, "worker")
-            except Exception:
-                ex = {}
+        # 未配置 local_as_tool：经 resolver 取 worker 端点兜底（新 schema；旧 runtime.executor 不再回退）
+        try:
+            from omni_core.brain.resolve import resolve_agent_model
+            ex = resolve_agent_model(app_cfg, "worker")
+        except Exception:
+            ex = {}
         cfg = {**ex, "enabled": bool(ex.get("enabled"))}
     return configure(cfg, on_debug=on_debug)
 

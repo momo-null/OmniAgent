@@ -22,11 +22,15 @@ class AsyncBridge:
         self._lock = threading.Lock()
 
     def loop(self) -> asyncio.AbstractEventLoop:
-        if self._loop is not None:
-            return self._loop
+        if self._alive():
+            return self._loop  # type: ignore[return-value]
         with self._lock:
-            if self._loop is not None:
-                return self._loop
+            if self._alive():
+                return self._loop  # type: ignore[return-value]
+            # 旧 loop 线程已死（异常退出 / 被关闭）→ **丢弃重建**。
+            # 否则 self._loop 仍指向一个不再运行的 loop：call_soon_threadsafe 能塞进去、
+            # future 永不完成 → 调用方在 result() 上**永久阻塞**（曾把测试挂到天荒地老）。
+            self._loop = None
             ready = threading.Event()
 
             def _serve() -> None:
@@ -42,6 +46,22 @@ class AsyncBridge:
         if self._loop is None:  # 理论不可达，防御
             raise RuntimeError("async bridge 未能启动")
         return self._loop
+
+    def _alive(self) -> bool:
+        """常驻 loop 是否**真的可用**：未关闭、正在跑、且其线程存活。
+
+        只查 `_thread.is_alive()` 不够——loop 已停止（`run_forever` 退出 / 被 `stop()`）
+        时线程可能还活着，此时 `call_soon_threadsafe` 能塞进回调但**永不执行**，
+        调用方会在 `result()` 上永久阻塞。四个条件缺一即视为需要重建。
+        """
+        loop = self._loop
+        return (
+            loop is not None
+            and not loop.is_closed()
+            and loop.is_running()
+            and self._thread is not None
+            and self._thread.is_alive()
+        )
 
     def run(self, coro, timeout: Optional[float] = None) -> Any:
         return asyncio.run_coroutine_threadsafe(coro, self.loop()).result(timeout)

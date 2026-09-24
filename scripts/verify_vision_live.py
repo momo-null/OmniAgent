@@ -38,7 +38,7 @@ def main():
 
     # 1) 优先探测已运行的 4B-vl（避免重复起一个撑爆 8GB 显存）；没有再启动
     log("step1: 探测/启动 4B-vl llama-server ...")
-    from omni_core.tools.vision_runtime import VisionRuntime
+    from plugins.vision.runtime import VisionRuntime
 
     existing = VisionRuntime._probe_local_vlm()
     if existing:

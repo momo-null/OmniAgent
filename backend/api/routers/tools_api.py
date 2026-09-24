@@ -1,174 +1,164 @@
-"""工具管理接口：/tools 与 PATCH /tools/disabled（零逻辑改动）。"""
+"""工具管理接口：/tools（只读枚举）+ 环境单选 + 插件开关。
+
+新模型（见 doc/plans/capability-unit-refactor-2026-09-24.md）：
+- **环境**（`environments/<kind>/`）：单选（`runtime.backend`），自带工具面 → 前端 radio；
+- **插件**（`plugins/<name>/`）：每个一个 on/off（`~/.omniagent/plugins/<name>.yaml`）→ 前端 switch；
+- **工具**：只读清单（来源 env / plugin / core / mcp），无逐工具开关。
+
+前端不硬编码任何环境 / 插件名：所有标题 / 说明 / 状态都来自后端自报。
+"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
-from backend.api.routers.helpers import (
-    TOOL_REGISTRY,
-    config,
-    copy,
-)
+from backend.api.routers.helpers import config
 
 router = APIRouter(tags=["runtime"])
 
+
 @router.get("/tools")
 async def list_tools():
-    """agent 外层 tool 插件层当前暴露的工具（只读枚举）。
-
-    M3 起能力=插件：自研工具（device / vision / python）与外部 MCP 工具进同一张
-    注册表、同一条派发路径，完全平级，这里用 `source` 区分来源（builtin / mcp）。
-    启停由 config.runtime.tools.groups 过滤（不配置 = 全部启用）。
-    """
+    """枚举：环境（radio）+ 插件（switch）+ 工具（只读）+ MCP。"""
     try:
         import config as app_config
-        from omni_core.tools import (
-            build_plugin_registry,
-            configure_local_model_from_config,
-        )
+
+        from devices import list_environments, registered_kinds
+        from omni_core.tools import activate_environment, configure_local_model_from_config
         from omni_core.tools.base import TOOL_REGISTRY
+        from omni_core.tools.env_loader import active_kind
+        from omni_core.tools.loader import PluginContext, list_plugins, load_plugins
 
         cfg = app_config.load_config() or {}
-        rt = cfg.get("runtime") or {}
-        # M9：本地模型工具是配置驱动的动态插件，枚举前先按配置登记一次
+        # M9：本地模型工具是配置驱动的动态注册，枚举前先按配置登记一次
         configure_local_model_from_config(cfg)
-        # P1 工具插件：枚举前幂等装载一次（重复调用记 skip），保证插件工具出现在清单里
-        from omni_core.tools.loader import last_report, load_plugins
-
-        load_plugins(cfg)
-        # 与 tool_loop 保持一致：groups 缺省剔除 shell（高危默认关），
-        # full_access=true 时放行 shell，使枚举与实际运行的分组对齐。
-        tools_cfg = (rt.get("tools") or {})
-        groups = tools_cfg.get("groups")
-        if groups is None:
-            groups = sorted({p.group for p in TOOL_REGISTRY.values() if p.group != "shell"})
-        else:
-            groups = list(groups)
-        if tools_cfg.get("full_access") and "shell" not in groups:
-            groups.append("shell")
-        # 视图级工具禁用：读取 config.runtime.tools.disabled，过滤后构建注册表。
-        # 在分组过滤之后执行，高权限放行工具仍可被单工具禁用。
-        disabled = list(tools_cfg.get("disabled") or [])
-        _disabled_set = {str(x) for x in disabled}
-        _active_groups = {str(g) for g in groups}
-        # 枚举「全部」插件（不做分组/禁用过滤），由视图侧按标记渲染开关，
-        # 否则被禁用/未启用分组的工具会彻底消失、无法在界面上重新打开。
-        registry = build_plugin_registry(None)
+        env_kind = active_kind(cfg)
+        # 激活当前环境以登记其工具（只读枚举路径，与运行一致）
+        try:
+            activate_environment(cfg)
+        except Exception:
+            pass
+        # 幂等装载插件（只读枚举：wired=False，插件不得做破坏性动作）
+        load_plugins(cfg, ctx=PluginContext(config=cfg, wired=False, env_kind=env_kind))
 
         tools = []
-        for p in registry.plugins:
+        for p in TOOL_REGISTRY.values():
             fn = (p.schema or {}).get("function") or {}
-            tools.append(
-                {
-                    "name": p.name,
-                    "description": fn.get("description", "") or "",
-                    "group": p.group,
-                    "source": p.source,
-                    # 视图开关状态：分组是否启用 + 是否被单工具禁用
-                    "group_enabled": p.group in _active_groups,
-                    "disabled": p.name in _disabled_set,
-                    # 外部 MCP 工具额外标出来自哪个 server（自研为 None）
-                    "server": p.meta.get("server") if p.source == "mcp" else None,
-                    "parameters": fn.get("parameters") or {},
-                }
-            )
-        tools.sort(key=lambda t: (t["group"], t["name"]))
+            tools.append({
+                "name": p.name,
+                "description": fn.get("description", "") or "",
+                "source": p.source,          # core | env | plugin | mcp
+                "unit": p.unit,              # 提供者标识
+                "server": p.meta.get("server") if p.source == "mcp" else None,
+                "parameters": fn.get("parameters") or {},
+            })
+        tools.sort(key=lambda t: (t["source"], t["name"]))
+
+        environments = [
+            {"kind": e["kind"], "title": e["title"], "active": e["kind"] == env_kind}
+            for e in list_environments()
+        ]
+        plugins = list_plugins(cfg, env_kind=env_kind)
 
         mcp_cfg = config.load_mcp_config()
         servers = []
         for s in mcp_cfg.get("servers") or []:
             if not isinstance(s, dict):
                 continue
-            servers.append(
-                {
-                    "name": s.get("name", ""),
-                    "enabled": bool(s.get("enabled", True)),
-                    "command": s.get("command", ""),
-                    "args": list(s.get("args") or []),
-                    "url": s.get("url", ""),
-                    # env 只回传键名，不回传值（防密钥泄露）
-                    "env_keys": sorted((s.get("env") or {}).keys()),
-                }
-            )
-        return JSONResponse(
-            {
-                "tools": tools,
-                # 当前生效的分组（与 tools 里的 group_enabled 一致）
-                "groups": sorted(_active_groups),
-                # 分组开关（Web「技能与工具 → 工具」页）：
-                #   all_groups    = 注册表里存在的全部分组（含默认关闭的高危 shell）
-                #   active_groups = 当前实际生效的分组（含 full_access 放行的 shell）
-                "all_groups": sorted({p.group for p in TOOL_REGISTRY.values()}),
-                "active_groups": sorted(set(groups)),
-                # 视图级禁用名单：当前配置禁用的工具（与可用工具列表同源，
-                # 仅做视图展示，不改动全局 TOOL_REGISTRY 原始数据）。
-                "disabled": disabled,
-                # P1 插件装载报告（loaded / skipped / failed 三表；未装载过时为空三表）
-                "plugins": (
-                    last_report().as_dict()
-                    if last_report() is not None
-                    else {"loaded": [], "skipped": [], "failed": []}
-                ),
-                "mcp": {
-                    "enabled": bool(mcp_cfg.get("enabled", False)),
-                    "servers": servers,
-                    "connected": sorted(
-                        {t["server"] for t in tools if t["source"] == "mcp" and t["server"]}
-                    ),
-                },
-            }
-        )
+            servers.append({
+                "name": s.get("name", ""),
+                "enabled": bool(s.get("enabled", True)),
+                "command": s.get("command", ""),
+                "args": list(s.get("args") or []),
+                "url": s.get("url", ""),
+                # env 只回传键名，不回传值（防密钥泄露）
+                "env_keys": sorted((s.get("env") or {}).keys()),
+            })
+
+        return JSONResponse({
+            "environments": environments,
+            "plugins": plugins,
+            "tools": tools,
+            "mcp": {
+                "enabled": bool(mcp_cfg.get("enabled", False)),
+                "servers": servers,
+                "connected": sorted({
+                    t["server"] for t in tools if t["source"] == "mcp" and t["server"]
+                }),
+            },
+        })
     except Exception as e:
         return JSONResponse(
             {"ok": False, "error": f"工具枚举失败: {type(e).__name__}: {e}"}, status_code=500
         )
 
-@router.patch("/tools/disabled")
-async def set_disabled_tools(request: Request):
-    """动态更新禁用工具列表（config.runtime.tools.disabled）。
 
-    - body: {"disabled": ["tool_a", "tool_b"]}（字符串数组，空数组=清空）。
-    - 前置校验：工具名必须存在于当前注册表，非法名返回 400。
-    - 持久化到 ~/.omniagent/config.yaml，重启构建注册表后生效（无热更新）。
-    不改动全局 TOOL_REGISTRY 原始数据（仅配置化视图过滤）。
+@router.patch("/tools/environment")
+async def set_environment(request: Request):
+    """切换当前环境（写 ``runtime.backend``）；重启生效。
+
+    - body: ``{"kind": "host"}``（必须是已注册的环境）。
     """
     import config as app_config
-
-    # P1 工具插件：校验前幂等装载一次，使插件工具名同样可被禁用
-    # （否则迁出后 PATCH 会把合法插件工具名判成"非法工具名"，破坏视图契约）。
-    from omni_core.tools.loader import load_plugins
-
-    load_plugins(app_config.load_config() or {})
+    from devices import registered_kinds
 
     try:
         body = await request.json()
     except Exception:
         return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
-    disabled = (body or {}).get("disabled")
-    if not isinstance(disabled, list) or not all(isinstance(x, str) for x in disabled):
+    kind = (body or {}).get("kind")
+    if not isinstance(kind, str) or kind not in registered_kinds():
         return JSONResponse(
-            {"ok": False, "error": "disabled 必须是字符串数组"}, status_code=400
+            {"ok": False, "error": f"未知环境: {kind!r}（可选 {registered_kinds()}）"},
+            status_code=400,
         )
-    # 前置工具名校验（非法工具名返回 400 报错）
-    valid = set(TOOL_REGISTRY.keys())
-    for name in disabled:
-        if name not in valid:
-            return JSONResponse(
-                {"ok": False, "error": f"非法工具名: {name}"}, status_code=400
-            )
     try:
-        # 读取现有 ~/.omniagent/config.yaml，仅覆盖 runtime.tools.disabled，不丢其他节
-        existing = copy.deepcopy(app_config.load_settings() or {})
+        existing = app_config.load_settings() or {}
         rt = existing.get("runtime") or {}
-        tools = rt.get("tools") or {}
-        tools["disabled"] = list(disabled)
-        rt["tools"] = tools
+        rt["backend"] = kind
         existing["runtime"] = rt
         app_config.save_settings(existing)
-        # 失效配置缓存，使后续 load_config() 即时读到新配置（注册表仍在重启时重建）
         app_config.reload_config()
     except Exception as e:
         return JSONResponse(
             {"ok": False, "error": f"持久化失败: {type(e).__name__}: {e}"}, status_code=500
         )
-    return JSONResponse({"ok": True, "disabled": list(disabled)})
+    return JSONResponse({"ok": True, "environment": kind})
+
+
+@router.patch("/tools/plugins")
+async def set_plugin_enabled(request: Request):
+    """开关一个插件（写 ``~/.omniagent/plugins/<name>.yaml`` 的 ``enabled``）；重启生效。
+
+    - body: ``{"name": "vision", "enabled": true}``。
+    """
+    import config as app_config
+    from omni_core.local.runtime_paths import plugin_config_file
+    from omni_core.tools.loader import list_plugins, plugin_config
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    name = (body or {}).get("name")
+    enabled = (body or {}).get("enabled")
+    if not isinstance(name, str) or not isinstance(enabled, bool):
+        return JSONResponse(
+            {"ok": False, "error": "需要 {name: str, enabled: bool}"}, status_code=400
+        )
+    cfg = app_config.load_config() or {}
+    known = {p["name"] for p in list_plugins(cfg)}
+    if name not in known:
+        return JSONResponse({"ok": False, "error": f"未知插件: {name}"}, status_code=400)
+    try:
+        import yaml
+        data = plugin_config(name) or {}
+        data["enabled"] = enabled
+        path = plugin_config_file(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    except Exception as e:
+        return JSONResponse(
+            {"ok": False, "error": f"写入插件配置失败: {type(e).__name__}: {e}"}, status_code=500
+        )
+    return JSONResponse({"ok": True, "name": name, "enabled": enabled})

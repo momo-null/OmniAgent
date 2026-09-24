@@ -9,10 +9,13 @@
 import pytest
 
 
-class _FakeExec:
-    """最小执行模块替身（满足 ExecutionModule 契约）。"""
+from tests._env import install_fake_env  # noqa: E402
 
-    backend_kind = "host"
+
+class _FakeExec:
+    """最小执行模块替身（满足环境契约 kind / text_of / verify_done）。"""
+
+    kind = "host"
 
     def text_of(self, percept):
         return ""
@@ -38,9 +41,9 @@ class _FakeLoop:
 # 1. 配置快照稳定性
 # ---------------------------------------------------------------------------
 def test_config_snapshot_used_not_global(monkeypatch):
-    import omni_core.local.tool_loop as tl
+    import omni_core.local.loop.core as tl
 
-    monkeypatch.setattr(tl, "ExecutionModule", _FakeExec)
+    install_fake_env(monkeypatch, _FakeExec)
 
     sentinel = {"runtime": {"from_global": True}}
     monkeypatch.setattr(tl.config, "load_config", lambda: sentinel)
@@ -140,18 +143,16 @@ def test_runtime_context_export_includes_run_config():
         ctx = RR.manager.get(tid, RR.AGENT_MAIN)
         ctx.config_hash = "abc123def456"
         ctx.project_id = "p_demo"
-        ctx.enabled_capability_groups = ["device", "python"]
 
         exported = ctx.export()
         assert exported["config_hash"] == "abc123def456"
         assert exported["project_id"] == "p_demo"
-        assert exported["enabled_capability_groups"] == ["device", "python"]
 
         # 阶段 1 目标 3：工具 registry 与设备后端也随运行体导出（完整运行配置）
-        ctx.tool_registry = {"click": 1, "run_python": 1}
-        ctx.execution_backend = type("B", (), {"backend_kind": "host"})()
+        ctx.tool_registry = {"click": 1, "shell_exec": 1}
+        ctx.execution_backend = type("B", (), {"kind": "host"})()
         exported2 = ctx.export()
-        assert exported2["tool_names"] == ["click", "run_python"]
+        assert exported2["tool_names"] == ["click", "shell_exec"]
         assert exported2["execution_backend"] == "host"
 
         # 运行表也能按复合键导出同一份完整配置

@@ -82,7 +82,7 @@ def _gate(has_condition=False, verify_done=(True, ""), peek=(False, "")):
 def _run(monkeypatch, gate, *, max_steps=3, runner=None, **kw):
     runner = runner or _MockRunner()
     monkeypatch.setattr(sl, "Runner", runner)
-    brain = {"model": "m", "base_url": "http://x", "api_key": "k"}
+    brain = {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}
     res = run_subtask_sdk(
         brain,
         instructions="你是一个测试 agent",

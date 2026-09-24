@@ -49,7 +49,7 @@ def main():
     max_steps = int(sys.argv[3]) if len(sys.argv) > 3 else "12"
 
     import yaml
-    from omni_core.local.tool_loop import ToolLoop, TaskSpec
+    from omni_core.local.loop import ToolLoop, TaskSpec
     from omni_core.local.world_model import WorldModel
     from omni_core.local.skill_library import SkillLibrary
 

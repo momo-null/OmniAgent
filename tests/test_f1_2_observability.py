@@ -75,7 +75,7 @@ def _run(monkeypatch, runner, gate=None, **kw):
     monkeypatch.setattr(sl, "Runner", runner)
     gate = gate or _gate(has_condition=False, verify_done=(True, ""))
     return run_subtask_sdk(
-        {"model": "m", "base_url": "http://x", "api_key": "k"},
+        {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"},
         instructions="inst",
         user_input="hi",
         tools=[],
@@ -103,12 +103,12 @@ def test_retry_count_picks_up_repeat_guard_failures(monkeypatch):
 
 def test_brain_calls_tracks_llm_calls_at_toolloop(monkeypatch):
     """ToolLoop 层：brain 角色下 brain_calls / decision_steps 与 action 同数量级。"""
-    from omni_core.local.tool_loop import ToolLoop
+    from omni_core.local.loop import ToolLoop
 
     # 仅替换 Runner 为会触发 on_llm_end/on_tool_end 钩子的实现，其余走真实 run_subtask_sdk
     monkeypatch.setattr(sl, "Runner", _CountingRunner(n_llm=5, n_tool=5))
 
-    loop = ToolLoop({"model": "m", "base_url": "http://x", "api_key": "k"}, verbose=False)
+    loop = ToolLoop({"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}, verbose=False)
     spec = types.SimpleNamespace(objective="o", done_when="", expected=None,
                                 task_id="f12_brain", project_id=None, max_steps=None,
                                 history=[], corrections=[])

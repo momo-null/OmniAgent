@@ -117,7 +117,7 @@ async def get_settings() -> Dict[str, Any]:
     out["llm"].setdefault("providers", {})
     out.setdefault("runtime", {})
     out["runtime"].setdefault("executor", {"enabled": True})
-    out["runtime"].setdefault("vision", {"enabled": True})
+    out["runtime"].setdefault("vision", {"enabled": False})
     out["runtime"].setdefault("agents", {})
     out.setdefault("local_model", {"auto_start": False, "default_model": ""})
     out.setdefault("brain", {})

@@ -12,7 +12,7 @@ import pytest
 
 from omni_core.brain import sdk_loop as sl
 from omni_core.brain.sdk_loop import build_meta_tools
-from omni_core.local.tool_loop import _format_prev_results, _recheck_spec
+from omni_core.local.loop import _format_prev_results, _recheck_spec
 
 
 class _State:
@@ -81,7 +81,7 @@ class _LoopStub:
 
 
 def _bind_recheck(loop):
-    from omni_core.local.tool_loop import ToolLoop
+    from omni_core.local.loop import ToolLoop
     loop._recheck_batch = lambda prev_results, world: ToolLoop._recheck_batch(
         loop, prev_results, world)
     return loop

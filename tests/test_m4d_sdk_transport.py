@@ -174,14 +174,14 @@ def test_bad_arguments_json_degrades_to_raw(monkeypatch):
 
 def test_missing_api_key_raises():
     with pytest.raises(RuntimeError):
-        LLMClient({"base_url": "http://x/v1", "model": "m"})
+        LLMClient({"base_url": "http://127.0.0.1:9/v1", "model": "m"})
 
 
 def test_default_request_settings_forwarded(monkeypatch):
     cli, fake = _client_with_model(
         monkeypatch,
         [_resp()],
-        cfg={"base_url": "http://x/v1", "model": "m", "api_key": "k",
+        cfg={"base_url": "http://127.0.0.1:9/v1", "model": "m", "api_key": "k",
              "request": {"temperature": 0.7, "max_tokens": 512}},
     )
     cli.chat(BASE_MSG)
@@ -190,7 +190,12 @@ def test_default_request_settings_forwarded(monkeypatch):
 
 # --- ---------------------------------------------------------------- 端到端
 def _start_stub_server(responses, requests):
-    """本地 OpenAI 兼容 stub：按脚本返回 chat.completions 响应，并记录请求体。"""
+    """本地 OpenAI 兼容 stub：按脚本返回 chat.completions 响应，并记录请求体。
+
+    ⚠️ SDK 走的是 **stream=True**（见 `REQUEST` 的 `stream` 字段）。若只回非流式 JSON，
+    客户端 SSE 解析不到任何 item → 会被当成「空内容的最终答案」，表现为「只发 1 次请求
+    却 success」——所以必须按 `stream` 分流，流式请求回 SSE chunk。
+    """
 
     class _Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -202,12 +207,50 @@ def _start_stub_server(responses, requests):
             requests.append(body)
             n = len(requests) - 1
             payload = responses[n] if n < len(responses) else {"choices": [{"message": {"content": ""}}]}
-            out = json.dumps(payload).encode("utf-8")
+            if body.get("stream"):
+                self._send_sse(payload)
+            else:
+                out = json.dumps(payload).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(out)))
+                self.end_headers()
+                self.wfile.write(out)
+
+        def _send_sse(self, payload):
+            """把一条 chat.completion 拆成 OpenAI 流式 chunk（SSE）写出。"""
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(out)))
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
-            self.wfile.write(out)
+            choice = (payload.get("choices") or [{}])[0]
+            msg = choice.get("message") or {}
+            base = {
+                "id": payload.get("id", "1"),
+                "object": "chat.completion.chunk",
+                "created": payload.get("created", 0),
+                "model": payload.get("model", "stub"),
+            }
+
+            def _emit(delta, finish=None):
+                chunk = dict(base, choices=[{"index": 0, "delta": delta, "finish_reason": finish}])
+                self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+
+            _emit({"role": "assistant", "content": msg.get("content") or ""})
+            for i, tc in enumerate(msg.get("tool_calls") or []):
+                fn = tc.get("function") or {}
+                # 流式协议要求 tool_calls 带 index（客户端按 index 聚合）
+                _emit({"tool_calls": [{
+                    "index": i,
+                    "id": tc.get("id", f"call_{i}"),
+                    "type": tc.get("type", "function"),
+                    "function": {"name": fn.get("name", ""),
+                                 "arguments": fn.get("arguments", "{}")},
+                }]})
+            _emit({}, finish=choice.get("finish_reason") or "stop")
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
 
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -215,6 +258,8 @@ def _start_stub_server(responses, requests):
 
 
 def _chat_reply(message, finish="stop"):
+    # 补齐 OpenAI chat.completion 的规范必填字段 role（stub 也应是合法响应体）。
+    message = {"role": "assistant", **message}
     return {
         "id": "1",
         "object": "chat.completion",
@@ -227,7 +272,7 @@ def _chat_reply(message, finish="stop"):
 
 def test_end_to_end_via_local_openai_compatible_server(monkeypatch):
     """真 transport 跑一次 ToolLoop.run_task：observe -> task_done。"""
-    from omni_core.local.tool_loop import ToolLoop, TaskSpec
+    from omni_core.local.loop import ToolLoop, TaskSpec
 
     requests = []
     responses = [
@@ -249,10 +294,10 @@ def test_end_to_end_via_local_openai_compatible_server(monkeypatch):
         port = srv.server_address[1]
 
         class _FakeBackend:
+            kind = "host"
+
             def __init__(self, *a, **k):
-                self.backend = self
                 self.texted = []
-                self.backend_kind = "host"  # 阶段 0.5：ExecutionModule 契约字段（host 模式，不暴露 Android 工具）
 
             def observe(self):
                 return {"ok": True, "percept": "p"}
@@ -263,7 +308,13 @@ def test_end_to_end_via_local_openai_compatible_server(monkeypatch):
             def verify_done(self, cond, percept):
                 return True, "ok"
 
-        monkeypatch.setattr("omni_core.local.loop.core.ExecutionModule", _FakeBackend)
+        # observe 是 **host 环境**的工具：先把它注册（import 即注册），
+        # 再把 fake 后端绑给工具面，并让内核拿到 fake 环境句柄。
+        from environments.host import tools as host_tools
+
+        fake = _FakeBackend()
+        host_tools.bind(fake)
+        monkeypatch.setattr("omni_core.local.loop.core.activate_environment", lambda *a, **k: fake)
         loop = ToolLoop(
             {"model": "stub", "base_url": f"http://127.0.0.1:{port}/v1",
              "capabilities": {}, "api_key": "stub-key"},

@@ -576,7 +576,6 @@ type SelKey = { kind: "provider" | "agent" | "channel"; name: string };
 function ChannelsTab() {
   const [brain, setBrain] = useState<ChannelCfg>({});
   const [executor, setExecutor] = useState<ChannelCfg>({ enabled: true });
-  const [vision, setVision] = useState<ChannelCfg>({ enabled: true });
   const [localAsTool, setLocalAsTool] = useState<ChannelCfg>({ enabled: true });
   const [providers, setProviders] = useState<Record<string, ProviderCfg>>({});
   const [agents, setAgents] = useState<Record<string, AgentCfg>>({});
@@ -586,11 +585,11 @@ function ChannelsTab() {
   useEffect(() => {
     settingsApi.get().then((r) => {
       const d = r.data as any;
-      // 三通道单一真源：brain 顶层，executor/vision 嵌套在 runtime 下
+      // 通道单一真源：brain 顶层；executor/agents 嵌套在 runtime 下
+      // （vision 已降为纯插件：配置在 ~/.omniagent/plugins/vision.yaml，前端只有 Tools 页一个开关）
       if (d?.brain) setBrain(d.brain);
       const rt = d?.runtime || {};
       if (rt.executor) setExecutor(rt.executor);
-      if (rt.vision) setVision(rt.vision);
       if (rt.agents) setAgents(rt.agents);
       if (d?.llm?.local_as_tool) setLocalAsTool(d.llm.local_as_tool);
       if (d?.llm?.providers) setProviders(d.llm.providers);
@@ -601,11 +600,10 @@ function ChannelsTab() {
   const handleSave = async () => {
     setError(""); setSaved("");
     try {
-      // 旧通道（brain / executor / vision / local_as_tool）与新 schema（providers / agents）一并提交；
-      // 内核在有 runtime.agents 时优先用新 schema，否则回退旧通道。
+      // 通道（brain / executor / local_as_tool）+ provider/agent schema 一并提交。
       const patch: Record<string, unknown> = {
         brain,
-        runtime: { executor, vision, agents },
+        runtime: { executor, agents },
         llm: { local_as_tool: localAsTool, providers },
       };
       const r = await settingsApi.put(patch);
@@ -640,7 +638,6 @@ function ChannelsTab() {
   const OLD_CHANNELS: { key: string; title: string; subtitle: string; cfg: ChannelCfg; set: (c: ChannelCfg) => void; canDisable: boolean }[] = [
     { key: "brain", title: "主模型", subtitle: "主 agent（默认自己跑完整任务）", cfg: brain, set: setBrain, canDisable: false },
     { key: "executor", title: "子 agent 模型", subtitle: "主 agent 派发子任务时用的模型（可配本地高频模型）", cfg: executor, set: setExecutor, canDisable: true },
-    { key: "vision", title: "视觉（vision）", subtitle: "本地 VLM 视觉工具", cfg: vision, set: setVision, canDisable: true },
     { key: "local_as_tool", title: "本地模型（工具）", subtitle: "以 local_infer 工具暴露，由主模型决定是否派发", cfg: localAsTool, set: setLocalAsTool, canDisable: true },
   ];
 

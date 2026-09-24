@@ -20,7 +20,7 @@ from pathlib import Path
 # 仓库根加入 path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from omni_core.local.tool_loop import ToolLoop, TaskSpec
+from omni_core.local.loop import ToolLoop, TaskSpec
 from omni_core.local.runtime_paths import project_world_model, project_trajectory
 
 

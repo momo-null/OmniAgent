@@ -315,13 +315,10 @@ class _CompactionModel(Model):
         return self.summary_msg
 
     def _call_summarize(self, system_instructions: Any, ctx: List[Any]) -> Optional[str]:
-        """调用摘要回调：优先带系统提示（热前缀），兼容只收 items 的旧回调。"""
+        """调用摘要回调（带当前系统提示作热前缀）。"""
         try:
             if system_instructions is not None:
-                try:
-                    return self._summarize(ctx, system_instructions)
-                except TypeError:
-                    pass
+                return self._summarize(ctx, system_instructions)
             return self._summarize(ctx)
         except Exception:
             return None
@@ -930,6 +927,13 @@ async def _run_loop_streamed(agent, items, turns, hooks, on_llm_delta, on_llm_fi
 _MCP_MAX_ATTEMPTS = 10          # 连续失败上限，达到即放弃该服务
 _MCP_RETRY_BASE_SEC = 0.5       # 初始退避
 _MCP_RETRY_MAX_SEC = 30.0       # 退避上限
+# 单次运行内、单个 server 的**连接探活总预算**（秒，含退避等待与单次调用耗时）。
+# 为什么必须有：MCP 是增强项，绝不能挡住「首次大脑调用」。此前一个配了但不可达的
+# server（mcp.json 指向未启动的本地服务）会让 10 次指数退避累计空等
+# 0.5+1+2+4+8+16+30×3 + 10 次连接 ≈ 143s，且**期间零输出**——用户看到的就是
+# 「发完消息什么都不返回」。超出预算即本轮跳过该 server，下轮再试。
+# <= 0 表示**不限**（仅测试用：验证退避/放弃语义本身，不受预算干扰）。
+_MCP_CONNECT_BUDGET_SEC = 8.0
 _MCP_FAIL_STREAK: Dict[str, int] = {}      # 服务名 -> 连续失败次数
 _MCP_ABANDONED: Dict[str, bool] = {}       # 连续失败达上限 -> 本次进程内放弃
 _MCP_SLEEP = time.sleep                    # 可注入（测试无需真等）
@@ -938,6 +942,24 @@ _MCP_SLEEP = time.sleep                    # 可注入（测试无需真等）
 def _mcp_backoff_delay(attempt: int) -> float:
     """指数退避：0.5s 起、30s 封顶。"""
     return min(_MCP_RETRY_BASE_SEC * (2 ** max(0, attempt - 1)), _MCP_RETRY_MAX_SEC)
+
+
+def _mcp_attempt_timeout(configured: Any, left: float) -> Optional[float]:
+    """单次连接/探活超时 = ``min(配置超时, 剩余预算)``（预算不被单次调用击穿）。
+
+    - 有配置超时：取它与剩余预算的较小值；
+    - 无配置超时（None/非法）：预算有限时以剩余预算为超时（不再无限等）；
+      预算不限（``inf``）时返回 None，沿用 SDK 默认，不额外设限。
+    """
+    try:
+        t = float(configured)
+    except (TypeError, ValueError):
+        t = 0.0
+    if t <= 0:
+        if left == float("inf"):
+            return None
+        return max(0.1, left)
+    return max(0.1, min(t, left))
 
 
 def _mcp_note_failure(name: str) -> bool:
@@ -973,7 +995,11 @@ def _ensure_mcp_connected(servers: List[Any]) -> List[Any]:
     - 超时：连接与探活均带超时（取 SDK 原生 ``client_session_timeout_seconds``，
       由 mcp.json 的 ``timeout_ms`` 透传，默认 60000ms）；
     - 指数退避重试：0.5s 起、30s 封顶，连续 10 次失败则放弃该服务（本次进程内
-      后续运行直接跳过），探活成功后计数清零。
+      后续运行直接跳过），探活成功后计数清零；
+    - **总预算**：单 server 的连接探活（含退避等待）累计不超过
+      ``_MCP_CONNECT_BUDGET_SEC``，超出即本轮跳过——保证「不可达 server」最多让
+      首次大脑调用晚几秒，而不是几分钟（历史事故：指向未启动服务的 server 让一次
+      纯闲聊空等 143s 且零输出）。
     """
     connected: List[Any] = []
     for s in servers:
@@ -986,28 +1012,41 @@ def _ensure_mcp_connected(servers: List[Any]) -> List[Any]:
                   f"本次跳过（重启后重试）", flush=True)
             continue
         _timeout = getattr(s, "client_session_timeout_seconds", None)
+        # 预算 <= 0 视为不限；用 inf 表示，使下面的两处比较自然失效
+        _budget = (float(_MCP_CONNECT_BUDGET_SEC)
+                   if (_MCP_CONNECT_BUDGET_SEC or 0) > 0 else float("inf"))
+        _deadline = time.monotonic() + _budget
         ok = False
         attempt = 0
         last_err: Optional[BaseException] = None
         while attempt < _MCP_MAX_ATTEMPTS:
+            _left = _deadline - time.monotonic()
+            if _left <= 0:
+                last_err = last_err or TimeoutError(
+                    f"连接探活超出总预算 {_MCP_CONNECT_BUDGET_SEC:g}s")
+                break
             attempt += 1
             try:
                 if getattr(s, "session", None) is None:
-                    run_async(s.connect(), timeout=_timeout)
+                    run_async(s.connect(), timeout=_mcp_attempt_timeout(_timeout, _left))
                 # 探活：能列出工具才视为可用；连上却列不出 = 半死，不纳入 agent。
-                run_async(s.list_tools(), timeout=_timeout)
+                run_async(s.list_tools(), timeout=_mcp_attempt_timeout(_timeout, _left))
                 ok = True
                 break
             except Exception as e:
                 last_err = e
                 if _mcp_note_failure(_nm):
                     break
-                _MCP_SLEEP(_mcp_backoff_delay(attempt))
+                _delay = _mcp_backoff_delay(attempt)
+                if time.monotonic() + _delay > _deadline:
+                    break        # 预算不足以再退避一次：本轮到此为止，下轮再试
+                _MCP_SLEEP(_delay)
         if ok:
             _mcp_note_success(_nm)
             connected.append(s)
             continue
-        print(f"[sdk_loop] MCP server {_nm} 不可用，已跳过: "
+        print(f"[sdk_loop] MCP server {_nm} 不可用，已跳过（尝试 {attempt} 次，"
+              f"预算 {'不限' if _budget == float('inf') else f'{_budget:g}s'}）: "
               f"{type(last_err).__name__ if last_err else '?'}: {last_err}", flush=True)
     return connected
 

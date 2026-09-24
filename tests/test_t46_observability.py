@@ -11,7 +11,7 @@ import types
 import pytest
 
 from omni_core.brain import sdk_loop as sl
-from omni_core.local.tool_loop import (
+from omni_core.local.loop import (
     ToolLoop, _SubtaskGate, _request_fingerprint,
 )
 
@@ -31,7 +31,7 @@ class _Rec:
 
 
 def _loop():
-    return ToolLoop({"model": "m", "base_url": "http://x", "api_key": "k"}, verbose=False)
+    return ToolLoop({"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}, verbose=False)
 
 
 # --- 1. 指标回填：brain_calls / decision_steps --------------------------------
@@ -88,7 +88,7 @@ def test_max_turns_exceeded_only_advances_one_step(monkeypatch):
                                  peek=lambda: (False, ""), verify_count=0,
                                  has_condition=False)
     res = sl.run_subtask_sdk(
-        {"model": "m", "base_url": "http://x", "api_key": "k"},
+        {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"},
         instructions="do", user_input="hi", tools=[], gate=gate,
         max_steps=5, chunk_turns=50, should_stop=lambda: False,
     )

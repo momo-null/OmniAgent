@@ -30,8 +30,15 @@ def test_no_execution_backend_impl_in_kernel():
 
     import devices
 
-    for cls in ("ExecutionBackend", "HostBackend", "EmulatorBackend", "ExecutionModule"):
-        assert hasattr(devices, cls), f"devices 包应导出 {cls}"
+    # 适配层只导出：契约（Environment）+ 注册表 + 句柄（见 §5.5）
+    for name in (
+        "Environment", "ExecutionModule", "register_environment",
+        "create_backend", "registered_kinds", "list_environments", "bind_tools",
+    ):
+        assert hasattr(devices, name), f"devices 包应导出 {name}"
+    # 共享厚接口已删（各环境内部实现，不再由 devices 导出）
+    for gone in ("ExecutionBackend", "HostBackend", "EmulatorBackend"):
+        assert not hasattr(devices, gone), f"{gone} 应已从 devices 删除（各归 environments/）"
 
 
 def test_kernel_does_not_reference_device_modules():
@@ -88,7 +95,7 @@ def test_ci_workflow_runs_strict_lint():
 # --- M4d/e 协议清理与废弃标记 ----------------------------------------------
 def test_legacy_loop_fully_removed():
     """M4/M5：旧手搓 ReAct 循环及其废弃标记已彻底移除（功能由 SDK Runner 取代）。"""
-    import omni_core.local.tool_loop as tool_loop
+    import omni_core.local.loop.core as tool_loop
 
     src = Path(inspect.getfile(tool_loop)).read_text(encoding="utf-8")
     assert "def _run_inner(" not in src

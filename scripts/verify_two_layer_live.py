@@ -46,7 +46,7 @@ def main():
 
     # ---------- 复用已运行的 4B-vl（8085） ----------
     log("step1: 探测已运行的 4B-vl（不重复启动）...")
-    from omni_core.tools.vision_runtime import VisionRuntime
+    from plugins.vision.runtime import VisionRuntime
 
     base_url = VisionRuntime._probe_local_vlm()
     if not base_url:
@@ -88,7 +88,7 @@ def main():
         "request": {"temperature": 0.3, "max_tokens": 2048},
     }
 
-    from omni_core.local.tool_loop import ToolLoop, TaskSpec
+    from omni_core.local.loop import ToolLoop, TaskSpec
 
     loop = ToolLoop(brain_cfg, executor_cfg=executor_cfg, verbose=True, max_history=12)
     out["tool_count"] = len(loop.registry.schemas)

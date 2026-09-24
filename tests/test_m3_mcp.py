@@ -62,7 +62,7 @@ def test_log_callback_used_on_bad_config(monkeypatch):
     monkeypatch.setattr(m, "MCPServerStdio", _boom)
     logs = []
     servers = build_mcp_servers(
-        [{"name": "bad", "command": "x"}, {"name": "ok", "url": "http://x/mcp"}],
+        [{"name": "bad", "command": "x"}, {"name": "ok", "url": "http://127.0.0.1:9/mcp"}],
         log=logs.append,
     )
     assert any("bad" in line for line in logs)

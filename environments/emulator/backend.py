@@ -40,11 +40,12 @@ def _get_ocr_reader():
     return _EMULATOR_OCR_READER
 
 from utils import get_logger
-from devices.base import ExecutionBackend
 
 
-class EmulatorBackend(ExecutionBackend):
-    name = "emulator"
+class EmulatorBackend:
+    kind = "emulator"
+    #: 平台展示名（环境自报，供 system prompt 对齐语义；内核零硬编码）
+    platform = "Android"
 
     def __init__(self, config: Optional[dict] = None):
         self.logger = get_logger("execution.emulator")
@@ -400,10 +401,9 @@ class EmulatorBackend(ExecutionBackend):
     # --- 截图 ---------------------------------------------------------------
     def screenshot(self, save_path: Optional[str] = None) -> Dict[str, Any]:
         try:
-            save_path = save_path or os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                "temp", "emulator_screenshot.png"
-            )
+            if not save_path:
+                from omni_core.tools.workspace import task_tmp_dir
+                save_path = str(task_tmp_dir() / "emulator_screenshot.png")
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             self.d.screenshot(save_path)
             return {"ok": True, "path": save_path}
@@ -447,6 +447,69 @@ class EmulatorBackend(ExecutionBackend):
                 return {"ok": True, "code": int(code), "via": "shell"}
             except Exception as e2:
                 return {"ok": False, "error": f"{type(e2).__name__}: {e2}"}
+
+    # --- 设备侧 shell / 文件（adb；基于 u2 设备句柄，零额外 adb 路径配置）------
+    def device_shell(self, command: str) -> Dict[str, Any]:
+        """在设备上执行 shell 命令（``adb shell`` 语义，**不是宿主机命令**）。"""
+        cmd = str(command or "").strip()
+        if not cmd:
+            return {"ok": False, "error": "command 不能为空"}
+        try:
+            res = self.d.shell(cmd)
+            out, code = self._shell_result(res)
+            return {"ok": True, "output": out, "exit_code": code}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def device_push(self, local_path: str, remote_path: str) -> Dict[str, Any]:
+        """把**宿主机**文件推到设备（``local_path`` 相对路径基准 = 当前任务临时目录）。"""
+        try:
+            from omni_core.tools.workspace import resolve_path
+            src = resolve_path(local_path)
+            if not src.is_file():
+                return {"ok": False, "error": f"本地文件不存在: {local_path}"}
+            self.d.push(str(src), str(remote_path))
+            return {"ok": True, "local": str(src), "remote": str(remote_path)}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def device_pull(self, remote_path: str, local_path: str = "") -> Dict[str, Any]:
+        """把设备文件拉到**宿主机**（缺省落当前任务临时目录，保留原文件名）。"""
+        remote = str(remote_path or "").strip()
+        if not remote:
+            return {"ok": False, "error": "remote_path 不能为空"}
+        try:
+            from omni_core.tools.workspace import resolve_path, task_tmp_dir
+            dst = resolve_path(local_path) if local_path else (task_tmp_dir() / os.path.basename(remote))
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            self.d.pull(remote, str(dst))
+            return {"ok": True, "remote": remote, "local": str(dst)}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    def device_list_dir(self, remote_path: str = "/sdcard") -> Dict[str, Any]:
+        """列举设备目录（``ls -1``；返回条目名列表）。"""
+        remote = str(remote_path or "").strip() or "/sdcard"
+        try:
+            import shlex
+            res = self.d.shell(f"ls -1 {shlex.quote(remote)}")
+            out, _code = self._shell_result(res)
+            items = [ln.strip() for ln in str(out).splitlines() if ln.strip()]
+            if not items:
+                return {"ok": False, "error": f"目录不存在或为空: {remote}", "path": remote}
+            return {"ok": True, "path": remote, "count": len(items), "items": items}
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+    @staticmethod
+    def _shell_result(res: Any) -> tuple:
+        """归一 ``u2`` 的 shell 返回值（新版带 ``.output``/``.exit_code``，旧版为字符串）。"""
+        if isinstance(res, (tuple, list)) and len(res) == 2:
+            return str(res[0]), res[1]
+        out = getattr(res, "output", None)
+        if out is None:
+            return str(res), None
+        return str(out), getattr(res, "exit_code", None)
 
     # --- 去场景化（§9）：感知文本化 / 完成判定，emulator 以 OCR 为主 ----------
     def text_of(self, percept: Dict[str, Any]) -> str:

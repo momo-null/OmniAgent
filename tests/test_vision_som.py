@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PIL import Image, ImageDraw
 
-from omni_core.tools.vision_runtime import (
+from plugins.vision.runtime import (
     LocalVision,
     VisionRuntime,
     build_som,
@@ -31,8 +31,9 @@ vision_tool = None
 
 
 @pytest.fixture(autouse=True)
-def _load_official_plugins():
+def _load_official_plugins(enable_plugin):
     global vision_tool
+    enable_plugin("vision")  # vision 默认停用，测试先显式打开
     load_plugins({})
     vision_tool = plugin_module("vision")
     assert vision_tool is not None, "vision 插件未装载"

@@ -36,7 +36,6 @@ class RuntimeContext:
     - config_snapshot / config_hash：运行级不可变配置快照（阶段 0.5 注入）。
     - outbox：预留——task-scoped 事件队列当前由 RuntimeManager 按 task_id 单独托管，
       后续可并入此处（阶段 1 目标 3：事件 sink 不再依赖模块级可变对象）。
-    - enabled_capability_groups：预留（阶段 2 能力模型）。
     """
 
     task_id: str = ""
@@ -50,8 +49,7 @@ class RuntimeContext:
     config_snapshot: Optional[Dict[str, Any]] = None
     config_hash: str = ""
     cancellation_token: Any = None
-    enabled_capability_groups: List[str] = field(default_factory=list)
-    # 阶段 1 目标 3：工具 registry 与设备后端实例由运行体携带，不再隐式依赖模块级全局对象。
+    # 阶段 1 目标 3：工具 registry 与环境后端实例由运行体携带，不再隐式依赖模块级全局对象。
     tool_registry: Any = None
     execution_backend: Any = None
 
@@ -67,9 +65,8 @@ class RuntimeContext:
             "started_at": self.started_at,
             "state": self.state,
             "config_hash": self.config_hash,
-            "enabled_capability_groups": list(self.enabled_capability_groups),
             "tool_names": sorted(_reg.keys()) if _reg else [],
-            "execution_backend": getattr(self.execution_backend, "backend_kind", "") or "",
+            "execution_backend": getattr(self.execution_backend, "kind", "") or "",
         }
 
 

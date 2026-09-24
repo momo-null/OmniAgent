@@ -1,7 +1,7 @@
-"""HostBackend：本机执行后端（pyautogui + mss + EasyOCR observer）。
+"""HostBackend：本机环境（Windows）—— pyautogui 键鼠 + mss 截图 + EasyOCR 观测。
 
-把本机控制逻辑按 ExecutionBackend 抽象实现。属 L1 设备能力层，
-observe / read_screen_text 复用 devices.observer（轻量 EasyOCR，纯 CPU）。
+属 ``environments/host/`` 自带实现；对内核只暴露契约三成员（``kind`` / ``text_of`` /
+``verify_done``），其余原语（键鼠 / 截图 / OCR）供本环境工具调用。
 """
 import os
 import time
@@ -10,11 +10,12 @@ from typing import Any, Dict, Optional
 import pyautogui
 
 from utils import get_logger
-from devices.base import ExecutionBackend
 
 
-class HostBackend(ExecutionBackend):
-    name = "host"
+class HostBackend:
+    kind = "host"
+    #: 平台展示名（环境自报，供 system prompt 对齐语义；内核零硬编码）
+    platform = "Windows"
 
     def __init__(self, config: Optional[dict] = None):
         self.logger = get_logger("execution.host")
@@ -41,6 +42,11 @@ class HostBackend(ExecutionBackend):
         except Exception as e:
             self.logger.warning(f"读取实际分辨率失败: {e}")
         self.logger.info(f"HostBackend 初始化完成，屏幕: {self.screen_width}x{self.screen_height}")
+
+    # --- 坐标归一化（供本环境工具调用）-------------------------------------
+
+
+
 
     # --- 坐标 ---------------------------------------------------------------
     def normalize_coordinate(self, x: float, y: float):
@@ -105,7 +111,7 @@ class HostBackend(ExecutionBackend):
 
     # --- 感知（委托 observer）------------------------------------------------
     def observe(self) -> Dict[str, Any]:
-        from devices import observer
+        from environments.host import observer
         obs = observer.observe()
         return {
             "active_window": obs.get("active_window", ""),
@@ -113,7 +119,7 @@ class HostBackend(ExecutionBackend):
         }
 
     def read_screen_text(self) -> Dict[str, Any]:
-        from devices import observer
+        from environments.host import observer
         return {"ocr_text": observer.read_screen_text()}
 
     # --- 感知文本化 / 完成判定（覆盖基类抽象，屏幕形状） ---------------------
@@ -146,10 +152,9 @@ class HostBackend(ExecutionBackend):
     def screenshot(self, save_path: Optional[str] = None) -> Dict[str, Any]:
         import mss
         try:
-            save_path = save_path or os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                "temp", "host_screenshot.png"
-            )
+            if not save_path:
+                from omni_core.tools.workspace import task_tmp_dir
+                save_path = str(task_tmp_dir() / "host_screenshot.png")
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             with mss.mss() as sct:
                 sct.shot(output=save_path)

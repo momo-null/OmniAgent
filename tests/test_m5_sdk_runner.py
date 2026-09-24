@@ -19,7 +19,7 @@ import pytest
 from agents import Agent
 from agents.tool import FunctionTool
 
-from omni_core.local.tool_loop import ToolLoop, TaskSpec
+from omni_core.local.loop import ToolLoop, TaskSpec
 
 
 def test_main_paths_no_longer_use_legacy_loop():

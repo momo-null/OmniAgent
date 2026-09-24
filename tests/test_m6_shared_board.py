@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from omni_core.local.tool_loop import ToolLoop
+from omni_core.local.loop import ToolLoop
 from omni_core.local.world_model import WorldModel
 from omni_core.local.task_store import SubtaskStore, PENDING, RUNNING, DONE, FAILED
 import omni_core.local.runtime_paths as _RP
@@ -223,7 +223,7 @@ def test_subtask_failed_and_release(tmp_path):
 def test_m10_single_entry_point():
     """M10：只有 run_task 一个入口；run_task_two_layer 退化为它的兼容别名。"""
     import inspect
-    from omni_core.local.tool_loop import ToolLoop
+    from omni_core.local.loop import ToolLoop
     import omni_core.local.loop as _lp
 
     _ld = Path(inspect.getfile(_lp)).parent

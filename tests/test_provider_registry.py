@@ -1,7 +1,9 @@
 """工具注册表单测（工具定义走 SDK `function_tool`）。
 
-覆盖：按名派发、schema 聚合与分组过滤、异常兜底、外部工具平级注册。
-插件一律通过 SDK 的 function_tool 登记，注册表只做「枚举 + 同步 invoke」的视图。
+覆盖：按名派发、schema 聚合、异常兜底、外部工具平级注册。
+插件一律通过 SDK 的 function_tool 登记，注册表只做「枚举 + 同步 invoke」的只读视图
+——**启停由各装载器在注册前决定**（环境按 `runtime.backend`、插件按 `enabled`），
+注册表自身不过滤。
 """
 from omni_core.tools.base import (
     TOOL_REGISTRY,
@@ -16,10 +18,10 @@ from omni_core.tools.base import (
 )
 
 
-def _fake_plugin(name, group, ret, boom=False):
+def _fake_plugin(name, unit, ret, boom=False):
     """用 SDK function_tool 登记一个假插件（与真实插件同路径）。"""
 
-    @function_tool(name=name, description=name, group=group)
+    @function_tool(name=name, description=name, unit=unit)
     def _fake(value: str = "") -> dict:
         if boom:
             raise RuntimeError("kaboom")
@@ -57,18 +59,19 @@ def test_registry_catches_plugin_exception():
         unregister_tool("_t_boom")
 
 
-def test_group_filter_and_schema_aggregation():
-    register_external(_fake_plugin("_t_a", "grpA", {}))
-    register_external(_fake_plugin("_t_b", "grpB", {}))
+def test_registry_aggregates_all_registered():
+    """注册表是只读视图：已注册的都列出、schema / SDK 工具清单同源（无分组过滤）。"""
+    register_external(_fake_plugin("_t_a", "unitA", {}))
+    register_external(_fake_plugin("_t_b", "unitB", {}))
     try:
-        reg = PluginRegistry(["grpA"])
+        reg = PluginRegistry()
         assert reg.names().count("_t_a") == 1
-        assert "_t_b" not in reg.names()
-        assert {s["function"]["name"] for s in reg.schemas} == {"_t_a"}
-        # 交给 SDK Agent 的工具清单同样受分组过滤
-        assert [t.name for t in sdk_tools(["grpA"])] == ["_t_a"]
-        # 未指定分组 = 全部启用
-        assert "_t_b" in build_plugin_registry().names()
+        assert {"_t_a", "_t_b"} <= set(reg.names())
+        assert {"_t_a", "_t_b"} <= {s["function"]["name"] for s in reg.schemas}
+        assert {"_t_a", "_t_b"} <= {t.name for t in sdk_tools()}
+        assert {"_t_a", "_t_b"} <= set(build_plugin_registry().names())
+        # unit 是元数据（提供者标识），不再参与启停过滤
+        assert TOOL_REGISTRY["_t_a"].unit == "unitA"
     finally:
         unregister_tool("_t_a")
         unregister_tool("_t_b")

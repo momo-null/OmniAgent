@@ -32,7 +32,7 @@ from omni_core.brain.sdk_loop import classify_provider_error, run_subtask_sdk
 # --- 真实 openai 异常构造 -----------------------------------------------------
 def _make_status_error(code: int):
     """构造带真实 HTTP 状态码的 openai 服务侧异常（贴近真实 SDK 的子类名）。"""
-    req = httpx.Request("POST", "http://x")
+    req = httpx.Request("POST", "http://127.0.0.1:9")
     resp = httpx.Response(code, request=req)
     cls = {
         401: AuthenticationError,
@@ -68,7 +68,7 @@ def test_classify_401_403_408_5xx_all_degrade():
 
 def test_classify_network_errors_degrade_without_status():
     # 网络层无 HTTP 状态码，靠通用类名兜底
-    req = httpx.Request("POST", "http://x")
+    req = httpx.Request("POST", "http://127.0.0.1:9")
     assert "网络" in (classify_provider_error(APIConnectionError(message="conn", request=req)) or "")
     assert "网络" in (classify_provider_error(APITimeoutError(request=req)) or "")
 
@@ -81,7 +81,7 @@ def test_classify_non_provider_returns_none():
     assert classify_provider_error(
         BadRequestError(
             "bad",
-            response=httpx.Response(400, request=httpx.Request("POST", "http://x")),
+            response=httpx.Response(400, request=httpx.Request("POST", "http://127.0.0.1:9")),
             body=None,
         )
     ) is None
@@ -100,7 +100,7 @@ def _run_with_provider_error(monkeypatch, exc):
     import omni_core.brain.sdk_loop as sl
 
     monkeypatch.setattr(sl, "run_async", _make_raiser(exc))
-    brain = {"model": "m", "base_url": "http://x", "api_key": "k"}
+    brain = {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}
     gate = types.SimpleNamespace(verify_done=lambda: (False, ""), verify_count=0)
     return run_subtask_sdk(
         brain,
@@ -138,7 +138,7 @@ def test_run_subtask_sdk_5xx_sets_provider_error(monkeypatch):
 
 
 def test_run_subtask_sdk_network_sets_provider_error(monkeypatch):
-    res = _run_with_provider_error(monkeypatch, APIConnectionError(message="conn", request=httpx.Request("POST", "http://x")))
+    res = _run_with_provider_error(monkeypatch, APIConnectionError(message="conn", request=httpx.Request("POST", "http://127.0.0.1:9")))
     assert res["provider_error"] is True
     assert "网络" in res["reason"]
 
@@ -154,7 +154,7 @@ def test_provider_error_task_stored_paused_no_finished_at(tmp_path, monkeypatch)
     """走真实 ToolLoop.run_task 全链路：SDK 抛 402 -> 任务索引 paused、无 finished_at。"""
     from omni_core.local import runtime_paths as P
     from omni_core.local.task_store import TaskStore
-    from omni_core.local.tool_loop import ToolLoop, TaskSpec
+    from omni_core.local.loop import ToolLoop, TaskSpec
 
     # 隔离 home（conftest 已做，这里再确保一次以自包含）
     fake = tmp_path / ".omniagent"
@@ -170,7 +170,7 @@ def test_provider_error_task_stored_paused_no_finished_at(tmp_path, monkeypatch)
     tid = meta["task_id"]
 
     loop = ToolLoop(
-        {"model": "m", "base_url": "http://x", "api_key": "k", "capabilities": {}},
+        {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k", "capabilities": {}},
         verbose=False,
     )
     res = loop.run_task(TaskSpec(objective="o", task_id=tid, max_steps=1))

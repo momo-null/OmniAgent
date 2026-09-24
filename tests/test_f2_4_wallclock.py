@@ -11,12 +11,12 @@ import types
 import pytest
 
 from omni_core.brain import sdk_loop as sl
-from omni_core.local.tool_loop import ToolLoop
+from omni_core.local.loop import ToolLoop
 import config as config_mod
 
 
 def _loop():
-    return ToolLoop({"model": "m", "base_url": "http://x", "api_key": "k"}, verbose=False)
+    return ToolLoop({"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}, verbose=False)
 
 
 def _cfg_patch(monkeypatch, value):

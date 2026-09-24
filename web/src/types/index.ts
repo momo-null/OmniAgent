@@ -194,14 +194,25 @@ export interface ProcessItem {
 export interface ToolInfo {
   name: string;
   description: string;
-  group: string; // vision / device / python / mcp
-  source: "builtin" | "mcp";
-  server: string | null; // 外部 MCP 工具所属 server；自研为 null
+  source: "core" | "env" | "plugin" | "mcp";
+  unit: string; // 提供者标识：环境 kind / 插件名 / "core" / MCP server 名
+  server: string | null; // 外部 MCP 工具所属 server；其余为 null
   parameters: Record<string, unknown>;
-  // 所属分组是否启用（分组关了，单工具开关仍可配但不会生效）
-  group_enabled?: boolean;
-  // 是否被单工具禁用（runtime.tools.disabled）
-  disabled?: boolean;
+}
+
+export interface EnvironmentInfo {
+  kind: string;
+  title: string;
+  active: boolean;
+}
+
+export interface PluginInfo {
+  name: string;
+  title: string;
+  description: string;
+  enabled: boolean;
+  requires_env: string[];
+  available: boolean;
 }
 
 export interface McpServerInfo {
@@ -214,14 +225,9 @@ export interface McpServerInfo {
 }
 
 export interface ToolsResponse {
+  environments: EnvironmentInfo[];
+  plugins: PluginInfo[];
   tools: ToolInfo[];
-  groups: string[];
-  // 注册表里存在的全部分组（含默认关闭的高危 shell），供分组开关渲染
-  all_groups?: string[];
-  // 当前实际生效的分组（含 full_access 放行的 shell）
-  active_groups?: string[];
-  // 视图级单工具禁用名单（runtime.tools.disabled），缺省空=不过滤
-  disabled?: string[];
   mcp: {
     enabled: boolean;
     servers: McpServerInfo[];

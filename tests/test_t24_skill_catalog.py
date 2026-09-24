@@ -11,7 +11,7 @@ from omni_core.local.knowledge_inject import (
     format_skill_catalog_message,
 )
 from omni_core.local.runtime_paths import global_skills, task_skills
-from omni_core.tools.base import build_plugin_registry
+from omni_core.tools.base import TOOL_REGISTRY, build_plugin_registry
 from omni_core.tools.skill_tool import load_skill, set_skill_task_context
 
 
@@ -112,7 +112,7 @@ def test_catalog_message_is_user_role_and_inserted_in_order(monkeypatch):
         [{"name": "a", "description": "desc-a", "objective_pattern": ""}])
 
     sl.run_subtask_sdk(
-        brain={"model": "m", "base_url": "http://x", "api_key": "k"},
+        brain={"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"},
         instructions="sys",
         user_input="本轮问题",
         tools=[],
@@ -153,14 +153,12 @@ def test_load_skill_truncates_long_content():
     assert "已截断" in res["content"]
 
 
-# === 5. 总开关：默认可见；关闭后目录/工具隐藏 =================================
-def test_skill_tool_in_default_groups_and_hidden_when_disabled():
-    # 默认（groups=None）：注册的所有非 shell 组均可见，含新增的 skill 组
-    default_names = build_plugin_registry(None).names()
-    assert "load_skill" in default_names
-    # 关闭总开关（groups 不含 skill）：工具隐藏
-    narrowed = build_plugin_registry(["vision", "device"]).names()
-    assert "load_skill" not in narrowed
+# === 5. skill 是 core 能力：常开，不再有分组总开关 ==========================
+def test_skill_tool_always_registered():
+    """分组门禁已删（门禁＝环境单选 + 插件开关）；skill 属 core，永远在注册表里。"""
+    reg = build_plugin_registry()
+    assert "load_skill" in reg.names()
+    assert TOOL_REGISTRY["load_skill"].unit == "skill"
 
 
 def test_empty_catalog_produces_no_message():
