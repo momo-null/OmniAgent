@@ -12,6 +12,7 @@ export interface ModelInfo {
   port: number | null; // null = 自动分配
   reasoning_budget: number;
   tags: string[];
+  extra_args: string[]; // 透传参数（llama.cpp argv token，随 .meta.json 侧注）
   mmproj_path: string | null;
   has_mmproj: boolean;
   has_meta: boolean; // 是否存在 .meta.json 侧注
@@ -92,7 +93,8 @@ export interface LaunchParams {
   gpu_layers?: number | null;
   port?: number | null;
   reasoning_budget?: number | null;
-  use_mmproj?: boolean | null;
+  extra_args?: string[] | null; // 透传参数（llama.cpp argv token）
+  mmproj_path?: string | null;  // 显式投影文件；留空 = 自动探测同目录
   profile?: string | null;
   gguf_path?: string | null;
 }

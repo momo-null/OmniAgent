@@ -93,16 +93,23 @@ class HealthMixin:
         except Exception:
             return False
 
-    def _wait_health_check(self, port: int, timeout: int = 180) -> bool:
+    def _wait_health_check(
+        self, port: int, timeout: int = 180, proc: Any = None
+    ) -> bool:
         """轮询等待 llama-server 就绪
 
         9B Q4 + 大 ctx(32768) warmup 易超 90s（旧默认致健康检查超时→进程被
         validate_model 的 finally:stop_model 杀掉，err 日志停在 warming up），
         放宽到 180s。若仍不够可经 start_model/validate_model 的 timeout 参数继续调大。
+
+        ``proc``：传入子进程句柄后，进程**已退出**则立即返回 False——不再空等
+        （由 ``serving._wait_ready_or_fail`` 判定 failed 并透出 stderr）。
         """
         start = time.time()
         while time.time() - start < timeout:
             if self._health_check(port):
                 return True
+            if proc is not None and proc.poll() is not None:
+                return False
             time.sleep(1)
         return False

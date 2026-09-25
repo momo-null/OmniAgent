@@ -50,6 +50,20 @@ import { useTaskStore } from "../../store/taskStore.tsx";
 
 const DEFAULT_MODELS_DIR = "D:\\AI\\Models";
 
+// ── 透传参数（extra_args）与投影路径的「UI ↔ 侧注」映射 ──────────────────────
+// extra_args：多行文本，**每行一个 argv token** ⇒ 与后端 argv 数组一一对应，
+// 值里含空格（如带空格的路径）也能表达；留空 = 不写该字段（等价于无额外参数）。
+const parseArgs = (text: string): string[] =>
+  text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+
+// 侧注的 mmproj_path 按约定写「相对 GGUF 同目录」以保持模型目录可移植；
+// 扫描接口返回的是解析后的绝对路径 ⇒ 保存时若在同一目录内就转回相对。
+const toRelMmproj = (abs: string, ggufPath: string): string => {
+  const dir = ggufPath.replace(/[\\/][^\\/]*$/, "");
+  if (!dir || !abs.startsWith(dir)) return abs;
+  return abs.slice(dir.length).replace(/^[\\/]+/, "");
+};
+
 const buildBody = (p?: LaunchParams): Record<string, unknown> => {
   const b: Record<string, unknown> = {};
   if (!p) return b;
@@ -59,14 +73,16 @@ const buildBody = (p?: LaunchParams): Record<string, unknown> => {
   if (p.gpu_layers != null) b.gpu_layers = p.gpu_layers;
   if (p.port != null) b.port = p.port;
   if (p.reasoning_budget != null) b.reasoning_budget = p.reasoning_budget;
-  if (p.use_mmproj != null) b.use_mmproj = p.use_mmproj;
+  if (p.extra_args && p.extra_args.length > 0) b.extra_args = p.extra_args;
   if (p.profile) b.profile = p.profile;
   return b;
 };
 
 const initDraft = (m: ModelInfo): LaunchParams => ({
   threads: m.threads, ctx_size: m.ctx_size, gpu_layers: m.gpu_layers,
-  port: m.port, reasoning_budget: m.reasoning_budget, use_mmproj: null, profile: null,
+  port: m.port, reasoning_budget: m.reasoning_budget, profile: null,
+  // 侧注字段回填：支持编辑往返（清空 mmproj_path 即回退"自动探测同目录"）
+  extra_args: m.extra_args ?? [], mmproj_path: m.mmproj_path ?? null,
 });
 
 const buildSaveBody = (m: ModelInfo, d: LaunchParams): Record<string, unknown> => {
@@ -76,6 +92,10 @@ const buildSaveBody = (m: ModelInfo, d: LaunchParams): Record<string, unknown> =
   if (d.threads != null) b.threads = d.threads;
   b.port = d.port ?? null;
   if (d.reasoning_budget != null) b.reasoning_budget = d.reasoning_budget;
+  // 透传参数：留空 → 传 null，让后端从侧注删除该字段（回退"无额外参数"）
+  b.extra_args = (d.extra_args && d.extra_args.length > 0) ? d.extra_args : null;
+  // 投影：清空 → 删除字段（回退自动探测）；填了 → 同目录内转相对路径保持可移植
+  b.mmproj_path = d.mmproj_path ? toRelMmproj(d.mmproj_path, m.gguf_path) : null;
   return b;
 };
 
@@ -95,16 +115,19 @@ function ParamEditor({ draft, setDraft }: { draft: LaunchParams; setDraft: (p: L
         onChange={(e) => setDraft({ ...draft, port: e.target.value ? Number(e.target.value) : null })} />
       <TextField label="推理预算 reasoning_budget" type="number" size="small" value={draft.reasoning_budget ?? ""}
         onChange={(e) => setDraft({ ...draft, reasoning_budget: e.target.value ? Number(e.target.value) : null })} />
-      <FormControl size="small">
-        <InputLabel id="mmproj-label">mmproj 多模态投影</InputLabel>
-        <Select labelId="mmproj-label" label="mmproj 多模态投影"
-          value={draft.use_mmproj === null ? "auto" : String(draft.use_mmproj)}
-          onChange={(e) => { const v = e.target.value; setDraft({ ...draft, use_mmproj: v === "auto" ? null : v === "true" }); }}>
-          <MenuItem value="auto">自动（存在则加）</MenuItem>
-          <MenuItem value="true">强制开启</MenuItem>
-          <MenuItem value="false">关闭</MenuItem>
-        </Select>
-      </FormControl>
+      <TextField
+        label={<LabelWithTip text="投影文件 mmproj_path（留空 = 自动探测同目录）"
+          desc="显式指定多模态投影文件（llama.cpp --mmproj）。留空时启动前自动探测 GGUF 同目录下文件名含 mmproj 的 .gguf；填同一目录内的文件会按相对路径写回侧注，保持模型目录可移植。需要不加载投影时：把这里写成一个不存在的路径即可（自动探测会被跳过，启动日志有提示）。" />}
+        size="small" fullWidth value={draft.mmproj_path ?? ""}
+        onChange={(e) => setDraft({ ...draft, mmproj_path: e.target.value || null })} />
+      <TextField
+        label={<LabelWithTip text="额外启动参数（每行一个，透传 llama.cpp）"
+          desc="模型启动参数很精细，不可能全部做成控件。除内核掌管的 -m / --host / --port / --mmproj 外，其余参数都可透传（如 -fa、on、--no-mmproj-offload、-ctk、q8_0）。每行一个参数（argv token），追加在启动命令末尾，并写入模型侧注 .meta.json（随模型走，不进项目配置）。留空 = 无额外参数。" />}
+        size="small" fullWidth multiline minRows={3} maxRows={10}
+        placeholder={"-fa\non"}
+        value={(draft.extra_args ?? []).join("\n")}
+        onChange={(e) => setDraft({ ...draft, extra_args: parseArgs(e.target.value) })}
+        sx={{ "& textarea": { fontFamily: "monospace", fontSize: 12 } }} />
       <FormControl size="small">
         <InputLabel id="profile-label">预设 profile</InputLabel>
         <Select labelId="profile-label" label="预设 profile" value={draft.profile ?? ""}

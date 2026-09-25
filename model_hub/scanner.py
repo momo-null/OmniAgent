@@ -80,6 +80,7 @@ class ScanMixin:
                     "port": running_port if running_port else (meta.port if meta else None),
                     "reasoning_budget": meta.reasoning_budget if meta else 0,
                     "tags": (meta.tags if meta else []) or [],
+                    "extra_args": list(meta.extra_args) if (meta and meta.extra_args) else [],
                     "mmproj_path": mmproj_path,
                     "has_mmproj": bool(mmproj_path),
                     "has_meta": meta is not None,

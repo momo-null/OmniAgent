@@ -18,6 +18,11 @@ from model_hub.meta import ModelMetaData
 
 logger = get_logger("model_manager")
 
+# 透传参数（``extra_args``）中**禁止**出现的开关：这些由内核掌管，
+# 交给用户会破坏系统不变量 —— ``--port`` 会让健康检查与 ``processes[].port``
+# 记录错端口；``-m`` / ``-mm`` 会绕开路径定位与投影探测；``--host`` 固定本机。
+_RESERVED_ARGS = frozenset({"-m", "--model", "--host", "--port", "-mm", "--mmproj"})
+
 
 class LauncherMixin:
     """模型配置解析、路径解析与服务启动参数构建。"""
@@ -82,7 +87,7 @@ class LauncherMixin:
             "port": 0,  # 0 -> 自动分配
             "reasoning_budget": 0,
             "mmproj_path": None,
-            "use_mmproj": None,  # None=原行为(存在则加)；True=强制加；False=关闭
+            "extra_args": [],    # 透传参数（llama.cpp argv token），见 meta.py
         }
         # 2. 侧注
         meta = ModelMetaData.load_from(gguf_path)
@@ -99,6 +104,17 @@ class LauncherMixin:
                 params["reasoning_budget"] = meta.reasoning_budget
             if meta.mmproj_path is not None:
                 params["mmproj_path"] = meta.mmproj_path
+            if meta.extra_args:
+                params["extra_args"] = list(meta.extra_args)
+        # 投影兜底：侧注未声明时，自动探测 GGUF 同目录的 mmproj（与
+        # scan_and_build_models 用同一规则）。此前**只有「列表展示」路径**做了探测，
+        # 两条「启动」路径都漏了 ⇒ 前端显示 has_mmproj=true、启动却不带 --mmproj，
+        # 模型静默退化成纯文本（视觉工具随之不可用）。
+        if not params.get("mmproj_path"):
+            _detected = self._auto_detect_mmproj(gguf_path)
+            if _detected:
+                params["mmproj_path"] = _detected
+                logger.info("自动探测到多模态投影: %s", _detected)
         # 3. 预设
         if profile and profile in self.presets:
             for k, v in self.presets[profile].items():
@@ -129,11 +145,48 @@ class LauncherMixin:
             "--port", str(params.get("port", 8085)),
             "--reasoning-budget", str(params.get("reasoning_budget", 0)),
         ]
-        use_mmproj = params.get("use_mmproj", None)
+        # 投影只有两条路：自动探测（存在则加，见 _resolve_launch_params）或侧注
+        # 显式 mmproj_path。**关闭投影** = 侧注把 mmproj_path 写成一个不存在的
+        # 路径（自动探测被跳过，日志提示"文件不存在"）。不设 use_mmproj 三态：
+        # 它无法"无中生有"、与自动语义冗余，且从未持久化（用户 2026-09-25 定）。
         mmproj = self._resolve_mmproj_path(params.get("mmproj_path"), gguf)
-        if mmproj and use_mmproj is not False:
+        if mmproj:
             args.extend(["--mmproj", mmproj])
+        args.extend(self._extra_args_from_params(params))
+        logger.info("llama-server argv: %s", " ".join(args))
         return args
+
+    def _extra_args_from_params(self, params: Dict[str, Any]) -> List[str]:
+        """取透传参数并校验（黑名单 + 规模上限）。
+
+        透传是**用户自由**通道：llama.cpp 参数随版本演进，故**不做全量白名单**，
+        写错由启动失败 + stderr 透出兜底（见 ``serving._wait_ready_or_fail``）。
+        但内核掌管的少数开关不得出现，否则破坏系统不变量（见 ``_RESERVED_ARGS``）。
+        """
+        raw = params.get("extra_args") or []
+        if isinstance(raw, str):           # 宽容：手写侧注可能给空白分隔字符串
+            raw = raw.split()
+        if not isinstance(raw, list):
+            return []
+        out: List[str] = []
+        for tok in raw:
+            tok = str(tok).strip()
+            if not tok:
+                continue
+            flag = tok.split("=")[0]
+            if flag in _RESERVED_ARGS:
+                raise ValueError(
+                    f"透传参数不得包含内核掌管的开关「{flag}」"
+                    f"（模型路径 / host / 端口 / mmproj 由内核决定）"
+                )
+            if len(tok) > 512:
+                raise ValueError(f"透传参数过长（>{512} 字符）: {tok[:40]}...")
+            out.append(tok)
+        if len(out) > 64:
+            raise ValueError(f"透传参数过多（{len(out)} 项，上限 64）")
+        if out:
+            logger.info("透传参数: %s", " ".join(out))
+        return out
 
     def _resolve_mmproj_path(
         self, mmproj_path: Optional[str], gguf_path: str

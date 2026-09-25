@@ -7,7 +7,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import psutil
 import yaml
@@ -113,12 +113,16 @@ class ServeMixin:
         result = {"name": run_name, "port": port, "pid": proc.pid, "status": "started"}
 
         if wait_ready:
-            ready = self._wait_health_check(port, timeout)
-            if ready:
-                result["status"] = "ready"
+            status, logs = self._wait_ready_or_fail(proc, port, run_name, timeout)
+            result["status"] = status
+            if logs:
+                result["logs"] = logs
+            if status == "ready":
                 logger.info("模型 %s 已就绪 (pid=%s, port=%d)", run_name, proc.pid, port)
+            elif status == "failed":
+                logger.error("模型 %s 启动即退出 (pid=%s)，日志尾部已随响应返回",
+                             run_name, proc.pid)
             else:
-                result["status"] = "timeout"
                 logger.warning("模型 %s 健康检查超时 (pid=%s)", run_name, proc.pid)
 
         # 轻量 warmup 生成：就绪后发一次极短请求，触发 CUDA graph 捕获，
@@ -151,38 +155,12 @@ class ServeMixin:
             old = self.processes[name]
             return {"name": name, "port": old["port"], "pid": old["pid"], "status": "already_running"}
 
-        params: Dict[str, Any] = {
-            "gguf_path": gguf_path,
-            "threads": 8,
-            "ctx_size": 8192,
-            "gpu_layers": 99,
-            "port": 0,
-            "reasoning_budget": 0,
-            "mmproj_path": None,
-            "use_mmproj": None,
-        }
-        meta = ModelMetaData.load_from(gguf_path)
-        if meta:
-            if meta.threads is not None:
-                params["threads"] = meta.threads
-            if meta.ctx_size is not None:
-                params["ctx_size"] = meta.ctx_size
-            if meta.gpu_layers is not None:
-                params["gpu_layers"] = meta.gpu_layers
-            if meta.port is not None:
-                params["port"] = meta.port
-            if meta.reasoning_budget is not None:
-                params["reasoning_budget"] = meta.reasoning_budget
-            if meta.mmproj_path is not None:
-                params["mmproj_path"] = meta.mmproj_path
-        if profile and profile in self.presets:
-            for k, v in self.presets[profile].items():
-                if k in params and v is not None:
-                    params[k] = v
-        if overrides:
-            for k, v in overrides.items():
-                if k in params and v is not None:
-                    params[k] = v
+        # 与 start_model 共用同一份参数解析。此前这里是**内联复制的副本**，
+        # 于是投影自动探测 / extra_args 透传 / 侧注合并每加一处就要改两遍、
+        # 漏一遍就出现「按路径启动」与「按名字启动」行为不一致。
+        params = self._resolve_launch_params(
+            gguf_path, name=name, overrides=overrides, profile=profile
+        )
 
         port = params.get("port") or 0
         if not port or not self._port_free(port):
@@ -220,9 +198,33 @@ class ServeMixin:
 
         result = {"name": name, "port": port, "pid": proc.pid, "status": "started"}
         if wait_ready:
-            ready = self._wait_health_check(port, timeout)
-            result["status"] = "ready" if ready else "timeout"
+            status, logs = self._wait_ready_or_fail(proc, port, name, timeout)
+            result["status"] = status
+            if logs:
+                result["logs"] = logs
+            if status == "failed":
+                logger.error("未注册模型 %s 启动即退出，日志尾部已随响应返回", name)
         return result
+
+    def _wait_ready_or_fail(
+        self, proc: Any, port: int, name: str, timeout: int
+    ) -> Tuple[str, Optional[Dict[str, str]]]:
+        """等待就绪；**进程提前退出**则立即判失败并取回 stderr 尾部。
+
+        为什么需要：``extra_args`` 是自由透传通道，写错参数会让 llama-server
+        秒退（如 unrecognized argument）。此前只能等满 ``timeout``（默认 180s）
+        才报 timeout，用户白等三分钟且看不到原因。
+
+        Returns:
+            ``(status, logs)``：status ∈ {ready, failed, timeout}；
+            logs 仅在 failed 时非空（``{"out": ..., "err": ...}``）。
+        """
+        ready = self._wait_health_check(port, timeout, proc=proc)
+        if ready:
+            return "ready", None
+        if proc.poll() is not None:              # 进程已退出 = 启动参数/环境有错
+            return "failed", self.get_model_logs(name, lines=20)
+        return "timeout", None
 
     def _warmup_generate(self, port: int, timeout: int = 120) -> None:
         """就绪后发一次极短生成，触发 CUDA graph 捕获，避免首个用户请求因

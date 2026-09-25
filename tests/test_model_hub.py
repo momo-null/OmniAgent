@@ -9,7 +9,10 @@ model-meta-refactor (2026-07-11) 后，模型发现改为「扫描目录 + .meta
 import json
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 from model_hub.manager import ModelManager
+from model_hub.meta import ModelMetaData
 from model_hub.schemas import (
     ModelInfo,
     ModelStatus,
@@ -196,3 +199,89 @@ def test_schemas_instantiate():
     assert GpuInfo().name == "unknown"
     assert TrainingStatus().running is False
     assert AgentStatus().running is False
+
+
+# ── 透传参数（extra_args）与投影兜底 ─────────────────────────────────────────
+# 设计：模型启动参数很精细，不可能由前端穷举 ⇒ 除内核掌管的少数开关
+# （模型路径 / host / 端口 / mmproj）外全部可透传；且参数**只写模型目录侧注**
+# （.meta.json，随模型可移植），不进项目 config。
+
+def test_extra_args_roundtrip_in_meta(tmp_path):
+    """extra_args 随侧注持久化；字符串写法（手写侧注）被规范化为 token 列表。"""
+    mgr = ModelManager.__new__(ModelManager)
+    mgr.processes = {}
+    gguf = tmp_path / "M.gguf"
+    gguf.write_text("")
+
+    req = ModelMetaSaveRequest(gguf_path=str(gguf),
+                               extra_args=["-fa", "on", "-ub", "512"])
+    res = mgr.save_model_meta("M", req)
+    assert res["status"] == "saved"
+    data = json.loads((tmp_path / "M.meta.json").read_text(encoding="utf-8"))
+    assert data["extra_args"] == ["-fa", "on", "-ub", "512"]
+    assert ModelMetaData.load_from(str(gguf)).extra_args == ["-fa", "on", "-ub", "512"]
+
+    # 宽容形式：手写 "‑fa on" 字符串
+    (tmp_path / "M.meta.json").write_text(
+        json.dumps({"extra_args": "-fa on --no-mmproj-offload"}), encoding="utf-8"
+    )
+    assert ModelMetaData.load_from(str(gguf)).extra_args == \
+        ["-fa", "on", "--no-mmproj-offload"]
+
+
+def test_resolve_launch_params_auto_detects_mmproj(tmp_path):
+    """A1 回归：侧注未写 mmproj_path 时，启动参数解析应自动探测同目录投影。
+
+    此前只有「列表展示」路径做了探测，两条「启动」路径都漏 ⇒ 前端显示
+    has_mmproj=true、启动却不带 --mmproj，模型静默退化成纯文本。
+    """
+    m = _make_mgr()
+    gguf = tmp_path / "Mini.gguf"
+    gguf.write_text("")
+    (tmp_path / "mmproj-model-f16.gguf").write_text("")       # 同目录投影
+    (tmp_path / "Mini.meta.json").write_text(
+        json.dumps({"ctx_size": 8192, "extra_args": ["-fa", "on"]}), encoding="utf-8"
+    )
+
+    p = m._resolve_launch_params(str(gguf))
+    assert p["mmproj_path"] and p["mmproj_path"].endswith("mmproj-model-f16.gguf")
+    assert p["extra_args"] == ["-fa", "on"]
+
+    with patch.object(m, "_get_server_exe", return_value="llama-server.exe"):
+        args = m._build_server_args_from_params(p)
+    assert "--mmproj" in args
+    assert args[-2:] == ["-fa", "on"]      # 透传参数追加在末尾（后置可覆盖具名字段）
+
+
+def test_extra_args_rejects_reserved_switch(tmp_path):
+    """内核掌管的开关不得透传：--port 会让健康检查/端口账记录错端口。"""
+    m = _make_mgr()
+    gguf = tmp_path / "M.gguf"
+    gguf.write_text("")
+    with patch.object(m, "_get_server_exe", return_value="llama-server.exe"):
+        for bad in (["--port", "9999"], ["--port=9999"], ["-m", "x.gguf"], ["--mmproj", "p.gguf"]):
+            with pytest.raises(ValueError, match="内核掌管"):
+                m._build_server_args_from_params(
+                    {"gguf_path": str(gguf), "extra_args": bad}
+                )
+
+
+def test_start_path_fails_fast_when_process_exits(tmp_path):
+    """进程秒退（如透传参数写错）→ 立即判 failed 并带日志，不再白等 180s。"""
+    m = _make_mgr()
+    gguf = tmp_path / "M.gguf"
+    gguf.write_text("")
+    fake_proc = MagicMock()
+    fake_proc.pid = 4321
+    fake_proc.poll.return_value = 1                    # 进程已退出
+    err = "error: invalid argument: --non-existent-flag"
+    with patch("model_hub.manager.subprocess.Popen", return_value=fake_proc), \
+         patch.object(m, "_get_server_exe", return_value="llama-server.exe"), \
+         patch.object(m, "_build_env", return_value={}), \
+         patch.object(m, "_port_free", return_value=True), \
+         patch.object(m, "_health_check", return_value=False), \
+         patch.object(m, "get_model_logs", return_value={"out": "", "err": err}), \
+         patch("os.path.exists", return_value=True):
+        res = m.start_model_path(str(gguf), name="M")
+    assert res["status"] == "failed"
+    assert "invalid argument" in res["logs"]["err"]

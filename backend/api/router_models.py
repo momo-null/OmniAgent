@@ -40,8 +40,6 @@ def _extract_overrides(body: LaunchParams) -> tuple[Dict[str, Any], Optional[str
         overrides["port"] = body.port
     if body.reasoning_budget is not None:
         overrides["reasoning_budget"] = body.reasoning_budget
-    if body.use_mmproj is not None:
-        overrides["use_mmproj"] = body.use_mmproj
     return overrides, body.profile
 
 
@@ -137,8 +135,6 @@ async def start_model_path(
             overrides["port"] = body.port
         if body.reasoning_budget is not None:
             overrides["reasoning_budget"] = body.reasoning_budget
-        if body.use_mmproj is not None:
-            overrides["use_mmproj"] = body.use_mmproj
         return await asyncio.to_thread(
             mgr.start_model_path,
             body.path, name=body.name,

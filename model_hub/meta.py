@@ -2,7 +2,11 @@
 
 每个 GGUF 文件可附带一个同名的 ``.meta.json`` 侧注文件，
 保存该模型的持久化启动参数（threads / ctx_size / gpu_layers / port /
-reasoning_budget / mmproj_path / name / description / tags）。
+reasoning_budget / mmproj_path / extra_args / name / description / tags）。
+
+``extra_args`` 是**透传参数**（llama.cpp 原样 argv token 序列）：模型启动参数很精细，
+不可能由前端穷举，故除内核掌管的少数据（模型路径 / host / 端口 / mmproj）外，
+其余参数都可以直接写在这里。**参数随模型走**（侧注与 GGUF 同目录），不进项目 config。
 
 设计边界（model-meta-refactor, 2026-07-11）：
 - 侧注文件与 GGUF 同目录、同名（仅扩展名不同）。
@@ -24,7 +28,21 @@ KNOWN_FIELDS = (
     "threads",
     "port",
     "reasoning_budget",
+    "extra_args",
 )
+
+
+def _norm_extra_args(v: Any) -> List[str]:
+    """规范化透传参数（``extra_args``）。
+
+    宽容接受两种写法：``list``（每元素 = 一个 argv token）或空白分隔的字符串
+    （手写侧注时的便利形式）；去掉空白项与首尾空格。非法类型返回空列表。
+    """
+    if isinstance(v, str):
+        v = v.split()
+    if not isinstance(v, list):
+        return []
+    return [str(x).strip() for x in v if str(x).strip()]
 
 
 class ModelMetaData:
@@ -41,6 +59,7 @@ class ModelMetaData:
         threads: Optional[int] = None,
         port: Optional[int] = None,
         reasoning_budget: Optional[int] = None,
+        extra_args: Optional[List[str]] = None,
     ):
         self.name = name
         self.description = description
@@ -51,6 +70,7 @@ class ModelMetaData:
         self.threads = threads
         self.port = port
         self.reasoning_budget = reasoning_budget
+        self.extra_args = extra_args
 
     # ── 路径计算 ──────────────────────────────────
     @staticmethod
@@ -102,6 +122,7 @@ class ModelMetaData:
             threads=data.get("threads"),
             port=data.get("port"),
             reasoning_budget=data.get("reasoning_budget"),
+            extra_args=_norm_extra_args(data.get("extra_args")),
         )
 
     # ── 序列化 ────────────────────────────────────
@@ -126,6 +147,8 @@ class ModelMetaData:
             d["port"] = self.port
         if self.reasoning_budget is not None:
             d["reasoning_budget"] = self.reasoning_budget
+        if self.extra_args:
+            d["extra_args"] = list(self.extra_args)
         return d
 
     # ── 写入（合并） ──────────────────────────────

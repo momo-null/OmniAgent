@@ -40,3 +40,4 @@ data/
 # 可调项一律由 Web 设置面板写入 ~/.omniagent/config.yaml，不要往项目根堆配置。
 config.yaml
 config.local.yaml
+*.prev

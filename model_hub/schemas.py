@@ -26,6 +26,7 @@ class ModelInfo(BaseModel):
     port: Optional[int] = None  # None = 自动分配
     reasoning_budget: int = 0
     tags: List[str] = []
+    extra_args: List[str] = []  # 透传参数（llama.cpp argv token，见 meta.py）
     mmproj_path: Optional[str] = None
     has_mmproj: bool = False
     has_meta: bool = False  # 是否存在 .meta.json 侧注
@@ -93,7 +94,7 @@ class LaunchParams(BaseModel):
     gpu_layers: Optional[int] = None
     port: Optional[int] = None
     reasoning_budget: Optional[int] = None
-    use_mmproj: Optional[bool] = None
+    extra_args: Optional[List[str]] = None  # 透传参数（llama.cpp argv token）
     profile: Optional[str] = None
     gguf_path: Optional[str] = None  # 直接定位 GGUF 文件（扫描发现的未注册模型）
 
@@ -113,7 +114,7 @@ class ModelStartPathRequest(BaseModel):
     gpu_layers: Optional[int] = None
     port: Optional[int] = None
     reasoning_budget: Optional[int] = None
-    use_mmproj: Optional[bool] = None
+    extra_args: Optional[List[str]] = None
     profile: Optional[str] = None
 
 
@@ -129,6 +130,7 @@ class ModelMetaSaveRequest(BaseModel):
     description: Optional[str] = None
     tags: Optional[List[str]] = None
     mmproj_path: Optional[str] = None
+    extra_args: Optional[List[str]] = None
     ctx_size: Optional[int] = None
     gpu_layers: Optional[int] = None
     threads: Optional[int] = None
