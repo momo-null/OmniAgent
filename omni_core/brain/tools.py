@@ -56,7 +56,7 @@ VERIFY_TOOL_SCHEMA = {
     "type": "function",
     "function": {
         "name": "verify",
-        "description": "校验当前环境是否已达成某条件（环境自定的命中语义）。每个动作后调用以确认进展；"
+        "description": "校验当前环境是否已达成某条件（环境自定的命中语义）。需要确认子任务进展时调用；"
                        "连续失败会触发升级，把子任务交回在线大脑。",
         "parameters": {
             "type": "object",

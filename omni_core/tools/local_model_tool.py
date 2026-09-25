@@ -62,7 +62,7 @@ def render_description(cfg: Optional[dict] = None) -> str:
         f"不适合：{'、'.join(bad)}——这些请自己做。",
     ]
     if bool((cfg.get("capabilities") or {}).get("vision")):
-        lines.append("本地模型具备视觉能力：需要看图时请用 vision_describe（走同一本地模型）。")
+        lines.append("本地模型具备视觉能力：看图类感知走视觉通道的专用工具，本工具仅接收文本推理任务。")
     return " ".join(lines)
 
 

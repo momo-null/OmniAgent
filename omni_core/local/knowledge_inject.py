@@ -233,7 +233,7 @@ def format_skill_catalog_message(catalog: List[Dict[str, Any]]) -> str:
         lines.append(f"- `{s.get('name', '')}`: {desc}")
     lines.append("</available_skills>")
     lines.append(
-        "以上为可用技能目录（仅摘要）。若任务与某技能描述匹配，请先调用 load_skill 工具加载其"
-        "完整指令再行动；不得仅凭摘要推断或执行技能内容。"
+        "以上为可用技能目录（仅摘要）。技能的完整指令需通过 load_skill 工具加载；"
+        "仅凭摘要推断或执行技能内容，可能得到不完整或过时的步骤。"
     )
     return "\n".join(lines)

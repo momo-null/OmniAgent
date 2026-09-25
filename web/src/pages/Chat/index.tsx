@@ -26,6 +26,7 @@ import FolderRounded from "@mui/icons-material/FolderRounded";
 import PublicRounded from "@mui/icons-material/PublicRounded";
 import { useTaskStore } from "../../store/taskStore.tsx";
 import ScrollArea from "../../components/ScrollArea.tsx";
+import Markdown from "../../components/Markdown.tsx";
 import type { ChatMsg, ProcessItem } from "../../types";
 import type { DebugLog } from "../../store/taskStore";
 
@@ -92,15 +93,20 @@ function MsgRow({ m, showRole = true }: { m: ChatMsg; showRole?: boolean }) {
           py: 1,
           maxWidth: "85%",
           borderRadius: 2,
-          whiteSpace: "pre-wrap",
+          // agent 消息走 markdown 块级排版（容器 pre-wrap 会与 <p> 外距叠加），其余保持原样
+          whiteSpace: m.role === "agent" ? "normal" : "pre-wrap",
           wordBreak: "break-word",
           boxShadow: "none",
           bgcolor: m.role === "user" ? "action.selected" : "transparent",
         }}
       >
-        <Typography variant="body2" component="span" sx={{ fontSize: 14 }}>
-          {m.text}
-        </Typography>
+        {m.role === "agent" ? (
+          <Markdown>{m.text}</Markdown>
+        ) : (
+          <Typography variant="body2" component="span" sx={{ fontSize: 14 }}>
+            {m.text}
+          </Typography>
+        )}
       </Paper>
     </Box>
   );
@@ -173,12 +179,12 @@ function MessageBubble({ item, streaming, showRole = true }: { item: ProcessItem
         elevation={0}
         sx={{
           px: 1.5, py: 1, maxWidth: "92%", borderRadius: 2,
-          whiteSpace: "pre-wrap", wordBreak: "break-word", boxShadow: "none", bgcolor: "transparent",
+          wordBreak: "break-word", boxShadow: "none", bgcolor: "transparent",
         }}
       >
-        <Typography variant="body2" component="span" sx={{ fontSize: 14 }}>
-          {text}{streaming && <StreamCaret />}
-        </Typography>
+        {/* LLM 口播内容按 markdown 渲染；打字机光标置于块外，避免被解析吞掉 */}
+        <Markdown>{text}</Markdown>
+        {streaming && <StreamCaret />}
       </Paper>
     </Box>
   );
