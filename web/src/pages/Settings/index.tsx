@@ -47,6 +47,9 @@ import type {
   ModelValidationResult,
 } from "../../types";
 import { useTaskStore } from "../../store/taskStore.tsx";
+import CharacterTab from "./CharacterTab";
+import ProfileTab from "./ProfileTab";
+import MemoryTab from "./MemoryTab";
 
 const DEFAULT_MODELS_DIR = "D:\\AI\\Models";
 
@@ -778,6 +781,23 @@ function AboutTab() {
   );
 }
 
+// 「伙伴」顶层 Tab：角色 / 画像 / 记忆 三个子 Tab（个人助手风格，收敛到设置）
+function CompanionTab() {
+  const [sub, setSub] = useState(0);
+  return (
+    <Box>
+      <Tabs value={sub} onChange={(_, v) => setSub(v)} sx={{ mb: 2 }}>
+        <Tab label="角色" />
+        <Tab label="画像" />
+        <Tab label="记忆" />
+      </Tabs>
+      {sub === 0 && <CharacterTab />}
+      {sub === 1 && <ProfileTab />}
+      {sub === 2 && <MemoryTab />}
+    </Box>
+  );
+}
+
 export default function Settings() {
   const [tab, setTab] = useState(0);
   return (
@@ -785,16 +805,18 @@ export default function Settings() {
       <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>设置</Typography>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label="通用" />
+        <Tab label="伙伴" />
         <Tab label="模型" />
         <Tab label="通道" />
         <Tab label="编排" />
         <Tab label="关于" />
       </Tabs>
       {tab === 0 && <GeneralTab />}
-      {tab === 1 && <ModelTab />}
-      {tab === 2 && <ChannelsTab />}
-      {tab === 3 && <OrchestrationTab />}
-      {tab === 4 && <AboutTab />}
+      {tab === 1 && <CompanionTab />}
+      {tab === 2 && <ModelTab />}
+      {tab === 3 && <ChannelsTab />}
+      {tab === 4 && <OrchestrationTab />}
+      {tab === 5 && <AboutTab />}
     </Box>
   );
 }

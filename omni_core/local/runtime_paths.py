@@ -73,6 +73,21 @@ def memory_summary() -> Path:
     return global_memory() / "memory_summary.md"
 
 
+def user_profile() -> Path:
+    """全局用户画像 ``memory/user_profile.md``（跨 task 共享，P0 一等实体）。"""
+    return global_memory() / "user_profile.md"
+
+
+def profile_candidates() -> Path:
+    """画像候选暂存 ``memory/profile_candidates.md``（纠偏蒸馏待人工确认）。"""
+    return global_memory() / "profile_candidates.md"
+
+
+def character_card() -> Path:
+    """单角色助手角色卡 ``character.md``（人格设定，随 system prompt 注入）。"""
+    return _GLOBAL / "character.md"
+
+
 def validate_identifier(value: str, label: str) -> str:
     """验证目录名使用的通用标识符，拒绝路径片段和保留名。
 

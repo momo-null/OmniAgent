@@ -15,7 +15,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from omni_core.local.runtime_paths import memory_summary, task_skills, global_skills
+from omni_core.local.runtime_paths import (
+    memory_summary, task_skills, global_skills, user_profile, character_card,
+)
 from omni_core.local.skill_library import SkillLibrary
 
 
@@ -23,6 +25,8 @@ from omni_core.local.skill_library import SkillLibrary
 _WEAKEN_HINT = "历史记忆/技能（可能过时，以实际观测为准）"
 
 _SUMMARY_TRUNCATE = 20000
+_PROFILE_TRUNCATE = 20000
+_CHARACTER_TRUNCATE = 20000
 
 
 def load_memory_text() -> str:
@@ -32,6 +36,36 @@ def load_memory_text() -> str:
         if not p.exists():
             return ""
         return p.read_text(encoding="utf-8")[:_SUMMARY_TRUNCATE]
+    except Exception:
+        return ""
+
+
+def load_profile_text() -> str:
+    """读取全局用户画像 user_profile.md 并截断管控；不存在/异常返回空。
+
+    画像为**独立注入块**（与 memory summary 分开，见 §2.5），携带弱注入语义；
+    未落地/空文件时返回空串（零注入），不影响主流程。
+    """
+    try:
+        p = user_profile()
+        if not p.exists():
+            return ""
+        return p.read_text(encoding="utf-8")[:_PROFILE_TRUNCATE]
+    except Exception:
+        return ""
+
+
+def load_character_text() -> str:
+    """读取角色卡 character.md 并截断管控；不存在/异常返回空。
+
+    角色卡是**稳定人格设定**（用户单写、run 内不变），随 system prompt 注入
+    （与 AGENTS.md 同类，命中前缀缓存）；未落地/空文件时返回空串（零注入）。
+    """
+    try:
+        p = character_card()
+        if not p.exists():
+            return ""
+        return p.read_text(encoding="utf-8")[:_CHARACTER_TRUNCATE]
     except Exception:
         return ""
 

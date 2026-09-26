@@ -256,6 +256,19 @@ export interface MemoryIndex {
   enabled: boolean; // 知识层弱注入（memory）是否开启
 }
 
+// ── P0 用户画像（/api/runtime/profile） ─────────────
+export interface ProfileIndex {
+  profile: string; // user_profile.md 全文（人工确认后的高置信画像）
+  candidates: string; // profile_candidates.md 全文（纠偏蒸馏，待确认）
+  enabled: boolean; // 画像注入是否开启（knowledge.profile.enabled，默认开）
+}
+
+// ── P0 角色卡（/api/runtime/character） ─────────────
+export interface CharacterData {
+  character: string; // character.md 全文（人格设定，随 system prompt 注入）
+  name: string; // 从 frontmatter name: 解析的助手名，缺省 "OmniAgent"
+}
+
 export interface RolloutInfo {
   task_id: string;
   distilled_at: string;

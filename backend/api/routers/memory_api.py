@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from backend.api.routers.helpers import (
     _memory_enabled,
+    _profile_enabled,
     _paths,
     _read_memory_master,
     _read_memory_summary_chars,
@@ -122,5 +123,93 @@ async def delete_memory_rollout(task_id: str):
             return JSONResponse({"ok": False, "error": "rollout not found"}, status_code=404)
         p.unlink()
         return JSONResponse({"ok": True, "task_id": task_id})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@router.get("/profile")
+async def get_profile():
+    """全局用户画像（P0）：user_profile.md 全文 + 候选区 + 注入开关（只读聚合）。"""
+    try:
+        from omni_core.local import runtime_paths as P
+        pp = P.user_profile()
+        profile = pp.read_text(encoding="utf-8") if pp.exists() else ""
+        cp = P.profile_candidates()
+        candidates = cp.read_text(encoding="utf-8") if cp.exists() else ""
+        return JSONResponse({
+            "profile": profile,
+            "candidates": candidates,
+            "enabled": _profile_enabled(),
+        })
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@router.put("/profile")
+async def put_profile(request: Request):
+    """用户画像人工写入口（唯一人工入口）：覆盖 user_profile.md（内核直写）。
+
+    不校验内容（人可手改是定案，同 PUT /memory 语义）；审计留痕由调用方负责。
+    画像仅作参考、无放行权，注入时由 system prompt 标注弱注入声明。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    profile = (body or {}).get("profile")
+    if not isinstance(profile, str):
+        return JSONResponse({"ok": False, "error": "profile 必须是字符串"}, status_code=422)
+    try:
+        from omni_core.local import runtime_paths as P
+        pp = P.user_profile()
+        pp.parent.mkdir(parents=True, exist_ok=True)
+        pp.write_text(profile, encoding="utf-8")
+        return JSONResponse({"ok": True, "chars": len(profile)})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+def _parse_character_name(text: str) -> str:
+    """从角色卡顶部 frontmatter 解析 ``name:``；无 frontmatter/无 name → 默认 "OmniAgent"。"""
+    text = text or ""
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            for ln in parts[1].splitlines():
+                if ln.strip().startswith("name:"):
+                    v = ln.split("name:", 1)[1].strip().strip("'\"")
+                    if v:
+                        return v
+    return "OmniAgent"
+
+
+@router.get("/character")
+async def get_character():
+    """单角色助手角色卡（P0）：character.md 全文 + 解析出的助手名（随 system prompt 注入）。"""
+    try:
+        from omni_core.local import runtime_paths as P
+        cp = P.character_card()
+        character = cp.read_text(encoding="utf-8") if cp.exists() else ""
+        return JSONResponse({"character": character, "name": _parse_character_name(character)})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@router.put("/character")
+async def put_character(request: Request):
+    """角色卡人工写入口：覆盖 character.md（改动自下一次运行起生效，同 AGENTS.md 语义）。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    character = (body or {}).get("character")
+    if not isinstance(character, str):
+        return JSONResponse({"ok": False, "error": "character 必须是字符串"}, status_code=422)
+    try:
+        from omni_core.local import runtime_paths as P
+        cp = P.character_card()
+        cp.parent.mkdir(parents=True, exist_ok=True)
+        cp.write_text(character, encoding="utf-8")
+        return JSONResponse({"ok": True, "chars": len(character)})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

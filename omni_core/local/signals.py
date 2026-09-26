@@ -543,8 +543,9 @@ def query_summary() -> Dict[str, Any]:
         "c1_dist": agg.get("c1_dist", {k: 0 for k in C1_LABELS}),
         "c2_dist": agg.get("c2_dist", {k: 0 for k in C2_LABELS}),
         "c1_calibration_error": agg.get("c1_calibration_error"),
+        "calibration_samples": agg.get("calibration_samples"),
         "total": agg.get("total", 0),
         "updated_at": agg.get("updated_at", ""),
         "timeline": agg.get("timeline", []),
-        "note": "率按交互/自主分模式；校准误差需 C₃ 人工抽检填写；初值无数据时为 null",
+        "note": "率按交互/自主分模式；校准误差由 C₃ 人工抽检填写（≤10% 采信分级判定）；初值无数据时为 null",
     }

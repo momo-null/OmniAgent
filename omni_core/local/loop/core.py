@@ -239,6 +239,8 @@ class ToolLoop(
         _knowledge_cfg = (_rt.get("knowledge") or {})
         self.knowledge_cfg = {
             "memory": bool((_knowledge_cfg.get("memory") or {}).get("enabled", False)),
+            # P0 用户画像：独立注入块，默认开（空文件零注入，不改变现有行为）
+            "profile": bool((_knowledge_cfg.get("profile") or {}).get("enabled", True)),
         }
 
         # 系统提示：用当前模型的真实能力 + 工具清单动态组装（模型无关）。

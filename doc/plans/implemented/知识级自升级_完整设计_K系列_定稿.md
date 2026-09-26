@@ -69,9 +69,10 @@ K2–K5 主干已落地，K2 / K5 经真机验证。下列为**明确未做**项
 |---|---|---|
 |回溯过滤（清除判脏记忆）|§5.6.6|未实现；依赖足够的 C₁ 判脏样本|
 |准入升级 → `approved_success`|§5.6.6|未实现；当前仍 `plain_success`，切早会误挡正常 success|
-|C₃ 人工抽检校准|§5.3 / §5.6.8|未做；`c1_calibration_error` 为 `null`，率标「未校准」|
 |V3 ablation 结论|§6|脚本已就绪，需 ≥20 次同域对照人工长跑|
 |多域分区|§8|v1 为单域常量 `single-domain(v1)`，远期扩展|
+
+> **已更新（2026-09-26）**：C₃ 人工抽检校准已落地——新增 `PUT /signals/calibration` 写入端点（收样本→`calibrate_c1c2`→写 `c1_calibration_error`），`/signals/summary` 透传 `calibration_samples`，真机验证 `c1_calibration_error` 由 `null` 变为可写可读，≤10% 采信。
 
 ---
 
@@ -223,7 +224,7 @@ LLM 失败静默回退启发式，并置模块级熔断 `_LLM_CLASSIFIER_BROKEN`
 - C₁ 生效 ✅：纠偏轮「不对，重做」→ `c1=refuted`，该 run `a=true` → **`fake_success=1`（假成功被自动抓到）**。
 - 聚合/端点 ✅：`total` 递增；C₁·C₂ 分布与分模式率正确；`timeline` 逐点增长。
 - pytest ✅：`tests/test_k2_k5.py` 11 项通过（夹具内禁用 LLM 分类器，保持离线确定性）。
-- 未做：C₃ 人工抽检校准（样本不足，`c1_calibration_error` 仍为 `null`）。
+- **C₃ 人工抽检校准已于 2026-09-26 落地并真机验证**：新增 `PUT /signals/calibration`（收样本→`calibrate_c1c2`→写 `c1_calibration_error`），`/signals/summary` 透传 `calibration_samples`；此前该字段无写入入口、恒为 `null`。
 
 **5.6.9 风险与缓解**：R2 分类器噪声 → 时间窗平滑 + 置信标注 + C₃ 抽检兜底；R3 自报转录损失 → 中心假设，§5.5 分支修法留待 K2 数字难看时另立。（30 天窗口不列为风险：本机制纯前向采集、不回溯历史，窗口无关。）
 

@@ -29,6 +29,7 @@ import ScrollArea from "../../components/ScrollArea.tsx";
 import Markdown from "../../components/Markdown.tsx";
 import type { ChatMsg, ProcessItem } from "../../types";
 import type { DebugLog } from "../../store/taskStore";
+import { characterApi } from "../../api/client";
 
 function roleColor(role: string): "primary" | "secondary" | "default" {
   if (role === "agent") return "primary";
@@ -342,6 +343,14 @@ export default function Chat() {
   const { messages, running, sendMessage, injectMessage, stopTask, debugLogs, clearDebugLogs, processLogs, memoryHint, currentTaskId, fullAccessByTask, setFullAccessForTask } = useTaskStore();
   const [draft, setDraft] = useState("");
   const [logOpen, setLogOpen] = useState(false);
+  // 助手名：从角色卡 frontmatter 解析（缺省 OmniAgent），用于顶栏与消息标签
+  const [assistantName, setAssistantName] = useState("OmniAgent");
+  useEffect(() => {
+    characterApi
+      .get()
+      .then((r) => setAssistantName(r.data.name || "OmniAgent"))
+      .catch(() => {});
+  }, []);
   const [confirmAnchorEl, setConfirmAnchorEl] = useState<HTMLElement | null>(null);
   // 完全访问按 task 记忆：每个 task 各自记住开关，切回时恢复，不串到其他 task
   const fullAccess = fullAccessByTask[currentTaskId] ?? false;
@@ -393,14 +402,14 @@ export default function Chat() {
       >
         <Stack direction="row" justifyContent="space-between" alignItems="center"
           sx={{ mb: 1, pt: 1, pb: 1, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Chat</Typography>
-          {/* 预留顶栏右侧控制位（模型切换等） */}
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{assistantName}</Typography>
+          {/* 顶栏右侧：助手名即当前角色（单角色助手）；预留模型切换等控制位 */}
         </Stack>
 
         {/* K1 记忆更新轻提示（Curator 蒸馏/合并后由 SSE 推送，自动淡出） */}
         {memoryHint && (
           <Alert severity="success" sx={{ mb: 1, flexShrink: 0 }} onClose={() => { /* 由 SSE 计时自动清除 */ }}>
-            记忆已更新：蒸馏 {memoryHint.distilled} 条 / 合并 {memoryHint.merged} 条（可在「技能与工具 → 记忆」查看）
+            记忆已更新：蒸馏 {memoryHint.distilled} 条 / 合并 {memoryHint.merged} 条（可在「设置 → 伙伴 → 记忆」查看）
           </Alert>
         )}
 
@@ -412,7 +421,7 @@ export default function Chat() {
             <Box sx={{ p: 2, pr: 1.5 }}>
           {timeline.length === 0 ? (
             <Typography variant="body2" color="text.secondary" sx={{ textAlign: "center", mt: 4 }}>
-              开始和 OmniAgent 对话吧。
+              开始和 {assistantName} 对话吧。
             </Typography>
           ) : (
             timeline.map((it, i) => {
@@ -443,7 +452,7 @@ export default function Chat() {
                   {groupStart && curRole && (
                     <Box sx={{ display: "flex", mb: 0.5,
                       justifyContent: curRole === "user" ? "flex-end" : "flex-start" }}>
-                      <Chip size="small" label={curRole} color={roleColor(curRole)} />
+                      <Chip size="small" label={curRole === "user" ? "你" : assistantName} color={roleColor(curRole)} />
                     </Box>
                   )}
                   {node}
@@ -468,7 +477,7 @@ export default function Chat() {
           }}
         >
           <TextField
-            placeholder={running ? "运行中可插话（软注入）：输入后回车或点插话按钮，不打断当前步骤" : "给 OmniAgent 发消息…"}
+            placeholder={running ? "运行中可插话（软注入）：输入后回车或点插话按钮，不打断当前步骤" : `给 ${assistantName} 发消息…`}
             multiline
             minRows={3}
             maxRows={10}

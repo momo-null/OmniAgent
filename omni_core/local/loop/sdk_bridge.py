@@ -208,6 +208,7 @@ class SdkBridgeMixin:
         # 「用户当轮指令覆盖一切」+ 注入面收敛）；memory 属增长内容，仍走会话流尾部。
         _instr_snapshot = self._load_instructions_snapshot(spec)
         system_prompt = self._merge_instructions(system_prompt, _instr_snapshot)
+        system_prompt = self._merge_character(system_prompt)
         if getattr(_instr_snapshot, "injected", False):
             self._log_knowledge_injection(traj, {
                 "kind": "instructions_injected",

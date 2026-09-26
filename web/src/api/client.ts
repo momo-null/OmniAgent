@@ -1,6 +1,8 @@
 import axios from "axios";
 import type {
   MemoryIndex,
+  ProfileIndex,
+  CharacterData,
   RolloutsResponse,
   RolloutDetail,
   SignalResponse,
@@ -114,6 +116,22 @@ export const memoryApi = {
   // 删除单条 rollout（不回滚已合并内容）
   deleteRollout: (taskId: string) =>
     http.delete(`/api/runtime/memory/rollouts/${encodeURIComponent(taskId)}`),
+};
+
+// ── P0 用户画像（/api/runtime/profile） ─────────────
+export const profileApi = {
+  // 画像正文 + 候选区 + 注入开关
+  get: () => http.get<ProfileIndex>("/api/runtime/profile"),
+  // 人工写画像正文（唯一人工入口，覆盖 user_profile.md）
+  update: (profile: string) => http.put("/api/runtime/profile", { profile }),
+};
+
+// ── P0 角色卡（/api/runtime/character） ─────────────
+export const characterApi = {
+  // 角色卡全文 + 助手名
+  get: () => http.get<CharacterData>("/api/runtime/character"),
+  // 人工写角色卡（覆盖 character.md，下次运行生效）
+  update: (character: string) => http.put("/api/runtime/character", { character }),
 };
 
 // ── K2/K5 信号（/api/runtime/signals*） ─────────────

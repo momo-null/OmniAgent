@@ -465,6 +465,12 @@ def _memory_enabled() -> bool:
     cfg = _config()
     return bool((((cfg.get("runtime") or {}).get("knowledge") or {}).get("memory") or {}).get("enabled", False))
 
+
+def _profile_enabled() -> bool:
+    """知识层弱注入（user_profile）是否开启，取自配置 runtime.knowledge.profile.enabled（默认开）。"""
+    cfg = _config()
+    return bool((((cfg.get("runtime") or {}).get("knowledge") or {}).get("profile") or {}).get("enabled", True))
+
 def _read_merged_ids() -> set:
     """读取 memory/merged.json 中已合并的 task_id 集合（幂等去重用）。"""
     try:

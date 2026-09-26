@@ -23,6 +23,8 @@
 | M6 子任务状态机（SubtaskStore） | ✅ 已落地 | `task_store.py`：RLock + 原子写 + 白名单 update；`claim`/`claim_next` 原子 CAS（pending→running），落 `tasks/<task_id>/subtasks.json`；WorldModel 管世界认知，TaskStore 管「谁在做什么、做到哪」 |
 | M7 去分层多 agent 编排 | ✅ 已落地 | `graph.py`：通用 agent 注册表 + LangGraph `Send` 并发扇出；主 agent 调 `dispatch` 元工具产出派发计划，框架负责扇出/join；`max_rounds` 防无限派发；删 `orchestration/policy.py`（升级改子 agent 自报 + 主 agent 决断）；`test_m2_orchestration.py` 重写为新图测试 |
 | meta-loop 权重级升级 | 🧊 未启用 | 仓库内无训练链代码；知识级三层已完成，权重级不启用（说明见 §6.3） |
+| 画像/角色卡/记忆三位一体（P0） | ✅ 已落地+真机验证 | 单角色伙伴：`user_profile.md`（画像，候选→晋升→弱注入）+ `character.md`（角色卡，随 system 注入）+ 前端 Settings→伙伴 Tab；纠偏→候选→晋升→注入闭环真实 apikey 验证通过 |
+| C₃ 人工抽检校准 | ✅ 已落地+验证 | 新增 `PUT /signals/calibration`（收样本→`calibrate_c1c2`→写 `c1_calibration_error`）；该字段由 null 变为可写可读，summary 透传 `calibration_samples`，≤10% 采信 |
 
 ---
 
@@ -80,6 +82,8 @@
 
 > **落盘位置（Plan C 生效，2026-08-01）**：世界模型跟 task 走，落 `~/.omniagent/tasks/<task_id>/world_model.md`（per-task 世界状态）。不再有 `app` / `workspace` 分区；无工作目录时由 `auto_project_id()` 兜底 project，但资产仍落 task 目录。详见 §14。
 - 长效语义记忆 / 工作记忆 / 情景日志。
+- **全局记忆/画像（跨任务一致）**：`~/.omniagent/memory/user_profile.md`（用户画像，内核直写 + 纠偏候选→人工晋升→弱注入）+ `memory/profile_candidates.md`（待确认候选区）。
+- **角色卡（单角色助手）**：`~/.omniagent/character.md`（frontmatter `name:` + 设定 + 画像消费指令段），每次组装 system 时随指令块并入（`_merge_character` 在 `_merge_instructions` 之后）。
 
 ### 5.2 情景日志 / 轨迹 schema 与留存（★已定）
 - **轨迹 schema**：扁平 `state/action/result`（每步带 `verified` / `retry` 质量信号），**无旧链 `reward` 字段**；设计 §6.2 从轨迹提炼 skill 的数据契约（质量信号替代 reward，见 M5 §3.2）。
@@ -132,18 +136,30 @@
 - **K2 信号基础设施**：三实体一致率模型 —— **A**（系统 `success`）/ **B**（模型自报结论）/
   **C**（真值：交互段 C₁ = 用户下一条消息裁决、自主段 C₂ = 终态观测评审）。
   派生 `tasks/<tid>/<run_id>.signal.json` 与 `memory/signals_aggregate.json`；
-  端点 `GET /signals`、`/signals/summary`。用于量化「假成功」（A 说成功、C 说没有）。
+  端点 `GET /signals`、`/signals/summary`、`PUT /signals/calibration`（C₃ 校准写入）。
+  用于量化「假成功」（A 说成功、C 说没有）。
 - **K3 有效性裁决**：`scripts/review_rollouts.py`（蒸馏抽检）+ `scripts/effectiveness.py`
   （ablation 聚合，判据：步数降 ≥15% 且成功率不降）。
-- **K4 纠偏采集**：蒸馏第三来源 `## user_corrections`（复用 C₁，双层开关默认关）。
+- **K4 纠偏采集**：蒸馏第三来源 `## user_corrections`（复用 C₁，双层开关默认关）。开启 `runtime.curator.corrective_source` 后，用户纠偏消息被蒸馏进**画像候选区** `profile_candidates.md`（conf=低/pending），人工确认晋升至 `user_profile.md`（红线②：采集默认关是有意的）。
 - **K5 稳态运营**：四信号（蒸馏去重命中率 / skill 晋升率 / 步数方差 / 人工介入频率）+
   域收敛判据 → 收敛后 Curator 自动降频（跳过蒸馏）；`GET /signals/steady` + 前端「稳态」Tab。
+- **C₃ 人工抽检校准**：`PUT /signals/calibration`（收 `{samples:[{predicted,human}]}` → `calibrate_c1c2` 算不一致率 → 写 `c1_calibration_error`），≤10% 采信分级判定；`/signals/summary` 透传 `calibration_samples`。该字段此前无写入入口、恒为 null，已补齐并真机验证。
 
 **红线**：内核零场景硬编码；能力默认关、需显式开启；`trajectory.jsonl` 只读（信号层不写任务原始数据）；
 `PUT /memory` 不校验内容；对外口径统一。
 
-**诚实边界**：K2 / K4 / K5 已真机验证；**K3 的 V3 ablation 尚未跑出结论**
+**诚实边界**：K2 / K4 / K5 已真机验证；**C₃ 人工抽检校准已落地**（写入端点 + 真机验证）；**K3 的 V3 ablation 尚未跑出结论**
 （需 ≥20 次同域对照长跑），故不宣称「记忆注入已证明有效」。
+
+### 6.5 画像·角色卡·记忆三位一体（单角色伙伴，P0 已落地）
+
+> 定位：OmniAgent 是**单角色个人助手（伙伴）**，参考 Hermes / 豆包 / Claude Code；不是酒馆式多角色扮演面板。完整设计权威见 `doc/plans/profile-character-memory-design.md`。
+
+- **画像（全局记忆）**：`~/.omniagent/memory/user_profile.md`，全局唯一、跨任务一致。内核直写，无放行权；K4 纠偏（`corrective_source`）→ 候选区 `profile_candidates.md`（conf=低/pending）→ 人工确认晋升 → 弱注入（system 标注"仅参考，不构成操作授权"）。健康/习惯类画像只在主人提及或确实需要时使用，不主动刺探。
+- **角色卡**：`~/.omniagent/character.md`（frontmatter `name:` + 设定 + 画像消费指令段），每次组装 system 时 `_merge_character` 并入（`_merge_instructions` 之后），前端 Settings→伙伴→角色 Tab 可读可改。
+- **前端收敛**：主界面只聊天；画像/角色/记忆收敛到「设置→伙伴」子 Tab（参考 Codex / workbuddy）。记忆 Tab 提供编辑+统计+rollouts 溯源+删除+重置。
+- **不做 RAG**：记忆量小，**全量注入更可靠**；检索仅当记忆超 20K token 预算或进入多角色时才触发。档位预留扩充路径：0（单角色全局单份，当前）→ 1（per-role 隔离）→ 2（轻量检索）→ 3（真多 agent）。
+- **多 agent 场景**：为超长、需多视角/多线并行的大型任务预留——通过 skill 加载、跟随 task 动态召唤/卸载（同 agent 专家团）；单 agent 现也够用，不默认启用。
 
 ---
 
@@ -161,6 +177,8 @@
 
 - **交互范式**：对话框下任务 + 实时进展流（SSE）+ 执行中可实时插话。单页 shell（无路由跳转，视图内部 state 切换），两栏布局（Sidebar 任务平铺 + 主区 Chat/技能工具/设置整页覆盖）。
 - **页面命运（Plan C 已执行完成，2026-08-01）**：删除 `AgentControl`/`Training`/`Runtime` 整页（X2 遗留、全 404）；`ModelHub` 降级为 Settings 内「模型」Tab；新建 `Chat`/`SkillsAndTools`(Skills/Tools/MCP 三 Tab)/`Settings`(通用/模型/通道/关于) 四页；`react-router-dom` 已移除，改 React Context 自研 `taskStore`（零依赖）。
+- **设置→伙伴 Tab（2026-09-26 落地）**：`Settings` 新增「伙伴」父 Tab，下含 角色 / 画像 / 记忆 三个子 Tab。画像候选区只读（`InputProps.readOnly`，勿用 slotProps——MUI 此版不兼容）；角色卡全文可读可改（`GET/PUT /api/runtime/character`）。
+- **记忆入口收敛（2026-09-26 落地）**：记忆 Tab 从 `SkillsAndTools` 移除（原 Skills/Tools/MCP/记忆 四 Tab → Skills/Tools/MCP/稳态 四 Tab），记忆能力统一收敛到「设置→伙伴→记忆」——编辑 + 统计 + rollouts 溯源列表 + 单条 Drawer + 删除 rollout + 一键重置（输入 reset 确认）Dialog。前端 `assistantName` 动态取角色卡 `name:`。
 - **统一 `/chat` 单入口（2026-08-02）**：删除 `/run` 与 `runtimeApi.run`，所有交互统一走 `POST /api/runtime/chat`。一个会话 = 一个 task；首条消息后端自动建 task（落盘）并回填 `task_id`。`/chat` 内部跑双 agent 协作：先 probe planner——无 tool_calls 即纯闲聊（只走主模型，不碰 executor）；有 tool_calls 则转入 `run_task_two_layer`（planner 规划 + executor 执行）。`max_steps` 兜底 + `/stop` 中断。
 - **后端对接端点**：SSE 进展流 `GET /api/runtime/stream`、模型状态 `modelApi`/LLM `llmApi`、任务 `taskApi`（`/api/runtime/tasks`）、项目 `projectApi`（`/api/runtime/projects/meta`）、技能 `skillApi`、设置 `settingsApi`（`GET/PUT /api/settings`，含三通道配置）。
 - **三通道解耦（2026-08-02）**：Settings → 通道 Tab，planner(brain) / executor / vision 三通道各自独立开关 + base_url/model/api_key 配置，替换原「运行模式三态」下拉。`mode`（dual/online_only/local_only）退化为快捷预设（选 online_only 自动关 executor+vision）。内核 `tool_loop.py` 真实消费（详见 §14.3 与 `agent-control-arch-2026-07-26.html` §12.4）。
@@ -184,6 +202,7 @@
 | **M5** | §6.3 meta-loop 四层（权重级） | — | 🧊 未启用（知识级三层已完成，见 §6.3） |
 | **M6** | 子任务领取/状态机（SubtaskStore），共享黑板 = WorldModel 改造铺垫 | M5 | ✅ 完成（`task_store.py`） |
 | **M7** | 去分层通用多 agent 编排（LangGraph `Send` 扇出 + `dispatch` 元工具 + 删 `policy.py`） | M6 | ✅ 完成（`graph.py`） |
+| **P0（画像/角色卡/记忆）** | §6.5 三位一体：画像 user_profile + 角色卡 character + 前端伙伴 Tab + C₃ 校准端点 | M7 | ✅ 完成（真实 apikey 全链路验证，2026-09-26） |
 
 每里程碑独立可验证，逐个人工 green-light；模拟器验证贯穿 M1–M5，M6/M7 为通用多 agent 编排重设计（不限于模拟器场景）。
 
@@ -310,7 +329,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 
 | 层 | 路径 | 内容 |
 |----|------|------|
-| 用户全局 | `~/.omniagent/` | `config.yaml`（去明文 key + `local_model.auto_start`）、`skills/`（通用，跨 project）、`memory/`（每会话全量加载）、`projects/<path-slug>/`（会话历史 jsonl）、`tasks/<task_id>/`（任务资产）、`rules/` |
+| 用户全局 | `~/.omniagent/` | `config.yaml`（去明文 key + `local_model.auto_start`）、`character.md`（角色卡）、`skills/`（通用，跨 project）、`memory/`（每会话全量加载；含 `user_profile.md` 画像 / `profile_candidates.md` 候选区 / `signals_aggregate.json` 信号聚合）、`projects/<path-slug>/`（会话历史 jsonl）、`tasks/<task_id>/`（任务资产）、`rules/` |
 | 任务资产 | `~/.omniagent/tasks/<task_id>/` | `task.json`（元信息）、`trajectory.jsonl`、`world_model.md`、`collected.json`、`skills/`（任务私有，可选） |
 
 - **project** = 工作目录的逻辑分组，id = 路径 slug（如 `d-AI-OmniAgent`），仅承载会话历史，**不装资产**。
@@ -348,6 +367,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 2. **X3 设计符合性优化（P0–P3）**（已落地）：`/stop` 置 `aborted`、agent 回包持久化、前端标题以服务端 `objective` 为主源、非 loopback 绑定无 `auth_token` 拒绝启动、补 API 集成测试。
 3. 可选：跑真在线两层闭环验证，看 skill 库 + world-model 持久化在真机的产出。
 4. 后续独立项（非阻塞）：管理 / 运行接口的请求级 token 鉴权、模型路径 allow-list。
+5. **画像/角色卡/记忆三位一体 P0 + C₃ 校准**：已落地并真机验证（2026-09-26，见 §0 / §6.5）；后续真实抽检需求出现时用 `PUT /signals/calibration` 填 `c1_calibration_error`。
 
 ### 15.2 风险补充
 

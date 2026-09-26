@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Box,
   Tabs,
@@ -7,7 +7,6 @@ import {
   List,
   ListItem,
   ListItemText,
-  ListItemButton,
   Chip,
   Stack,
   IconButton,
@@ -19,31 +18,15 @@ import {
   FormControlLabel,
   Divider,
   Tooltip,
-  Drawer,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogContentText,
-  DialogActions,
-  Paper,
-  useTheme,
 } from "@mui/material";
 import BoltIcon from "@mui/icons-material/Bolt";
 import DeleteIcon from "@mui/icons-material/Delete";
 import AddIcon from "@mui/icons-material/Add";
-import SaveIcon from "@mui/icons-material/Save";
-import RestartAltIcon from "@mui/icons-material/RestartAlt";
-import AutoStoriesIcon from "@mui/icons-material/AutoStories";
-import HistoryEduIcon from "@mui/icons-material/HistoryEdu";
-import LockIcon from "@mui/icons-material/Lock";
-import { skillApi, runtimeApi, settingsApi, memoryApi, signalsApi } from "../../api/client";
+import { skillApi, runtimeApi, settingsApi, signalsApi } from "../../api/client";
 import { useTaskStore } from "../../store/taskStore.tsx";
 import type {
   SkillInfo,
   ToolsResponse,
-  MemoryIndex,
-  RolloutInfo,
-  RolloutDetail,
   SteadyState,
 } from "../../types";
 
@@ -368,273 +351,6 @@ function McpTab() {
   );
 }
 
-// ── K1 全局长期记忆（Memory Tab） ───────────────────────
-function MemoryTab() {
-  const { memorySignal } = useTaskStore();
-  const theme = useTheme();
-  const [index, setIndex] = useState<MemoryIndex | null>(null);
-  const [rollouts, setRollouts] = useState<RolloutInfo[]>([]);
-  const [master, setMaster] = useState("");
-  const [editing, setEditing] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [error, setError] = useState("");
-  const [drawer, setDrawer] = useState<RolloutDetail | null>(null);
-  const [resetOpen, setResetOpen] = useState(false);
-  const [resetText, setResetText] = useState("");
-
-  const load = useCallback(async () => {
-    try {
-      const [mi, ro] = await Promise.all([
-        memoryApi.index(),
-        memoryApi.rollouts({ limit: 100 }),
-      ]);
-      const m = mi.data as MemoryIndex;
-      setIndex(m);
-      setMaster(m.master);
-      setRollouts((ro.data as { rollouts: RolloutInfo[] }).rollouts || []);
-      setError("");
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, []);
-
-  // memorySignal 自增（SSE memory_updated）→ 刷新统计；挂载时也拉一次
-  useEffect(() => {
-    void load();
-  }, [load, memorySignal]);
-
-  const handleSave = async () => {
-    try {
-      await memoryApi.update(master);
-      setEditing(false);
-      setSaved(true);
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  // 知识注入开关（memory + skills 一起切，对应「不想学就关开关」）
-  const handleToggle = async (next: boolean) => {
-    try {
-      await settingsApi.put({
-        // 只写 memory：skills 开关已随 T2.4（技能目录化）移除，写进去是死配置
-        runtime: { knowledge: { memory: { enabled: next } } },
-      });
-      setIndex((prev) => (prev ? { ...prev, enabled: next } : prev));
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  const handleDeleteRollout = async (taskId: string) => {
-    try {
-      await memoryApi.deleteRollout(taskId);
-      setDrawer(null);
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  const handleReset = async () => {
-    if (resetText.trim() !== "reset") return;
-    try {
-      await memoryApi.reset();
-      setResetOpen(false);
-      setResetText("");
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  };
-
-  return (
-    <Box>
-      {error && (
-        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>
-      )}
-      {saved && (
-        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSaved(false)}>已保存</Alert>
-      )}
-
-      {/* 弱注入声明 */}
-      <Alert severity="info" sx={{ mb: 2 }}>
-        记忆以弱注入形式进入 system prompt：历史记忆/技能（可能过时，以实际观测为准）。
-        默认关闭，需在设置或下方开关显式开启才会注入；本页浏览/编辑始终可用。
-      </Alert>
-
-      {/* 统计条 + 开关 */}
-      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
-        <Chip
-          size="small"
-          icon={<AutoStoriesIcon />}
-          label={`rollouts: ${index?.rollouts_total ?? 0}`}
-          variant="outlined"
-        />
-        <Chip
-          size="small"
-          icon={<HistoryEduIcon />}
-          label={`已合并: ${index?.merged_total ?? 0}`}
-          variant="outlined"
-        />
-        <Chip
-          size="small"
-          icon={<LockIcon />}
-          label={`注入视图 ${index?.summary_chars ?? 0} 字`}
-          variant="outlined"
-        />
-        <FormControlLabel
-          control={
-            <Switch
-              checked={Boolean(index?.enabled)}
-              onChange={(e) => handleToggle(e.target.checked)}
-            />
-          }
-          label="知识注入"
-        />
-        <Box sx={{ flexGrow: 1 }} />
-        <Button
-          size="small"
-          color="error"
-          startIcon={<RestartAltIcon />}
-          onClick={() => setResetOpen(true)}
-        >
-          重置记忆
-        </Button>
-      </Stack>
-
-      {/* ① MEMORY.md 编辑器（只读 + 编辑切换） */}
-      <Typography variant="subtitle2" gutterBottom>全局长期记忆（MEMORY.md）</Typography>
-      {editing ? (
-        <Box sx={{ mb: 2 }}>
-          <TextField
-            fullWidth
-            multiline
-            minRows={10}
-            maxRows={24}
-            value={master}
-            onChange={(e) => setMaster(e.target.value)}
-            sx={{ fontFamily: "monospace", fontSize: 13, mb: 1 }}
-          />
-          <Stack direction="row" spacing={1}>
-            <Button size="small" variant="contained" startIcon={<SaveIcon />} onClick={handleSave}>
-              保存（重写并再生注入视图）
-            </Button>
-            <Button size="small" onClick={() => { setMaster(index?.master || ""); setEditing(false); }}>
-              取消
-            </Button>
-          </Stack>
-        </Box>
-      ) : (
-        <Box sx={{ mb: 2 }}>
-          <Paper
-            elevation={0}
-            sx={{
-              p: 1.5, borderRadius: 1, bgcolor: "background.paper",
-              border: "1px solid", borderColor: "divider",
-              maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word",
-              fontSize: 13, minHeight: 60,
-            }}
-          >
-            {master ? master : "（MEMORY.md 为空，蒸馏产物合并或你手动编辑后会出现内容）"}
-          </Paper>
-          <Button size="small" sx={{ mt: 1 }} onClick={() => setEditing(true)}>
-            编辑 MEMORY.md
-          </Button>
-        </Box>
-      )}
-
-      <Divider sx={{ my: 2 }} />
-
-      {/* ② rollouts 溯源列表 */}
-      <Typography variant="subtitle2" gutterBottom>记忆回放溯源（rollouts）</Typography>
-      {rollouts.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">
-          暂无 rollout。任务完成后 Curator 静默蒸馏（成功任务抽 facts，失败任务记 lessons），每满 5 条未合并项合并进 MEMORY.md。
-        </Typography>
-      ) : (
-        <List dense>
-          {rollouts.map((r) => (
-            <ListItemButton key={r.task_id} onClick={() => memoryApi.rollout(r.task_id).then((res) => setDrawer(res.data as RolloutDetail)).catch(() => setError("读取 rollout 失败"))}>
-              <ListItemText
-                primary={
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <span style={{ fontFamily: "monospace", fontSize: 13 }}>{r.task_id}</span>
-                    {r.success === true && <Chip size="small" label="成功" color="success" />}
-                    {r.success === false && <Chip size="small" label="失败" color="warning" />}
-                    {r.merged && <Chip size="small" label="已合并" variant="outlined" />}
-                  </Stack>
-                }
-                secondary={`facts:${r.facts_n} · lessons:${r.lessons_n}${r.distilled_at ? " · " + r.distilled_at : ""}`}
-              />
-            </ListItemButton>
-          ))}
-        </List>
-      )}
-
-      {/* ③ 单条 rollout 全文抽屉 */}
-      <Drawer anchor="right" open={Boolean(drawer)} onClose={() => setDrawer(null)} sx={{ zIndex: theme.zIndex.drawer + 1 }}>
-        <Box sx={{ width: 460, p: 2, display: "flex", flexDirection: "column", minHeight: 0 }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-            <Typography variant="subtitle2" noWrap>
-              rollout: {drawer?.task_id}
-            </Typography>
-            <IconButton size="small" onClick={() => setDrawer(null)}><DeleteIcon fontSize="small" /></IconButton>
-          </Stack>
-          {drawer && (
-            <>
-              <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>
-                trajectory: {drawer.trajectory || "（无）"} · facts:{drawer.facts_n} · lessons:{drawer.lessons_n}
-              </Typography>
-              <ScrollAreaBox sx={{ flexGrow: 1, minHeight: 0 }}>
-                <Box component="pre" sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 12, m: 0 }}>
-                  {drawer.content}
-                </Box>
-              </ScrollAreaBox>
-              <Button
-                size="small" color="error" sx={{ mt: 1 }} startIcon={<DeleteIcon />}
-                onClick={() => drawer && handleDeleteRollout(drawer.task_id)}
-              >
-                删除此 rollout（不回滚已合并内容）
-              </Button>
-            </>
-          )}
-        </Box>
-      </Drawer>
-
-      {/* ④ 重置确认对话框（输入 reset） */}
-      <Dialog open={resetOpen} onClose={() => setResetOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>重置全部记忆</DialogTitle>
-        <DialogContent>
-          <DialogContentText>
-            将清空 memory/ 全部产物（MEMORY.md / 注入视图 / 全部 rollouts / 合并清单）。
-            此操作不可恢复，且不触及任何任务私有数据。输入 <b>reset</b> 确认。
-          </DialogContentText>
-          <TextField
-            autoFocus fullWidth margin="dense" label="输入 reset"
-            value={resetText} onChange={(e) => setResetText(e.target.value)}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => { setResetOpen(false); setResetText(""); }}>取消</Button>
-          <Button color="error" disabled={resetText.trim() !== "reset"} onClick={handleReset}>
-            确认重置
-          </Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
-  );
-}
-
-// 轻量可滚动容器（复用 ScrollArea 组件避免重复实现）
-function ScrollAreaBox({ children, sx }: { children: React.ReactNode; sx?: Record<string, unknown> }) {
-  return (
-    <Box sx={{ overflow: "auto", ...(sx || {}) }}>
-      {children}
-    </Box>
-  );
-}
 
 export default function SkillsAndTools() {
   const [tab, setTab] = useState(0);
@@ -645,14 +361,12 @@ export default function SkillsAndTools() {
         <Tab label="Skills" />
         <Tab label="Tools" />
         <Tab label="MCP" />
-        <Tab label="记忆" />
         <Tab label="稳态" />
       </Tabs>
       {tab === 0 && <SkillsTab />}
       {tab === 1 && <ToolsTab />}
       {tab === 2 && <McpTab />}
-      {tab === 3 && <MemoryTab />}
-      {tab === 4 && <SteadyTab />}
+      {tab === 3 && <SteadyTab />}
     </Box>
   );
 
@@ -688,19 +402,40 @@ function SteadyTab() {
   const { memorySignal } = useTaskStore();
   const [steady, setSteady] = useState<SteadyState | null>(null);
   const [error, setError] = useState("");
+  // 稳态是低频聚合指标：内容去重（无实质变化不重渲染）+ 防抖（合并连发），消除刷新闪烁
+  const lastKeyRef = useRef<string>("");
+  const debounceRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const r = await signalsApi.steady();
-      setSteady(r.data);
+      const d = (await signalsApi.steady()).data as SteadyState;
+      const key = JSON.stringify([
+        d?.domain,
+        d?.converged,
+        d?.signals?.distill_dedup_hit_rate,
+        d?.signals?.skill_promotion_rate?.rate,
+        d?.signals?.step_variance?.variance,
+        d?.signals?.human_intervention_rate?.rate,
+        d?.signals?.intervention_timeline,
+      ]);
+      // 内容未变 → 不 setState，避免反复重渲染造成闪烁
+      if (lastKeyRef.current === key) return;
+      lastKeyRef.current = key;
+      setSteady(d);
       setError("");
     } catch (e) {
       setError((e as Error).message);
     }
   }, []);
 
-  // 任务结束（memorySignal 自增）或挂载时刷新稳态面板
-  useEffect(() => { void load(); }, [load, memorySignal]);
+  // 挂载即拉一次
+  useEffect(() => { void load(); }, [load]);
+  // 任务结束（memorySignal 自增）→ 防抖后再拉，合并连发/重连，避免高频刷新闪烁
+  useEffect(() => {
+    if (debounceRef.current) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(() => { void load(); }, 1200);
+    return () => { if (debounceRef.current) window.clearTimeout(debounceRef.current); };
+  }, [memorySignal, load]);
 
   const s = steady?.signals;
   const tl = s?.intervention_timeline || [];

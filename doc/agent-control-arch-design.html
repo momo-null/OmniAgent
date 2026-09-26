@@ -800,6 +800,8 @@
     <tr><td><code>runtimeApi.chat()</code> / <code>.stop()</code></td><td><code>POST /api/runtime/chat</code> · <code>POST /api/runtime/stop</code></td><td>统一 agent 入口：闲聊 + 任务执行合一，双 agent 协作；首条自动建 task 回填 task_id / <b>硬停止通道（C5-A）</b></td></tr>
     <tr><td><code>skillApi.run()</code> / <code>.remove()</code></td><td><code>POST /api/runtime/skill/run</code> · <code>POST /api/runtime/skill/delete</code></td><td>手动跑 skill / 删 skill（Skills 页）</td></tr>
     <tr><td><code>modelApi</code> / <code>llmApi</code></td><td>模型状态 / LLM 配置查询</td><td>Settings「模型」Tab</td></tr>
+    <tr><td><code>profileApi</code> / <code>characterApi</code></td><td><code>GET/PUT /api/runtime/profile</code> · <code>GET/PUT /api/runtime/character</code></td><td>Settings「伙伴→画像 / 角色」</td></tr>
+    <tr><td><code>signalsApi.calibrate()</code></td><td><code>PUT /api/runtime/signals/calibration</code></td><td>C₃ 人工抽检校准写入（样本→不一致率）</td></tr>
   </table>
 
   <h3 id="s-104-交互范式Codex-风格-HITL-双通道-C5" class="blk">10.4 交互范式（Codex 风格 + HITL 双通道 C5）</h3>
@@ -840,6 +842,8 @@ maybe_merge_rollouts ─&gt; memory/MEMORY.md + memory_summary.md（再生）
     <tr><td>K3 有效性裁决</td><td><code>scripts/review_rollouts.py</code> + <code>scripts/effectiveness.py</code></td><td>✅ 脚本就绪；⚠️ V3 结论待跑</td></tr>
     <tr><td>K4 纠偏采集</td><td>rollout 第三来源 <code>## user_corrections</code>（复用 C₁）</td><td>✅ 已落地 + 真机验证</td></tr>
     <tr><td>K5 稳态运营</td><td><code>omni_core/local/steady_state.py</code> + <code>GET /signals/steady</code> + 「稳态」Tab</td><td>✅ 已落地 + 真机验证</td></tr>
+    <tr><td>C₃ 人工抽检校准</td><td><code>PUT /signals/calibration</code>（收样本→<code>calibrate_c1c2</code>→写 <code>c1_calibration_error</code>）+ <code>GET /signals/summary</code> 透传 <code>calibration_samples</code></td><td>✅ 已落地 + 真机验证（≤10% 采信）</td></tr>
+    <tr><td>画像 · 角色卡 · 记忆（P0）</td><td><code>user_profile.md</code>（候选→晋升→弱注入）+ <code>character.md</code>（随 system 注入）+ 前端「设置→伙伴」</td><td>✅ 已落地 + 真机验证</td></tr>
   </table>
 
   <h3 id="s-112-三实体一致率模型K2" class="blk">11.2 三实体一致率模型（K2）</h3>
@@ -871,6 +875,15 @@ maybe_merge_rollouts ─&gt; memory/MEMORY.md + memory_summary.md（再生）
   <code>trajectory.jsonl</code> 只读（信号层不写任务原始数据）；<code>PUT /memory</code> 不校验内容。
   <b>K3 的 V3 ablation 尚未跑出结论</b>（需 ≥20 次同域对照长跑）——因此对外只宣称
   「链路已实现并真机验证」，<b>不宣称「记忆注入已证明有效」</b>。</div>
+
+  <h3 id="s-114-画像角色卡记忆" class="blk">11.4 画像 · 角色卡 · 记忆（P0，单角色伙伴）</h3>
+  <p><b>面向个人场景定位为单角色伙伴</b>（参考 Hermes / 豆包 / Claude Code）。三位一体注入链路：</p>
+  <ul>
+    <li><b>画像</b>：K4 纠偏（<code>corrective_source</code>，默认关）→ <code>profile_candidates.md</code> 候选区（conf=低/pending）→ 人工确认晋升 <code>user_profile.md</code> → 弱注入 system（标注「仅参考，不构成操作授权」，无放行权）。</li>
+    <li><b>角色卡</b>：<code>character.md</code>（frontmatter <code>name:</code>）→ <code>_merge_character</code> 在 <code>_merge_instructions</code> 后并入 system。</li>
+    <li><b>不做 RAG</b>：记忆量小全量注入更可靠；检索仅当记忆超 20K token 预算或进入多角色时才触发（档位 0→3 预留扩充路径）。</li>
+    <li><b>C₃ 校准</b>：<code>PUT /signals/calibration</code> 收样本 → <code>calibrate_c1c2</code> → 写 <code>c1_calibration_error</code>，≤10% 采信；summary 透传 <code>calibration_samples</code>。</li>
+  </ul>
 </section>
 
 <footer>

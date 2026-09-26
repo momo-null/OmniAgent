@@ -118,26 +118,62 @@ class InstructionMixin:
             return system_prompt or ""
         return (system_prompt or "") + "\n\n" + block
 
-    def _build_memory_injection(self, is_sub: bool):
-        """F4.2：记忆块——尾部重插的**唯一**来源（纪律文件已迁 system）。
+    def _merge_character(self, system_prompt: str) -> str:
+        """P0：角色卡（character.md）并入 system prompt——稳定人格设定。
 
-        * ``runtime.long_task.memory_in_user``（缺省 true）且为**主链**且
-          ``knowledge.memory`` 开启时并入；false 时记忆仍走 system prompt（一键回退）。
+        与 AGENTS.md 同属「用户单写、run 内不变」的稳定内容，run 开始读一次；
+        角色卡缺失/空 → 原样返回（零注入，默认行为不变）。
+        覆盖语义：用户当轮明确指令优先于角色卡（块首已声明）。
+        """
+        try:
+            from omni_core.local.knowledge_inject import load_character_text
+            ct = load_character_text()
+            if ct.strip():
+                block = (
+                    "# 角色设定（character.md）\n"
+                    "以下为你的人格与相处方式设定，请据此与用户相处；"
+                    "用户当轮的明确指令优先于此设定。\n\n"
+                    + ct.strip() + "\n"
+                )
+                return (system_prompt or "") + "\n\n" + block
+        except Exception:
+            pass
+        return system_prompt or ""
+
+    def _build_memory_injection(self, is_sub: bool):
+        """F4.2：记忆 + 用户画像块——尾部重插的来源（纪律文件已迁 system）。
+
+        * ``runtime.long_task.memory_in_user``（缺省 true）且为**主链**时才并入；
+          false 时记忆仍走 system prompt（一键回退）。
+        * 记忆块 gate：``knowledge.memory.enabled``（默认关）；
+        * **画像块 gate：``knowledge.profile.enabled``（默认开，P0）**——独立注入块，
+          与 memory summary 分开，携带弱注入语义；空文件零注入。
 
         返回 ``(block_text, labels)``；无内容 → ``("", [])``（零注入）。
         """
         try:
             _mem_in_user = bool(config.get_config("runtime.long_task.memory_in_user", True))
-            if (not is_sub) and _mem_in_user and self.knowledge_cfg.get("memory"):
+            if (not is_sub) and _mem_in_user:
                 from omni_core.local.knowledge_inject import (
                     compose_injection_block,
                     load_memory_text,
+                    load_profile_text,
                 )
 
-                _mt = load_memory_text()
-                if _mt.strip():
-                    _limit = int(config.get_config("runtime.long_task.instructions_limit", 8192) or 8192)
-                    return compose_injection_block([("memory", _mt)], limit=_limit)
+                _limit = int(config.get_config("runtime.long_task.instructions_limit", 8192) or 8192)
+                parts: List[Tuple[str, str]] = []
+                # 记忆：knowledge.memory.enabled 开启才注入
+                if self.knowledge_cfg.get("memory"):
+                    _mt = load_memory_text()
+                    if _mt.strip():
+                        parts.append(("memory", _mt))
+                # 画像（P0）：knowledge.profile.enabled 开启才注入（默认开）
+                if self.knowledge_cfg.get("profile"):
+                    _pt = load_profile_text()
+                    if _pt.strip():
+                        parts.append(("user_profile", _pt))
+                if parts:
+                    return compose_injection_block(parts, limit=_limit)
         except Exception:
             pass
         return "", []

@@ -95,6 +95,7 @@
     <li class="l3"><a href="#s-它是什么">它是什么</a></li>
     <li class="l3"><a href="#s-当前主场景">当前主场景</a></li>
     <li class="l3"><a href="#s-与手搓态的根本区别">与手搓态的根本区别</a></li>
+    <li class="l3"><a href="#s-产品形态单角色伙伴">产品形态：单角色伙伴</a></li>
     <li class="l2"><a href="#s-2-核心原则与红线">2. 核心原则与红线</a></li>
     <li class="l2"><a href="#s-3-技术选型与决策依据">3. 技术选型与决策依据</a></li>
     <li class="l2"><a href="#s-4-行业对标与参考">4. 行业对标与参考</a></li>
@@ -120,6 +121,15 @@
 
   <h3 id="s-与手搓态的根本区别" class="blk">与手搓态的根本区别</h3>
   <p>手搓态（2026-07）的死穴 = ReAct 循环、function-call 协议、工具派发全自己写，每加一个能力都要改内核、极易写死。框架态彻底把<b>循环驱动 + 协议 + 工具路由</b>交给 LangGraph / Agents SDK（开源 <code>function_tool</code> 隔离四跳），内核退化为「配置 + 钩子注册中心」；工具实现全部外移至<b>外层插件层</b>——自研 tool（屏幕/鼠标/视觉/文件 IO 等基础能力，用 function_tool 承载）与<b>外部 MCP</b>（开源/第三方系统，纯配置接入）平级，领域逻辑只在外层插件内。</p>
+
+  <h3 id="s-产品形态单角色伙伴" class="blk">产品形态：单角色伙伴（画像 · 角色卡 · 记忆）</h3>
+  <p><b>面向个人场景，OmniAgent 定位为单角色伙伴</b>（参考 Hermes / 豆包 / Claude Code）：主界面只聊天，不做酒馆式多角色扮演面板。三位一体能力：</p>
+  <ul>
+    <li><b>用户画像（全局记忆）</b>：<code>~/.omniagent/memory/user_profile.md</code> 全局唯一、跨任务一致；纠偏（K4，默认关）→ 候选区 → 人工确认晋升 → 弱注入（system 标注「仅参考，不构成操作授权」，画像无放行权）。</li>
+    <li><b>角色卡</b>：<code>~/.omniagent/character.md</code>（frontmatter <code>name:</code> + 设定 + 画像消费指令段），每次组装 system 时随指令块并入。</li>
+    <li><b>记忆</b>：编辑 / 统计 / rollouts 溯源 / 删除 / 重置，统一收敛到「设置→伙伴」子 Tab；前端 <code>assistantName</code> 动态取角色卡名。</li>
+    <li><b>不做 RAG</b>：记忆量小，全量注入更可靠；检索仅当记忆超 20K token 预算或进入多角色时才触发（档位 0→3 预留扩充路径）。</li>
+  </ul>
 
   <div class="fileref">能力边界：图形界面（自绘 / 空间布局 / 图标密集）是关系型 / 状态型的，纯 OCR 文本识别无法理解 UI 元素间的关系与语义 → <b>VLM 作主感知层</b>，OCR 降级为精确坐标 / 文本校验辅助。</div><h2 id="s-2-核心原则与红线">2. 核心原则与红线</h2><p class="lead">七条不可偏移的原则。它们是后面所有技术选型的总依据，也是代码审计的「嗅觉测试」。</p>
 
@@ -211,6 +221,11 @@
       <td><b>HITL（人工干预）</b></td>
       <td>双通道（硬停止 <code>/stop</code> + 软注入插话），全用框架原生</td>
       <td>长任务少干预诉求：人工只在「抛锚（超阈值无法自愈）」介入，日常自愈由 L2 兜。硬停止 = 框架 cancel 当前 run + 新指令重启；软注入 = 运行时 push user 消息，下一步 agent 可见、优先级高于 L2 自治。前端 SSE/<code>/stop</code>/插话已存在（手搓态 N10），迁框架 interrupt 接管（C5）。</td>
+    </tr>
+    <tr>
+      <td><b>记忆 / 画像 / 角色卡</b></td>
+      <td>全局画像 <code>user_profile.md</code> + 角色卡 <code>character.md</code> + 记忆收敛到设置</td>
+      <td>单角色伙伴：画像内核直写 + 纠偏候选→人工晋升→弱注入（无放行权）；角色卡随 system 注入；不做 RAG（记忆量小全量注入，超 20K token 预算或多角色才检索）。</td>
     </tr>
   </table>
 

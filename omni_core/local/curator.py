@@ -82,6 +82,7 @@ class CuratorReport:
     flagged_low_quality: List[str] = field(default_factory=list)
     rollouts_distilled: int = 0
     memory_merged: int = 0
+    profile_candidates: int = 0   # P0：本次蒸馏进画像候选区的条数（待人工确认）
     dedup_hit_rate: float = 0.0   # K5：新蒸馏 facts 中已被 MEMORY.md 覆盖比例
     errors: List[str] = field(default_factory=list)
 
@@ -97,6 +98,7 @@ class CuratorReport:
             "flagged_low_quality": self.flagged_low_quality,
             "rollouts_distilled": self.rollouts_distilled,
             "memory_merged": self.memory_merged,
+            "profile_candidates": self.profile_candidates,
             "dedup_hit_rate": self.dedup_hit_rate,
             "errors": self.errors,
         }
@@ -201,6 +203,13 @@ class Curator:
                     report.dedup_hit_rate, report.skills_promoted, report.skills_created)
             except Exception as e:
                 report.errors.append(f"distill_task_memory: {type(e).__name__}: {e}")
+
+        # 6. 用户画像候选蒸馏（P0）：纠偏消息 → 候选区（人工确认后晋升，避免任务噪声污染画像）
+        if run_record is not None:
+            try:
+                report.profile_candidates = self.distill_user_profile(run_record)
+            except Exception as e:
+                report.errors.append(f"distill_user_profile: {type(e).__name__}: {e}")
 
         return report
 
@@ -486,6 +495,56 @@ class Curator:
             return path
         except Exception:
             return None
+
+    # ==================================================================
+    # 6. distill_user_profile（P0：用户画像候选蒸馏）
+    # ==================================================================
+
+    def distill_user_profile(self, run_record: Dict[str, Any]) -> int:
+        """P0：从用户纠偏消息蒸馏画像候选 → ``memory/profile_candidates.md``。
+
+        只追加**候选**（conf=低 / status=pending），不直接写入画像正文——
+        纠偏消息可能含任务级指令，需用户在前端确认后才晋升为高置信画像条目，
+        避免任务噪声污染「用户是谁」的长期画像（画像无放行权、仅参考）。
+
+        原料：``run_record["user_corrections"]``（已在会话层经 C₁=refuted 过滤 +
+        长度门槛；默认 corrective_source 关时不采集，此处自然为空）。
+
+        Returns:
+            本次新增候选条数（去重后）。
+        """
+        corr = list(run_record.get("user_corrections") or [])
+        if not corr:
+            return 0
+        path = global_memory() / "profile_candidates.md"
+        try:
+            existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        except Exception:
+            existing = []
+        # seen 只取每条候选的正文（"- " 后、首个 " | " 前），按小写去重；
+        # 不能把整行（含 source/conf 后缀）放进 seen，否则正文永远匹配不上。
+        seen = set()
+        for ln in existing:
+            s = ln.strip()
+            if s.startswith("- "):
+                seen.add(s[2:].split(" | ", 1)[0].strip().lower())
+        now = datetime.now(timezone.utc).isoformat()
+        added = 0
+        for c in corr:
+            c = (c or "").strip()
+            if not c or c.lower() in seen:
+                continue
+            seen.add(c.lower())
+            existing.append(
+                f"- {c} | source=纠偏 | conf=低 | status=pending | updated_at={now}")
+            added += 1
+        if added:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("\n".join(existing) + "\n", encoding="utf-8")
+            except Exception:
+                return 0
+        return added
 
     # ------------------------------------------------------------------
     # K5 辅助：去重命中率 + 指标持久化 + 稳态降频判定
