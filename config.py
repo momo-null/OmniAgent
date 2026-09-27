@@ -209,7 +209,7 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
         # 内核工具限流（缺省见 shell_tool._LIMITS；配置缺项即用缺省，不会报错）
         # 插件自有配置（filesystem / web / vision …）一律不进本文件，见 ~/.omniagent/plugins/<name>.yaml
         "shell_exec": {"timeout_sec": 30.0, "max_output": 8000},
-        # S0 权限模式与 S2 审批（sandbox-permission-design.md §4；随 run 快照进入 run，改后下次 run 生效）
+        # S0 权限模式与 S2 审批（随 run 快照进入 run，改后下次 run 生效）
         "security": {
             "mode": "standard",        # standard | read_only（read_only=危险动作自动拒绝）
             "allow_write_roots": [],   # 额外允许写入的根（绝对路径列表）

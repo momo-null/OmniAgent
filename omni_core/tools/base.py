@@ -108,7 +108,7 @@ def function_tool(
         percept: 世界模型感知类型——``"state"`` → 结果并入环境状态文本；
             ``"collected"`` → 结果并入采集清单。内核据此分发，**零工具名字面量**。
         timeout: 单次工具调用超时（秒）。
-        risk: S2 风险类别自声明（sandbox-permission-design.md §4）——
+        risk: S2 风险类别自声明——
             ``"exec"``（命令执行）/ ``"actuate"``（键鼠设备注入）/ ``"network"``
             （网络出站）。声明后执行前过前置门；未声明=纯/读（S1 漏斗仍生效）。
 

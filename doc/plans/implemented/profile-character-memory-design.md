@@ -1,7 +1,7 @@
 # OmniAgent 单角色助手 · 用户画像 + 角色卡 + Memory 最小设计
 
-> 状态：设计稿（未实施） ｜ 日期：2026-09-26
-> 定位：单角色个人助手（像豆包），参考 Hermes（全量注入 + 蒸馏 + 持久 MEMORY.md 层）与消费级个人 agent（Claude.ai / Claude Code / Character.AI persona）
+> 状态：✅ **P0 已实施并真机验证（2026-09-26，main commit `7d2f60c`）**：画像 schema / Curator 蒸馏 / 内核直写 / 独立注入块（§2）+ 角色卡接口与前端三 Tab（§3 / §7）。未实现项（K2 准入升级 / 检索层 / 多角色档位 1-3）已收割至 `Backlog.md`。本文归档至 `implemented/`。
+> 定位：单角色个人助手（伙伴型），参考 Hermes（全量注入 + 蒸馏 + 持久 MEMORY.md 层）与消费级个人 agent 的画像/记忆做法（详见附录参照来源）
 > 范围收敛依据：`OmniAgent记忆体系三位一体审计.md`（14 方案对比）+ 用户明确定位（单角色助手、不做多角色、不做检索/RAG）
 
 ---
@@ -153,7 +153,7 @@ agent（大脑）──通过──→ 任务执行 → 轨迹落盘 → Curator
 
 ```
 角色卡（skill L2，<assistant>.md）
-  ├── role      ← 静态：伙伴定位、性格、语气（人工定义，像豆包）
+  ├── role      ← 静态：伙伴定位、性格、语气（人工定义）
   ├── scope     ← 静态：单角色助手（无多角色，scope 固定）
   ├── model     ← 静态：逻辑名（brain，不写 endpoint）
   ├── tools     ← 静态：可用工具集
@@ -204,7 +204,7 @@ MEMORY.md 的 facts/lessons、画像条目统一带 `来源 / 标签 / scope` �
 
 ## 5. 与未实现 plan 的对齐
 
-### 5.1 sandbox-permission-design.md
+### 5.1 sandbox-permission-design.md（已实施，归档 `implemented/`）
 
 | sandbox 约束 | 本设计裁决 |
 |---|---|
@@ -250,7 +250,7 @@ MEMORY.md 的 facts/lessons、画像条目统一带 `来源 / 标签 / scope` �
 
 ## 7. 前端增量（消费端，收敛到设置）
 
-定位：个人助手风格（Codex / workbuddy 参考），主界面只聊天，角色/画像/记忆等管理类**全部收敛进「设置」**，不做角色扮演大面板。
+定位：对话即主界面——主界面只聊天，角色/画像/记忆等管理类**全部收敛进「设置」**，不做角色扮演大面板。
 
 | 位置 | 改动 |
 |---|---|
@@ -264,7 +264,7 @@ MEMORY.md 的 facts/lessons、画像条目统一带 `来源 / 标签 / scope` �
 - 画像接口 `GET/PUT /api/runtime/profile`（P0 落地后）；
 - 记忆接口**已有**（`/api/runtime/memory*`，前端 `memoryApi` 已封装），平移即可，零重写。
 
-**说明**：记忆查看前端已实现（技能与工具 → 记忆 Tab，功能完整）；本次只提升可见性并归入设置，不重写。桌宠/二次元形象层为**计划外**远期方向，不进入本设计。
+**说明**：记忆查看前端已实现（技能与工具 → 记忆 Tab，功能完整）；本次只提升可见性并归入设置，不重写。拟人化形象层为**计划外**远期方向，不进入本设计。
 
 ---
 

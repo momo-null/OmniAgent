@@ -1,4 +1,4 @@
-"""S2 审批门用例（sandbox-permission-design.md §9.3–§9.6）。
+"""S2 审批门用例。
 
 覆盖：前置门（exec/actuate/network）、AutoDeny 兜底、批准后执行、
 任务级类记忆（remember）、拒绝 / 超时语义、read_only 档、full_access 语义、

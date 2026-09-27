@@ -1,4 +1,4 @@
-"""S2 审批后端：SSE 推卡 + REST 决议 + 任务级记忆（sandbox-permission-design.md §6）。
+"""S2 审批后端：SSE 推卡 + REST 决议 + 任务级记忆。
 
 内核门（``omni_core/tools/policy.py``）经 ``ApprovalSink`` 协议调用本模块；
 后端启动时经 ``install_approval_sink()`` 注册。未注册（单测 / 脚本直调工具）

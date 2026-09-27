@@ -1,4 +1,4 @@
-"""S2 审批决议 + 审计只读路由（sandbox-permission-design.md §6.2 / §6.4）。
+"""S2 审批决议 + 审计只读路由。
 
 - POST /approvals/{approval_id}/decision：人工决议（approve|deny，含任务级记忆）；
 - GET  /audit：审计 jsonl 尾部 N 条（设置页「安全」区消费）。

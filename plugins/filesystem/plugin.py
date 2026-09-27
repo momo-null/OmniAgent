@@ -5,8 +5,8 @@
 
 默认启用（`unit="filesystem"`）。安全边界：直接操作宿主机文件系统，路径由调用方
 给定，不做额外沙箱（与 shell 同类风险，需用户知情——本组默认开是因为风险低于 shell，
-且文件读写是通用 agent 的基础能力）。路径围栏由安全线 S1 统一注入（见
-doc/plans/sandbox-permission-design.md），本插件不自行实现权限判断。
+且文件读写是通用 agent 的基础能力）。路径围栏由安全线 S1 统一注入
+（`workspace.resolve_path` 漏斗 + `policy.ensure_writable` 写入口），本插件不自行实现权限判断。
 
 2026-09-25 归一（用户定：文件操作只留一套，读写不拆）——原独立插件 `fs_pro` 已并入：
 `read_range` → `read_file(offset=, limit=)`；`search_with_context` → `search_content(context=)`；

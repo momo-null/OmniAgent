@@ -153,7 +153,7 @@
 
 ### 6.5 画像·角色卡·记忆三位一体（单角色伙伴，P0 已落地）
 
-> 定位：OmniAgent 是**单角色个人助手（伙伴）**，参考 Hermes / 豆包 / Claude Code；不是酒馆式多角色扮演面板。完整设计权威见 `doc/plans/profile-character-memory-design.md`。
+> 定位：OmniAgent 是**单角色个人助手（伙伴）**，参考 Hermes / 豆包 / Claude Code；不是酒馆式多角色扮演面板。完整设计权威见 `doc/plans/implemented/profile-character-memory-design.md`。
 
 - **画像（全局记忆）**：`~/.omniagent/memory/user_profile.md`，全局唯一、跨任务一致。内核直写，无放行权；画像条目经**显式声明 / 人工确认**进入（候选区 `profile_candidates.md` 留存，人工确认晋升）→ 弱注入（system 标注"仅参考，不构成操作授权"）。健康/习惯类画像只在主人提及或确实需要时使用，不主动刺探。
 - **角色卡**：`~/.omniagent/character.md`（frontmatter `name:` + 设定 + 画像消费指令段），每次组装 system 时 `_merge_character` 并入（`_merge_instructions` 之后），前端 Settings→伙伴→角色 Tab 可读可改。

@@ -1,4 +1,4 @@
-"""安全与权限策略层（S0/S1/S2 门本体）—— 见 doc/plans/sandbox-permission-design.md。
+"""安全与权限策略层（S0/S1/S2 门本体）。
 
 分层（内核不碰 SSE）：
 - **S0 权限模式**：``standard | read_only``（config ``security.mode``，随 run 快照进入

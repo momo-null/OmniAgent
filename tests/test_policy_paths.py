@@ -1,4 +1,4 @@
-"""S1 PathPolicy 路径围栏用例（sandbox-permission-design.md §9.1 / §9.2）。
+"""S1 PathPolicy 路径围栏用例。
 
 覆盖：绝对拒绝区（读写全拒 + `..` 规范化穿透）、任务 tmp 例外、
 允许根、载体文件全盘写拒（config*.yaml / mcp.json / AGENTS.md）、
