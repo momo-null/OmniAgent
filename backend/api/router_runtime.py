@@ -23,7 +23,7 @@ router.include_router(snapshot_api.router)
 # 兼容 re-export：保留原模块暴露的全部模块级名（外部零改动）
 from backend.api.routers.helpers import (  # noqa: F401
     ROOT, CONFIG_PATH, manager, AGENT_MAIN, _traj_cursor, _cursor_lock,
-    _EXEC_TOOLS, _append_task_name, _call_skill, _collect_user_corrections,
+    _EXEC_TOOLS, _append_task_name, _call_skill,
     _config, _config_hash, _ensure_outbox, _finish_task,
     _is_any_running, _is_task_running, _make_brain_cfg, _memory_enabled,
     _merge_message_step, _merge_thinking_step, _paths, _project_store,

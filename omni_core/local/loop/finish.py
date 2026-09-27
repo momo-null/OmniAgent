@@ -124,8 +124,6 @@ class FinishMixin:
                 run_record_for_curator = dict(run_meta)
                 run_record_for_curator["reason"] = reason
                 run_record_for_curator["run_id"] = run_meta.get("run_id", "")
-                # K4：用户纠偏消息透传给蒸馏（第三来源）；默认空，由 config 控制是否启用
-                run_record_for_curator["user_corrections"] = list(spec.corrections or [])
                 curator_report = curator.run_once(run_record_for_curator)
                 result["curator_report"] = curator_report.to_dict()
                 if self.verbose and curator_report.flagged_low_quality:

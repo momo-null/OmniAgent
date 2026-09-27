@@ -3,7 +3,7 @@
 抽 ≥3 个 ``memory/rollouts/<tid>.md``，复核：
 - facts 可溯源（头部含 trajectory 引用）
 - lessons 归因合理（失败/高重试带 reason）
-- 格式合规（含 ## facts / ## lessons / ## user_corrections 段落）
+- 格式合规（含 ## facts / ## lessons 段落）
 
 不通过 → 回 K0/K2 修蒸馏，不否定记忆价值本身（设计 §6）。
 """
@@ -54,7 +54,7 @@ def review_one(task_id: str, text: str) -> Dict[str, Any]:
             if "——" not in l:
                 issues.append(f"lesson 缺归因: {l[:40]}")
     # 3. 格式合规：必须有三段
-    for seg in ("## facts", "## lessons", "## user_corrections"):
+    for seg in ("## facts", "## lessons"):
         if seg not in text:
             issues.append(f"缺段落 {seg}")
 

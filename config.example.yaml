@@ -44,7 +44,6 @@ runtime:
     dir: ""                   # 留空 → 项目级 .omniagent/<project>/world_model/<task>
   # M4b.3 Curator（任务完成后触发式跑一次，从 rollout 蒸馏长期记忆）
   curator:
-    corrective_source: false  # 是否把「纠正类」rollout 也作为蒸馏来源
   # F2.4 长任务主链墙钟（秒）；0=不检查（默认）。大步数预算下默认不检查，避免被 120s 子任务墙钟腰斩。
   # 与 runtime.escalation.wallclock_sec（缺省 120s，worker 防打转安全网）解耦，二者来源/语义/缺省均不同。
   long_task:

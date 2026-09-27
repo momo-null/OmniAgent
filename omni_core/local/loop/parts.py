@@ -232,9 +232,6 @@ class TaskSpec:
     # 会话历史（OpenAI 风格 user/assistant 消息，不含 system）：单链路统一后
     # 由 /chat 注入（session 记录重建），作为 agent 起始上下文——替代旧的
     # 单一历史入口：跨轮记忆唯一来源，不与其它注入叠加。
-    corrections: List[str] = field(default_factory=list)
-    # K4：用户纠偏消息（C₁=refuted 且含纠正内容），来自 session，作蒸馏第三来源。
-    # 默认空；仅当 config runtime.curator.corrective_source=true 时由 /chat 填充。
     task_mode: str = "oneshot"
 def _safe_str(obj) -> str:
     try:

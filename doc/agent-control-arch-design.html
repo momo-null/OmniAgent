@@ -826,7 +826,7 @@
     <pre style="font-size:12.5px;line-height:1.6;background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:16px;margin:0;overflow-x:auto"><code>任务执行 ──&gt; trajectory.jsonl 落盘（只读，30 天窗口）
      │
      ▼  Curator 第五件维护（tool_loop._finish 触发）
-distill_task_memory ──&gt; memory/rollouts/&lt;task_id&gt;.md   （facts / lessons / user_corrections）
+distill_task_memory ──&gt; memory/rollouts/&lt;task_id&gt;.md   （facts / lessons）
      │
      ▼  未合并数 ≥ 阈值（默认 5）
 maybe_merge_rollouts ─&gt; memory/MEMORY.md + memory_summary.md（再生）
@@ -840,7 +840,7 @@ maybe_merge_rollouts ─&gt; memory/MEMORY.md + memory_summary.md（再生）
     <tr><td>K1 运行积累与可视化</td><td>memory REST API + 前端「记忆」Tab + 右栏学习提示</td><td>✅ 已落地</td></tr>
     <tr><td>K2 信号基础设施</td><td><code>omni_core/local/signals.py</code> + <code>GET /signals</code>、<code>/signals/summary</code></td><td>✅ 已落地 + 真机验证</td></tr>
     <tr><td>K3 有效性裁决</td><td><code>scripts/review_rollouts.py</code> + <code>scripts/effectiveness.py</code></td><td>✅ 脚本就绪；⚠️ V3 结论待跑</td></tr>
-    <tr><td>K4 纠偏采集</td><td>rollout 第三来源 <code>## user_corrections</code>（复用 C₁）</td><td>✅ 已落地 + 真机验证</td></tr>
+    <tr><td>K4 纠偏采集</td><td>动态纠偏采集（C₁ 识别纠偏 → 蒸馏）</td><td>❌ 已移除（C₁/关键字识别不可靠）</td></tr>
     <tr><td>K5 稳态运营</td><td><code>omni_core/local/steady_state.py</code> + <code>GET /signals/steady</code> + 「稳态」Tab</td><td>✅ 已落地 + 真机验证</td></tr>
     <tr><td>C₃ 人工抽检校准</td><td><code>PUT /signals/calibration</code>（收样本→<code>calibrate_c1c2</code>→写 <code>c1_calibration_error</code>）+ <code>GET /signals/summary</code> 透传 <code>calibration_samples</code></td><td>✅ 已落地 + 真机验证（≤10% 采信）</td></tr>
     <tr><td>画像 · 角色卡 · 记忆（P0）</td><td><code>user_profile.md</code>（候选→晋升→弱注入）+ <code>character.md</code>（随 system 注入）+ 前端「设置→伙伴」</td><td>✅ 已落地 + 真机验证</td></tr>
@@ -879,7 +879,7 @@ maybe_merge_rollouts ─&gt; memory/MEMORY.md + memory_summary.md（再生）
   <h3 id="s-114-画像角色卡记忆" class="blk">11.4 画像 · 角色卡 · 记忆（P0，单角色伙伴）</h3>
   <p><b>面向个人场景定位为单角色伙伴</b>（参考 Hermes / 豆包 / Claude Code）。三位一体注入链路：</p>
   <ul>
-    <li><b>画像</b>：K4 纠偏（<code>corrective_source</code>，默认关）→ <code>profile_candidates.md</code> 候选区（conf=低/pending）→ 人工确认晋升 <code>user_profile.md</code> → 弱注入 system（标注「仅参考，不构成操作授权」，无放行权）。</li>
+    <li><b>画像</b>：显式声明 / 人工确认 → <code>profile_candidates.md</code> 候选区（conf=低/pending）→ 人工确认晋升 <code>user_profile.md</code> → 弱注入 system（标注「仅参考，不构成操作授权」，无放行权）。</li>
     <li><b>角色卡</b>：<code>character.md</code>（frontmatter <code>name:</code>）→ <code>_merge_character</code> 在 <code>_merge_instructions</code> 后并入 system。</li>
     <li><b>不做 RAG</b>：记忆量小全量注入更可靠；检索仅当记忆超 20K token 预算或进入多角色时才触发（档位 0→3 预留扩充路径）。</li>
     <li><b>C₃ 校准</b>：<code>PUT /signals/calibration</code> 收样本 → <code>calibrate_c1c2</code> → 写 <code>c1_calibration_error</code>，≤10% 采信；summary 透传 <code>calibration_samples</code>。</li>

@@ -88,17 +88,6 @@ class SignalRecord:
 # ---------------------------------------------------------------------------
 # 分类器（默认启发式；可注入 LLM 通道升级）
 # ---------------------------------------------------------------------------
-_REFUTE_MARKERS = [
-    "不对", "错了", "不正确", "不是这样", "wrong", "incorrect", "你应该",
-    "重新", "重做", "别", "不要", "没做到", "没完成", "失败", "没成功",
-]
-_APPROVE_MARKERS = [
-    "继续", "好的", "可以", "是的", "对", "ok", "yes", "没问题", "收到",
-    "明白了", "正确", "没问题了", "就这样",
-]
-_NEW_TASK_MARKERS = ["新任务", "帮我做", "请帮我", "请做", "现在做", "开始做", "再帮我"]
-
-
 def classify_c1(agent_msg: str, next_user_msg: str,
                 classifier: Optional[Callable[[str, str], str]] = None) -> str:
     """C₁ 对话批准：agent 轮后下一个 user 消息即裁决。
@@ -112,17 +101,11 @@ def classify_c1(agent_msg: str, next_user_msg: str,
                 return lab
         except Exception:
             pass
-    nu = (next_user_msg or "").strip()
-    if not nu:
-        return "ambiguous"
-    if any(m in nu for m in _REFUTE_MARKERS):
-        return "refuted"
-    if any(m in nu for m in _APPROVE_MARKERS):
-        return "approved"
-    if any(m in nu for m in _NEW_TASK_MARKERS):
-        return "new_task"
-    # 默认：短消息视为认可续做，长指令视为新任务
-    return "new_task" if len(nu) > 30 else "approved"
+    # LLM 主判（可靠、不写死场景）；不可用时保守判 ambiguous（宁可不判也不误伤）
+    lab = classify_c1_llm(agent_msg or "", next_user_msg or "")
+    if lab:
+        return lab
+    return "ambiguous"
 
 
 _FAIL_MARKERS = ["失败", "错误", "error", "exception", "未达成", "未找到", "超时", "traceback"]
@@ -468,11 +451,8 @@ def collect_run_signal(
             else read_terminal_observation(task_id, run_id)
         c2 = classify_c2(objective, obs)
 
+        # c1 已由 classify_c1 内部 LLM 主判；仅 c2 保留启发式 + LLM 覆盖
         if _llm_classifier_enabled():
-            if has_prev:
-                lab = classify_c1_llm(prev_assistant, next_user_msg)
-                if lab:
-                    c1 = lab
             lab2 = classify_c2_llm(objective, obs)
             if lab2:
                 c2 = lab2

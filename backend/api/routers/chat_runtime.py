@@ -11,7 +11,6 @@ from backend.api.routers.helpers import (
     List,
     Optional,
     TOOL_REGISTRY,
-    _collect_user_corrections,
     _config_hash,
     _cursor_lock,
     _ensure_outbox,
@@ -186,7 +185,6 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             if (r.get("role") == "assistant") and (r.get("content") or "").strip():
                 _prev_assistant = r.get("content", "")
                 break
-        _corrections = _collect_user_corrections(_session_records, _prev_assistant, last_user)
 
         # ---- 单链路统一（2026-09-17 用户确认）：不再做闲聊 probe 快判 ----
         # 每轮消息直接进统一入口 run_task：模型自己判断纯文本回答（方案 B 收尾）
@@ -198,7 +196,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         _task_mode = str((_meta or {}).get("task_mode", "oneshot") or "oneshot")
         spec = TaskSpec(objective=last_user, done_when="",
                         task_id=task_id, project_id=None, max_steps=max_steps,
-                        history=list(model_messages), corrections=_corrections,
+                        history=list(model_messages),
                         task_mode=_task_mode)
         _debug_push("task_init", {
             "title": "任务下发",

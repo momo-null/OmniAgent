@@ -128,8 +128,6 @@ class Curator:
         self.high_retry_threshold: int = int(cfg["high_retry_threshold"])
         self.high_intervention_threshold: float = float(cfg["high_intervention_threshold"])
         self.min_steps_for_skill: int = int(cfg["min_steps_for_skill"])
-        # K4：纠偏采集开关（红线②：默认关）。仅当显式 true 才把 user_corrections 入库。
-        self.corrective_source: bool = bool(cfg.get("corrective_source", False))
         self._last_dedup_hit_rate: float = 0.0  # K5：最近一次蒸馏的去重命中率
 
     # ==================================================================
@@ -203,13 +201,6 @@ class Curator:
                     report.dedup_hit_rate, report.skills_promoted, report.skills_created)
             except Exception as e:
                 report.errors.append(f"distill_task_memory: {type(e).__name__}: {e}")
-
-        # 6. 用户画像候选蒸馏（P0）：纠偏消息 → 候选区（人工确认后晋升，避免任务噪声污染画像）
-        if run_record is not None:
-            try:
-                report.profile_candidates = self.distill_user_profile(run_record)
-            except Exception as e:
-                report.errors.append(f"distill_user_profile: {type(e).__name__}: {e}")
 
         return report
 
@@ -412,18 +403,10 @@ class Curator:
         - 成功任务：读取磁盘 world-model facts 生成 ``## facts``（过滤空与「_(暂无)_」），
           并计算新 facts 相对既有 MEMORY.md 的去重命中率（K5 信号）。
         - 失败 / 高重试任务：生成带归因的 ``## lessons``。
-        - K4（默认关）：``user_corrections`` 经 C₁ 判定为证伪且含纠正的用户消息 →
-          ``## user_corrections`` 段落（回指对话来源，append-only 去重）。
         - 无有效内容 → 返回 None；否则按规范模板落盘并返回路径。
         """
         steps = int(run_record.get("steps", 0) or 0)
-        # K4 校正：纠偏是**人工提供**的高质量原料，价值与轨迹长度无关；
-        # 原实现在此处无差别短路，导致 1 步任务里的纠偏被整条丢弃（真机验证发现）。
-        # 现改为：仅有任务级纠偏待入库时不短路；偏好类纠偏归 profile，不计入短路。
-        _corr = list(run_record.get("user_corrections") or [])
-        _task_corr = [c for c in _corr if c and c.strip() and not _is_preference_correction(c)]
-        _has_corrections = bool(_task_corr and self.corrective_source)
-        if steps < self.min_steps_for_skill and not _has_corrections:
+        if steps < self.min_steps_for_skill:
             return None
 
         success = bool(run_record.get("success", False))
@@ -434,7 +417,6 @@ class Curator:
 
         facts: List[str] = []
         lessons: List[str] = []
-        corrections: List[str] = []
 
         if success:
             try:
@@ -451,15 +433,12 @@ class Curator:
         if retry_count >= self.high_retry_threshold and retry_count > 0:
             lessons.append(f"[高重试({retry_count})] {objective} —— {reason or '未记录原因'}")
 
-        # K4：第三来源——session 用户纠偏（Curator 级红线②：corrective_source 关时不入库）
-        # 去重：偏好类纠偏归 profile 画像候选，这里只收任务级纠偏。
-        if _task_corr and self.corrective_source:
-            corrections = [f"- {c}" for c in _task_corr]
+
 
         # K5：去重命中率 = 新 facts 中已被既有 MEMORY.md 覆盖比例（蒸馏前快照比对）
         self._last_dedup_hit_rate = self._compute_dedup_hit_rate(facts)
 
-        if not facts and not lessons and not corrections:
+        if not facts and not lessons:
             return None
 
         path = memory_rollout_file(task_id)
@@ -483,12 +462,6 @@ class Curator:
         else:
             lines.append("- (暂无)")
         lines.append("")
-        lines.append("## user_corrections")
-        if corrections:
-            lines.extend(corrections)
-        else:
-            lines.append("- (暂无)")
-        lines.append("")
 
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -497,73 +470,7 @@ class Curator:
         except Exception:
             return None
 
-    # ==================================================================
-    # 6. distill_user_profile（P0：用户画像候选蒸馏）
-    # ==================================================================
 
-# 纠偏去重：含用户偏好/长期特征信号的纠偏 → profile 画像候选；
-# 其余任务级纠偏 → memory（distill_task_memory 的 user_corrections）。同一原文只落一处。
-_PREFERENCE_MARKERS = (
-    "我喜欢", "我更喜欢", "我偏好", "偏好", "更喜欢",
-    "希望", "以后都", "习惯", "风格",
-    "别啰嗦", "不要啰嗦", "别废话", "啰嗦",
-    "简洁", "直接给结论", "直接点", "尽量",
-)
-
-
-def _is_preference_correction(text: str) -> bool:
-    """纠偏是否含用户偏好/长期特征信号（memory↔profile 采集去重用）。"""
-    t = (text or "").strip()
-    return any(m in t for m in _PREFERENCE_MARKERS)
-
-
-    def distill_user_profile(self, run_record: Dict[str, Any]) -> int:
-        """P0：从用户纠偏消息蒸馏画像候选 → ``memory/profile_candidates.md``。
-
-        只追加**候选**（conf=低 / status=pending），不直接写入画像正文——
-        纠偏消息可能含任务级指令，需用户在前端确认后才晋升为高置信画像条目，
-        避免任务噪声污染「用户是谁」的长期画像（画像无放行权、仅参考）。
-
-        原料：``run_record["user_corrections"]``（已在会话层经 C₁=refuted 过滤 +
-        长度门槛；默认 corrective_source 关时不采集，此处自然为空）。
-
-        Returns:
-            本次新增候选条数（去重后）。
-        """
-        # 去重：只收用户偏好/长期特征类纠偏；任务级纠偏归 memory（distill_task_memory）。
-        corr = [c for c in (run_record.get("user_corrections") or [])
-                if c and c.strip() and _is_preference_correction(c)]
-        if not corr:
-            return 0
-        path = global_memory() / "profile_candidates.md"
-        try:
-            existing = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-        except Exception:
-            existing = []
-        # seen 只取每条候选的正文（"- " 后、首个 " | " 前），按小写去重；
-        # 不能把整行（含 source/conf 后缀）放进 seen，否则正文永远匹配不上。
-        seen = set()
-        for ln in existing:
-            s = ln.strip()
-            if s.startswith("- "):
-                seen.add(s[2:].split(" | ", 1)[0].strip().lower())
-        now = datetime.now(timezone.utc).isoformat()
-        added = 0
-        for c in corr:
-            c = (c or "").strip()
-            if not c or c.lower() in seen:
-                continue
-            seen.add(c.lower())
-            existing.append(
-                f"- {c} | source=纠偏 | conf=低 | status=pending | updated_at={now}")
-            added += 1
-        if added:
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("\n".join(existing) + "\n", encoding="utf-8")
-            except Exception:
-                return 0
-        return added
 
     # ------------------------------------------------------------------
     # K5 辅助：去重命中率 + 指标持久化 + 稳态降频判定

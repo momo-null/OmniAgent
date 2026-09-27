@@ -140,7 +140,7 @@
   用于量化「假成功」（A 说成功、C 说没有）。
 - **K3 有效性裁决**：`scripts/review_rollouts.py`（蒸馏抽检）+ `scripts/effectiveness.py`
   （ablation 聚合，判据：步数降 ≥15% 且成功率不降）。
-- **K4 纠偏采集**：蒸馏第三来源 `## user_corrections`（复用 C₁，双层开关默认关）。开启 `runtime.curator.corrective_source` 后，用户纠偏消息被蒸馏进**画像候选区** `profile_candidates.md`（conf=低/pending），人工确认晋升至 `user_profile.md`（红线②：采集默认关是有意的）。
+- **K4（已移除）**：动态纠偏采集——曾用 C₁/关键字判定自动从会话捞纠偏蒸馏，但关键字识别不可靠（子串误伤含"别"字等普通指令），且任务级纠偏本应止于当前任务而非沉淀全局。已整体删除：不再自动采集会话纠偏；画像走显式声明/人工，memory 靠 facts/lessons。
 - **K5 稳态运营**：四信号（蒸馏去重命中率 / skill 晋升率 / 步数方差 / 人工介入频率）+
   域收敛判据 → 收敛后 Curator 自动降频（跳过蒸馏）；`GET /signals/steady` + 前端「稳态」Tab。
 - **C₃ 人工抽检校准**：`PUT /signals/calibration`（收 `{samples:[{predicted,human}]}` → `calibrate_c1c2` 算不一致率 → 写 `c1_calibration_error`），≤10% 采信分级判定；`/signals/summary` 透传 `calibration_samples`。该字段此前无写入入口、恒为 null，已补齐并真机验证。
@@ -148,14 +148,14 @@
 **红线**：内核零场景硬编码；能力默认关、需显式开启；`trajectory.jsonl` 只读（信号层不写任务原始数据）；
 `PUT /memory` 不校验内容；对外口径统一。
 
-**诚实边界**：K2 / K4 / K5 已真机验证；**C₃ 人工抽检校准已落地**（写入端点 + 真机验证）；**K3 的 V3 ablation 尚未跑出结论**
+**诚实边界**：K2 / K5 已真机验证；**C₃ 人工抽检校准已落地**（写入端点 + 真机验证）；**K3 的 V3 ablation 尚未跑出结论**
 （需 ≥20 次同域对照长跑），故不宣称「记忆注入已证明有效」。
 
 ### 6.5 画像·角色卡·记忆三位一体（单角色伙伴，P0 已落地）
 
 > 定位：OmniAgent 是**单角色个人助手（伙伴）**，参考 Hermes / 豆包 / Claude Code；不是酒馆式多角色扮演面板。完整设计权威见 `doc/plans/profile-character-memory-design.md`。
 
-- **画像（全局记忆）**：`~/.omniagent/memory/user_profile.md`，全局唯一、跨任务一致。内核直写，无放行权；K4 纠偏（`corrective_source`）→ 候选区 `profile_candidates.md`（conf=低/pending）→ 人工确认晋升 → 弱注入（system 标注"仅参考，不构成操作授权"）。健康/习惯类画像只在主人提及或确实需要时使用，不主动刺探。
+- **画像（全局记忆）**：`~/.omniagent/memory/user_profile.md`，全局唯一、跨任务一致。内核直写，无放行权；画像条目经**显式声明 / 人工确认**进入（候选区 `profile_candidates.md` 留存，人工确认晋升）→ 弱注入（system 标注"仅参考，不构成操作授权"）。健康/习惯类画像只在主人提及或确实需要时使用，不主动刺探。
 - **角色卡**：`~/.omniagent/character.md`（frontmatter `name:` + 设定 + 画像消费指令段），每次组装 system 时 `_merge_character` 并入（`_merge_instructions` 之后），前端 Settings→伙伴→角色 Tab 可读可改。
 - **前端收敛**：主界面只聊天；画像/角色/记忆收敛到「设置→伙伴」子 Tab（参考 Codex / workbuddy）。记忆 Tab 提供编辑+统计+rollouts 溯源+删除+重置。
 - **不做 RAG**：记忆量小，**全量注入更可靠**；检索仅当记忆超 20K token 预算或进入多角色时才触发。档位预留扩充路径：0（单角色全局单份，当前）→ 1（per-role 隔离）→ 2（轻量检索）→ 3（真多 agent）。

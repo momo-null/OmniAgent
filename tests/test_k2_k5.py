@@ -30,17 +30,20 @@ def _reload():
 # K2 分类器（启发式，确定性）
 # ---------------------------------------------------------------------------
 def test_classify_c1():
-    from omni_core.local.signals import classify_c1
-    assert classify_c1("我做了X", "不对，应该是Y") == "refuted"
-    assert classify_c1("我做了X", "好的，继续") == "approved"
-    assert classify_c1("我做了X", "帮我做个新任务：整理报表") == "new_task"
-    assert classify_c1("我做了X", "是的") == "approved"
+    from omni_core.local import signals
+    # LLM 分类器不可用（测试环境无 brain）时保守兜底 ambiguous，不靠关键字写死场景
+    signals._LLM_CLASSIFIER_BROKEN = True
+    assert signals.classify_c1("我做了X", "不对，应该是Y") == "ambiguous"
+    assert signals.classify_c1("我做了X", "好的，继续") == "ambiguous"
+    assert signals.classify_c1("", "") == "ambiguous"
 
 
 def test_classify_c1_injectable():
     from omni_core.local.signals import classify_c1
     # 注入 LLM 通道：恒返 approved
     assert classify_c1("a", "u", classifier=lambda a, u: "approved") == "approved"
+    assert classify_c1("a", "u", classifier=lambda a, u: "refuted") == "refuted"
+    assert classify_c1("a", "u", classifier=lambda a, u: "new_task") == "new_task"
 
 
 def test_classify_c2():
@@ -79,10 +82,10 @@ def test_aggregate_and_query():
     signals.collect_run_signal("t1", "r2", True, "又完成", "目标", "上一轮结论", "不对，重做")
     summary = signals.query_summary()
     assert summary["total"] == 2
-    assert summary["c1_dist"]["approved"] == 1
-    assert summary["c1_dist"]["refuted"] == 1
-    # 介入频率（交互段 refuted 占比）= 0.5
-    assert summary["fake_success_rate"]["interactive"] == 0.5
+    # LLM 分类器不可用（测试环境）→ 保守 ambiguous
+    assert summary["c1_dist"]["ambiguous"] == 2
+    # 介入频率（交互段 refuted 占比）= 0（无 refuted 判定）
+    assert summary["fake_success_rate"]["interactive"] == 0
     assert len(summary["timeline"]) == 2
     # 幂等：重复写入同一 run 不应重复计数
     signals.collect_run_signal("t1", "r1", True, "完成了", "目标", "上一轮结论", "好的继续")
@@ -95,7 +98,7 @@ def test_query_signals_by_task():
     out = signals.query_signals("t9")
     assert len(out) == 1
     assert out[0]["a"] is False
-    assert out[0]["c1"] == "refuted"
+    assert out[0]["c1"] == "ambiguous"  # LLM 不可用 → 保守
 
 
 # ---------------------------------------------------------------------------
@@ -134,33 +137,3 @@ def _fake_rec(c1: str):
     return rec
 
 
-# ---------------------------------------------------------------------------
-# K4 蒸馏第三来源（user_corrections，默认关 → 不入库）
-# ---------------------------------------------------------------------------
-def test_distill_corrections_default_off():
-    from omni_core.local.curator import Curator
-    cur = Curator(task_id="k4t", config={})
-    # 默认未开 corrective_source：带 corrections 也不应写入 ## user_corrections。
-    # 用高重试造一条 lesson 保证 rollout 非 None，以验证「段落存在但不含纠偏」。
-    rec = cur.distill_task_memory({
-        "steps": 5, "success": False, "objective": "做X",
-        "retry_count": 5, "reason": "模板缺失", "run_id": "r1",
-        "user_corrections": ["你应该用 Y 而不是 Z"],
-    })
-    assert rec is not None
-    text = rec.read_text(encoding="utf-8")
-    # 段落存在但为空（暂无）
-    assert "## user_corrections" in text
-    assert "你应该用 Y" not in text
-
-
-def test_distill_corrections_enabled():
-    from omni_core.local.curator import Curator
-    cur = Curator(task_id="k4t2", config={"corrective_source": True})
-    rec = cur.distill_task_memory({
-        "steps": 5, "success": False, "objective": "做X",
-        "retry_count": 5, "reason": "模板缺失", "run_id": "r1",
-        "user_corrections": ["你应该用 Y 而不是 Z"],
-    })
-    text = rec.read_text(encoding="utf-8")
-    assert "你应该用 Y 而不是 Z" in text

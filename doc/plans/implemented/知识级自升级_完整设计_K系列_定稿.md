@@ -239,7 +239,7 @@ LLM 失败静默回退启发式，并置模块级熔断 `_LLM_CLASSIFIER_BROKEN`
 - **判决分两段**：管道验证（规则蒸馏链路是否成立）/ 价值终审（K6 LLM 蒸馏后复查）——规则蒸馏产物偏薄时不得据此否定记忆价值本身。
 
 ### 6.1 详细实施计划（脚本已落地）
-- **V2 抽检**：`scripts/review_rollouts.py` 已落地。抽 ≥3 个 `memory/rollouts/<tid>.md`（`--limit`，默认 3，按 mtime 倒序），复核：facts 可溯源（成功须有 trajectory 引用）/ lessons 归因合理（失败·高重试须带 reason）/ 格式合规（含 `## facts`、`## lessons`、`## user_corrections` 三段）。输出 JSON，退出码 0/1；不通过 → 回 K0/K2 修蒸馏，不否定记忆价值。
+- **V2 抽检**：`scripts/review_rollouts.py` 已落地。抽 ≥3 个 `memory/rollouts/<tid>.md`（`--limit`，默认 3，按 mtime 倒序），复核：facts 可溯源（成功须有 trajectory 引用）/ lessons 归因合理（失败·高重试须带 reason）/ 格式合规（含 `## facts`、`## lessons` 两段；`## user_corrections` 段已随 K4 移除）。输出 JSON，退出码 0/1；不通过 → 回 K0/K2 修蒸馏，不否定记忆价值。
 - **V3 ablation**：同域（project_id 锁定）对照，注入关/开各 ≥10 次（共 ≥20，纯人工长跑，数周）。
 - **新增模块** `scripts/effectiveness.py` 已落地：读 `telemetry` 运行指标（`tasks/<tid>/reports/*.json`）+ `memory/signals_aggregate.json`，聚合 V3 双侧指标并套判据（步数降 ≥15% 且成功率不降），输出「通过/不通过 + 归因建议」JSON，退出码 0/1。两种模式：
   - **自动模式**（默认）：按时间序切早/晚两半，近似「记忆注入前/后」对比（无需人工打标）。
@@ -251,6 +251,8 @@ LLM 失败静默回退启发式，并置模块级熔断 `_LLM_CLASSIFIER_BROKEN`
 ---
 
 ## 7. K4 · 纠偏采集（增强项最高优先）
+
+> **K4 已移除（2026-09-27）**：动态纠偏采集因 C₁/关键字识别不可靠（子串误伤含"别"字等普通指令）且任务级纠偏本应止于当前任务而整体删除。以下为历史实现记录，仅作追溯。
 
 phase-1 蒸馏增加第三来源——session 中用户纠偏消息（复用 C₁ 识别证伪+纠正内容 → lessons 直接入库）。「人喂资料」最具体落点；当前蒸馏只读 world facts + run_record，**最高质量原料漏采**。
 

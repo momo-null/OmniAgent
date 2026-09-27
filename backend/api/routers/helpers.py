@@ -590,39 +590,4 @@ def _read_rollout_detail(task_id: str) -> Optional[dict]:
     except Exception:
         return None
 
-def _collect_user_corrections(session_records: List[Dict[str, Any]],
-                                prev_assistant: str, last_user: str) -> List[str]:
-    """K4：从会话记录提取用户纠偏消息（C₁=refuted 且含纠正内容）。
 
-    返回 [user_msg_text]。config ``runtime.curator.corrective_source=false``（默认）时
-    返回空（红线②：默认关）。仅读 session，不写任何数据。
-    """
-    try:
-        cfg = _config()
-        if not bool((((cfg.get("runtime") or {}).get("curator") or {}).get("corrective_source", False))):
-            return []
-        from omni_core.local import signals as _sig
-        pairs: List[Dict[str, str]] = []
-        last_asst = ""
-        for r in session_records or []:
-            if r.get("role") == "assistant":
-                last_asst = r.get("content", "") or ""
-            elif r.get("role") == "user":
-                pairs.append({"a": last_asst, "u": r.get("content", "") or ""})
-        corr: List[str] = []
-        for p in pairs:
-            u = (p.get("u") or "").strip()
-            if not u:
-                continue
-            if _sig.classify_c1(p.get("a", ""), u) == "refuted" and len(u) >= 4:
-                corr.append(u)
-        # 去重保持顺序
-        seen: set = set()
-        out: List[str] = []
-        for c in corr:
-            if c not in seen:
-                seen.add(c)
-                out.append(c)
-        return out
-    except Exception:
-        return []
