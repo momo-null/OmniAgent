@@ -12,6 +12,11 @@ type Props = {
   viewportRef?: React.MutableRefObject<HTMLDivElement | null>;
 };
 
+// 滑块几何：原生滚动条已隐藏，滑块是绝对定位的自绘元素，不占据布局流。
+// 调用方需在内容右侧预留 THUMB_RIGHT + THUMB_WIDTH 的空间，否则滑块会压住内容。
+export const THUMB_RIGHT = 2;
+export const THUMB_WIDTH = 5;
+
 // 自绘滚动条：隐藏原生滚动条（避免 Windows/macOS 覆盖式滚动条在静态态被系统样式覆盖），
 // 用原生 overflow 承载滚轮/触摸滚动，叠加一个绝对定位的可拖拽滑块。颜色 100% 可控、跨系统一致。
 export default function ScrollArea({ children, sx, maxHeight, thumbColor = "rgb(60,60,60)", hoverThumbColor = "rgb(90,90,90)", viewportRef }: Props) {
@@ -108,8 +113,8 @@ export default function ScrollArea({ children, sx, maxHeight, thumbColor = "rgb(
           style={{
             position: "absolute",
             top: thumbTop,
-            right: 2,
-            width: 5,
+            right: THUMB_RIGHT,
+            width: THUMB_WIDTH,
             height: thumbH,
             borderRadius: 3,
             background: hover ? hoverThumbColor : thumbColor,

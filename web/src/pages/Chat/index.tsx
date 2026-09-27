@@ -26,7 +26,7 @@ import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
 import FolderRounded from "@mui/icons-material/FolderRounded";
 import PublicRounded from "@mui/icons-material/PublicRounded";
 import { useTaskStore } from "../../store/taskStore.tsx";
-import ScrollArea from "../../components/ScrollArea.tsx";
+import ScrollArea, { THUMB_RIGHT, THUMB_WIDTH } from "../../components/ScrollArea.tsx";
 import Markdown from "../../components/Markdown.tsx";
 import type { ChatMsg, ProcessItem, ApprovalCardInfo } from "../../types";
 import type { DebugLog } from "../../store/taskStore";
@@ -525,7 +525,8 @@ export default function Chat() {
           sx={{ flexGrow: 1, minHeight: 0, mb: 1, bgcolor: "transparent", borderRadius: 2, overflow: "hidden", display: "flex", flexDirection: "column" }}
         >
           <ScrollArea sx={{ flexGrow: 1, minHeight: 0 }} viewportRef={timelineViewportRef}>
-            <Box sx={{ p: 2, pr: 1.5 }}>
+            {/* 用户气泡右对齐，右内边距 = 滑块占位 + 20px 呼吸间距，避免气泡贴着滚动条 */}
+            <Box sx={{ p: 2, pr: `${THUMB_RIGHT + THUMB_WIDTH + 20}px` }}>
           {timeline.length === 0 ? (
             <Typography variant="body2" color="text.secondary" sx={{ textAlign: "center", mt: 4 }}>
               开始和 {assistantName} 对话吧。
@@ -667,7 +668,8 @@ export default function Chat() {
               sx={{
                 width: 36, height: 36, flexShrink: 0,
                 bgcolor: running && !draft.trim() ? "error.main" : "primary.main",
-                color: "#fff",
+                // 中性主题下 primary 是亮灰底，必须用深色字；停止状态是红色底，仍用白字
+                color: (t) => (running && !draft.trim() ? "#fff" : t.palette.primary.contrastText),
                 "&:hover": { bgcolor: running && !draft.trim() ? "error.dark" : "primary.dark" },
                 "&:disabled": { bgcolor: "action.disabledBackground", color: "action.disabled" },
               }}

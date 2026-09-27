@@ -94,7 +94,8 @@ export default function Layout() {
           width: DRAWER_WIDTH, flexShrink: 0,
           "& .MuiDrawer-paper": {
             width: DRAWER_WIDTH, boxSizing: "border-box", overflowY: "auto",
-            borderRight: "none", bgcolor: "action.hover",
+            // 侧栏比内容区亮一档（background.paper），层级靠亮度区分
+            borderRight: "none", bgcolor: "background.paper",
           },
         }}
       >
