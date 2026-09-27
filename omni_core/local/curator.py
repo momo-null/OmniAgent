@@ -419,9 +419,10 @@ class Curator:
         steps = int(run_record.get("steps", 0) or 0)
         # K4 校正：纠偏是**人工提供**的高质量原料，价值与轨迹长度无关；
         # 原实现在此处无差别短路，导致 1 步任务里的纠偏被整条丢弃（真机验证发现）。
-        # 现改为：仅有纠偏待入库时不短路；无纠偏仍保持原短路语义（避免短任务噪声）。
-        _has_corrections = bool(
-            (run_record.get("user_corrections") or []) and self.corrective_source)
+        # 现改为：仅有任务级纠偏待入库时不短路；偏好类纠偏归 profile，不计入短路。
+        _corr = list(run_record.get("user_corrections") or [])
+        _task_corr = [c for c in _corr if c and c.strip() and not _is_preference_correction(c)]
+        _has_corrections = bool(_task_corr and self.corrective_source)
         if steps < self.min_steps_for_skill and not _has_corrections:
             return None
 
@@ -451,9 +452,9 @@ class Curator:
             lessons.append(f"[高重试({retry_count})] {objective} —— {reason or '未记录原因'}")
 
         # K4：第三来源——session 用户纠偏（Curator 级红线②：corrective_source 关时不入库）
-        _corr = list(run_record.get("user_corrections") or [])
-        if _corr and self.corrective_source:
-            corrections = [f"- {c}" for c in _corr if c and c.strip()]
+        # 去重：偏好类纠偏归 profile 画像候选，这里只收任务级纠偏。
+        if _task_corr and self.corrective_source:
+            corrections = [f"- {c}" for c in _task_corr]
 
         # K5：去重命中率 = 新 facts 中已被既有 MEMORY.md 覆盖比例（蒸馏前快照比对）
         self._last_dedup_hit_rate = self._compute_dedup_hit_rate(facts)
@@ -500,6 +501,22 @@ class Curator:
     # 6. distill_user_profile（P0：用户画像候选蒸馏）
     # ==================================================================
 
+# 纠偏去重：含用户偏好/长期特征信号的纠偏 → profile 画像候选；
+# 其余任务级纠偏 → memory（distill_task_memory 的 user_corrections）。同一原文只落一处。
+_PREFERENCE_MARKERS = (
+    "我喜欢", "我更喜欢", "我偏好", "偏好", "更喜欢",
+    "希望", "以后都", "习惯", "风格",
+    "别啰嗦", "不要啰嗦", "别废话", "啰嗦",
+    "简洁", "直接给结论", "直接点", "尽量",
+)
+
+
+def _is_preference_correction(text: str) -> bool:
+    """纠偏是否含用户偏好/长期特征信号（memory↔profile 采集去重用）。"""
+    t = (text or "").strip()
+    return any(m in t for m in _PREFERENCE_MARKERS)
+
+
     def distill_user_profile(self, run_record: Dict[str, Any]) -> int:
         """P0：从用户纠偏消息蒸馏画像候选 → ``memory/profile_candidates.md``。
 
@@ -513,7 +530,9 @@ class Curator:
         Returns:
             本次新增候选条数（去重后）。
         """
-        corr = list(run_record.get("user_corrections") or [])
+        # 去重：只收用户偏好/长期特征类纠偏；任务级纠偏归 memory（distill_task_memory）。
+        corr = [c for c in (run_record.get("user_corrections") or [])
+                if c and c.strip() and _is_preference_correction(c)]
         if not corr:
             return 0
         path = global_memory() / "profile_candidates.md"
