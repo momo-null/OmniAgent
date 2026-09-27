@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, useMemo, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
 import {
   Box,
   Paper,
@@ -102,12 +102,6 @@ function ApprovalCardView({ card, onDecide }: {
       </Typography>
     </Alert>
   );
-}
-
-function roleColor(role: string): "primary" | "secondary" | "default" {
-  if (role === "agent") return "primary";
-  if (role === "user") return "secondary";
-  return "default";
 }
 
 function senderKey(it: ChatMsg | ProcessItem): string | null {
@@ -437,9 +431,49 @@ export default function Chat() {
     return items;
   }, [messages, processLogs]);
 
+  // 滚动策略（2026-09-27）：贴底跟随 + 任务切换瞬时置底，SSE 流式不打断用户上翻
+  const timelineViewportRef = useRef<HTMLDivElement | null>(null);
+  const pinnedRef = useRef(true);
+  const lastTaskRef = useRef(currentTaskId);
+
+  // 任务切换：瞬时跳到最新消息（无平滑动画），并重置为贴底跟随
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (lastTaskRef.current !== currentTaskId) {
+      lastTaskRef.current = currentTaskId;
+      pinnedRef.current = true;
+    }
+    const el = timelineViewportRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [currentTaskId]);
+
+  // 用户滚动：底部 80px 内视为「贴底」，离开即暂停自动跟随，滚回底部自动恢复
+  useEffect(() => {
+    const el = timelineViewportRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    };
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // 内容更新（含 SSE 流式追加）：仅在贴底时跟随，瞬时滚动不做平滑动画
+  useEffect(() => {
+    const el = timelineViewportRef.current;
+    if (!el || !pinnedRef.current) return;
+    el.scrollTop = el.scrollHeight;
   }, [messages, processLogs]);
+
+  // 输入框光标保持（Ctrl+Enter 换行）：受控组件提交新 value 会把光标重置到末尾，
+  // 用「挂起光标位 + 提交后 layout effect 回设」可靠恢复（rAF 时序不可靠）。
+  const draftTaRef = useRef<HTMLTextAreaElement | null>(null);
+  const pendingSelRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (pendingSelRef.current != null && draftTaRef.current) {
+      draftTaRef.current.selectionStart = draftTaRef.current.selectionEnd = pendingSelRef.current;
+      pendingSelRef.current = null;
+    }
+  }, [draft]);
 
   // 运行中插话（软注入）：不打断当前步骤，主 agent 下一轮可见
   const handleInject = () => {
@@ -462,14 +496,14 @@ export default function Chat() {
   };
 
   return (
-    <Box sx={{ display: "flex", height: "100%", width: "100%", minHeight: 0, overflow: "hidden", bgcolor: "action.hover" }}>
+    <Box sx={{ display: "flex", height: "100%", width: "100%", minHeight: 0, overflow: "hidden", bgcolor: "background.default" }}>
       <style>{`@keyframes omni-blink{0%,100%{opacity:1}50%{opacity:0}}`}</style>
       {/* 左：对话区 */}
       <Box
         sx={{
           flexGrow: 1, minWidth: 0, minHeight: 0,
           display: "flex", flexDirection: "column",
-          maxWidth: 900, mx: "auto", width: "100%", px: 2, pb: 1.5,
+          maxWidth: 1200, mx: "auto", width: "100%", px: 2, pb: 4.5,
           overflow: "hidden",
         }}
       >
@@ -490,7 +524,7 @@ export default function Chat() {
           elevation={0}
           sx={{ flexGrow: 1, minHeight: 0, mb: 1, bgcolor: "transparent", borderRadius: 2, overflow: "hidden", display: "flex", flexDirection: "column" }}
         >
-          <ScrollArea sx={{ flexGrow: 1, minHeight: 0 }}>
+          <ScrollArea sx={{ flexGrow: 1, minHeight: 0 }} viewportRef={timelineViewportRef}>
             <Box sx={{ p: 2, pr: 1.5 }}>
           {timeline.length === 0 ? (
             <Typography variant="body2" color="text.secondary" sx={{ textAlign: "center", mt: 4 }}>
@@ -522,10 +556,11 @@ export default function Chat() {
 
               return (
                 <Fragment key={`g${i}`}>
-                  {groupStart && curRole && (
-                    <Box sx={{ display: "flex", mb: 0.5,
-                      justifyContent: curRole === "user" ? "flex-end" : "flex-start" }}>
-                      <Chip size="small" label={curRole === "user" ? "你" : assistantName} color={roleColor(curRole)} />
+                  {/* 仅 agent 侧显示角色名 Chip；用户消息右对齐 + 底色已可区分，不标「你」 */}
+                  {groupStart && (curRole === "agent" || curRole === "assistant") && (
+                    <Box sx={{ display: "flex", mb: 0.5 }}>
+                      <Chip size="small" label={assistantName}
+                        color={curRole === "agent" ? "primary" : "default"} />
                     </Box>
                   )}
                   {node}
@@ -547,14 +582,14 @@ export default function Chat() {
           </Box>
         )}
 
-        {/* Codex 风格胶囊输入框：圆角容器 + 内嵌发送/停止按钮 */}
+        {/* 胶囊输入框：大圆角容器；底行左侧=完全访问开关，右侧=发送/停止按钮 */}
         <Box
           sx={{
-            position: "relative",
             border: "1px solid", borderColor: "divider",
-            borderRadius: 3,
-            bgcolor: "background.paper",
+            borderRadius: "28px",
+            bgcolor: "action.hover",
             p: 1,
+            mx: "40px",
             flexShrink: 0,
           }}
         >
@@ -565,31 +600,37 @@ export default function Chat() {
             maxRows={10}
             fullWidth
             value={draft}
+            inputRef={draftTaRef}
             onChange={(e) => setDraft(e.target.value)}
             sx={{
               "& .MuiOutlinedInput-root": {
-                borderRadius: 2,
+                borderRadius: "22px",
                 bgcolor: "transparent",
+                // multiline 时 MUI 把 16.5px 14px 的内距挂在 root 上（textarea 自身 multiline padding=0），
+                // 不清零则与 textarea 层内距叠加，顶部凭空多 ~20px
+                padding: 0,
                 "& fieldset": { border: "none" },
                 "&:hover fieldset": { border: "none" },
                 "&.Mui-focused fieldset": { border: "none" },
               },
               "& .MuiInputLabel-root": { display: "none" },
-              "& .MuiOutlinedInput-input": { color: "text.primary", pr: 5 },
+              // 底部 0：textarea 默认 16.5px 下内距会在胶囊内看起来多空一行
+              "& .MuiOutlinedInput-input": { color: "text.primary", padding: "4px 10px 0" },
             }}
             onKeyDown={(e) => {
+              // IME 组合态（中文选词中）：Enter 是「确认候选」，keyCode 229——
+              // 必须放行给输入法，preventDefault 会打断组合导致文本被拦腰劈开
+              if ((e.nativeEvent as KeyboardEvent).isComposing || e.keyCode === 229) return;
               if (e.key === "Enter") {
                 if (e.ctrlKey || e.metaKey || e.shiftKey) {
-                  // 手动插入换行，避免受控组件把默认换行覆盖掉
+                  // 手动在光标处插入换行；光标恢复走 useLayoutEffect（见 pendingSelRef）
                   e.preventDefault();
-                  const el = e.currentTarget as unknown as HTMLTextAreaElement;
+                  const el = (e.target as HTMLTextAreaElement) || draftTaRef.current;
+                  if (!el) return;
                   const start = el.selectionStart ?? draft.length;
-                  const end = el.selectionEnd ?? draft.length;
-                  const next = draft.slice(0, start) + "\n" + draft.slice(end);
-                  setDraft(next);
-                  requestAnimationFrame(() => {
-                    el.selectionStart = el.selectionEnd = start + 1;
-                  });
+                  const end = el.selectionEnd ?? start;
+                  pendingSelRef.current = start + 1;
+                  setDraft(draft.slice(0, start) + "\n" + draft.slice(end));
                   return;
                 }
                 e.preventDefault();
@@ -597,57 +638,43 @@ export default function Chat() {
               }
             }}
           />
-          {/* 单按钮上下文逻辑：
-              - 非运行态：始终「发送」（空输入禁用）
-              - 运行态 + 空输入：显示「停止」（红）
-              - 运行态 + 有输入：显示「发送」（点即软注入/插话，不打断当前步骤）
-              即「用户一输入，暂停变回发送」。 */}
-          <IconButton
-            onClick={running ? (draft.trim() ? handleInject : stopTask) : handleSend}
-            disabled={!running && !draft.trim()}
-            aria-label={running && !draft.trim() ? "停止" : "发送"}
-            title={running && !draft.trim() ? "停止当前任务" : (running ? "插话（软注入）：不打断当前步骤" : "发送")}
-            sx={{
-              position: "absolute", right: 10, bottom: 10,
-              width: 36, height: 36, flexShrink: 0,
-              bgcolor: running && !draft.trim() ? "error.main" : "primary.main",
-              color: "#fff",
-              "&:hover": { bgcolor: running && !draft.trim() ? "error.dark" : "primary.dark" },
-              "&:disabled": { bgcolor: "action.disabledBackground", color: "action.disabled" },
-            }}
-          >
-            {running && !draft.trim() ? <StopIcon /> : <SendIcon />}
-          </IconButton>
-        </Box>
-        {/* 输入框下方 toolbar：无边框、透明，预留模型切换 / skills 选择位 */}
-        <Box
-          sx={{
-            display: "flex",
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 1.5,
-            mt: 0.5,
-            flexShrink: 0,
-            px: 0.5,
-          }}
-        >
-          <FormControlLabel
-            control={
-              <Switch
-                size="small"
-                checked={fullAccess}
-                disabled={running}
-                onChange={(e) => {
-                  // 关闭直接生效；开启先在当前位置弹小窗确认风险
-                  if (e.target.checked) setConfirmAnchorEl(e.currentTarget);
-                  else setFullAccessForTask(currentTaskId, false);
-                }}
-              />
-            }
-            label="完全访问"
-            sx={{ mr: 0 }}
-          />
-          {/* 预留 toolbar 位：后续模型切换 / skills 选择放此处 */}
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", px: 1.25, pt: 0.25 }}>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={fullAccess}
+                  disabled={running}
+                  onChange={(e) => {
+                    // 关闭直接生效；开启先在当前位置弹小窗确认风险
+                    if (e.target.checked) setConfirmAnchorEl(e.currentTarget);
+                    else setFullAccessForTask(currentTaskId, false);
+                  }}
+                />
+              }
+              label="完全访问"
+              sx={{ mr: 0 }}
+            />
+            {/* 单按钮上下文逻辑：
+                - 非运行态：始终「发送」（空输入禁用）
+                - 运行态 + 空输入：显示「停止」（红）
+                - 运行态 + 有输入：显示「发送」（点即软注入/插话，不打断当前步骤） */}
+            <IconButton
+              onClick={running ? (draft.trim() ? handleInject : stopTask) : handleSend}
+              disabled={!running && !draft.trim()}
+              aria-label={running && !draft.trim() ? "停止" : "发送"}
+              title={running && !draft.trim() ? "停止当前任务" : (running ? "插话（软注入）：不打断当前步骤" : "发送")}
+              sx={{
+                width: 36, height: 36, flexShrink: 0,
+                bgcolor: running && !draft.trim() ? "error.main" : "primary.main",
+                color: "#fff",
+                "&:hover": { bgcolor: running && !draft.trim() ? "error.dark" : "primary.dark" },
+                "&:disabled": { bgcolor: "action.disabledBackground", color: "action.disabled" },
+              }}
+            >
+              {running && !draft.trim() ? <StopIcon /> : <SendIcon />}
+            </IconButton>
+          </Box>
         </Box>
         <Popover
           open={Boolean(confirmAnchorEl)}

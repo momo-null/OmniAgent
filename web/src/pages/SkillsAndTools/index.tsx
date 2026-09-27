@@ -355,7 +355,7 @@ function McpTab() {
 export default function SkillsAndTools() {
   const [tab, setTab] = useState(0);
   return (
-    <Box>
+    <Box sx={{ p: 2, pt: 1.5, maxWidth: 960 }}>
       <Typography variant="h6" gutterBottom>技能与工具</Typography>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label="Skills" />

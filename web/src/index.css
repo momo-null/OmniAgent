@@ -9,6 +9,12 @@ body,
   margin: 0;
 }
 
+/* 根字号 = 14px：使主题 htmlFontSize: 14 真正生效（MUI 只算 rem 换算，根字号必须由 CSS 设定）。
+   未设置时所有 rem 按 16px 渲染，整体比设计基准大 ~14%。 */
+html {
+  font-size: 14px;
+}
+
 /* 全局细滚动条：克制灰色，默认即悬停灰，轨道淡灰，贴近边框 */
 * {
   scrollbar-width: thin;

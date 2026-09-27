@@ -1,6 +1,8 @@
 """任务 / 项目 / 技能回放接口（零逻辑改动）。"""
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -18,6 +20,33 @@ from backend.api.routers.helpers import (
 )
 
 router = APIRouter(tags=["runtime"])
+
+@router.post("/tasks/{task_id}/open_folder")
+async def api_task_open_folder(task_id: str):
+    """打开任务落盘目录（用户在任务菜单点「打开文件夹」——人工动作直开，非 agent 工具面）。
+
+    task_id 经 runtime_paths 通用标识符校验（拒路径穿越）；目录不存在返回 404。
+    Windows 用 os.startfile，macOS/Linux 用 open/xdg-open。
+    """
+    try:
+        from omni_core.local.runtime_paths import task_dir
+        d = task_dir(task_id)
+    except ValueError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=422)
+    if not d.is_dir():
+        return JSONResponse({"ok": False, "error": f"任务目录不存在: {task_id}"}, status_code=404)
+    try:
+        import subprocess
+        import sys
+        if sys.platform == "win32":
+            os.startfile(str(d))  # noqa: S606 - 用户主动点击，路径已过标识符校验
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(d)])
+        else:
+            subprocess.Popen(["xdg-open", str(d)])
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"打开失败: {e}"}, status_code=500)
+    return JSONResponse({"ok": True, "path": str(d)})
 
 @router.get("/projects")
 async def list_projects():

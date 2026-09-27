@@ -29,12 +29,14 @@ import ScheduleIcon from "@mui/icons-material/Schedule";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
+import FolderOpenIcon from "@mui/icons-material/FolderOpen";
+import { taskApi } from "../api/client";
 import { useTaskStore, type MainView } from "../store/taskStore.tsx";
 import Chat from "../pages/Chat";
 import SkillsAndTools from "../pages/SkillsAndTools";
 import Settings from "../pages/Settings";
 
-const DRAWER_WIDTH = 200;
+const DRAWER_WIDTH = 260;
 
 export default function Layout() {
   const {
@@ -92,7 +94,7 @@ export default function Layout() {
           width: DRAWER_WIDTH, flexShrink: 0,
           "& .MuiDrawer-paper": {
             width: DRAWER_WIDTH, boxSizing: "border-box", overflowY: "auto",
-            borderRight: "none", bgcolor: "transparent",
+            borderRight: "none", bgcolor: "action.hover",
           },
         }}
       >
@@ -178,6 +180,20 @@ export default function Layout() {
           }}>
             <ListItemIcon sx={{ minWidth: 32 }}><EditIcon fontSize="small" /></ListItemIcon>
             改名
+          </MenuItem>
+          <MenuItem onClick={async () => {
+            const id = menuTaskId;
+            setMenuAnchor(null);
+            try {
+              const r = await taskApi.openFolder(id);
+              if (!r.data?.ok) window.alert(`打开失败：${r.data?.error || "未知错误"}`);
+            } catch (e: unknown) {
+              const err = e as { response?: { data?: { error?: string } }; message?: string };
+              window.alert(`打开失败：${err?.response?.data?.error || err?.message || e}`);
+            }
+          }}>
+            <ListItemIcon sx={{ minWidth: 32 }}><FolderOpenIcon fontSize="small" /></ListItemIcon>
+            打开文件夹
           </MenuItem>
           <MenuItem onClick={() => {
             const id = menuTaskId;

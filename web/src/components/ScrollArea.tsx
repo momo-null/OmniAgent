@@ -8,12 +8,18 @@ type Props = {
   maxHeight?: number;
   thumbColor?: string;
   hoverThumbColor?: string;
+  /** 外部需要读取/操作滚动视口（如「贴底才自动跟随」逻辑）时传入 ref */
+  viewportRef?: React.MutableRefObject<HTMLDivElement | null>;
 };
 
 // 自绘滚动条：隐藏原生滚动条（避免 Windows/macOS 覆盖式滚动条在静态态被系统样式覆盖），
 // 用原生 overflow 承载滚轮/触摸滚动，叠加一个绝对定位的可拖拽滑块。颜色 100% 可控、跨系统一致。
-export default function ScrollArea({ children, sx, maxHeight, thumbColor = "rgb(60,60,60)", hoverThumbColor = "rgb(90,90,90)" }: Props) {
+export default function ScrollArea({ children, sx, maxHeight, thumbColor = "rgb(60,60,60)", hoverThumbColor = "rgb(90,90,90)", viewportRef }: Props) {
   const innerRef = useRef<HTMLDivElement>(null);
+  const setRefs = (el: HTMLDivElement | null) => {
+    (innerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+    if (viewportRef) viewportRef.current = el;
+  };
   const [m, setM] = useState({ top: 0, view: 0, content: 0 });
   const [hover, setHover] = useState(false);
   const dragging = useRef(false);
@@ -81,7 +87,7 @@ export default function ScrollArea({ children, sx, maxHeight, thumbColor = "rgb(
   return (
     <Box sx={{ position: "relative", overflow: "hidden", ...(sx as object) }}>
       <div
-        ref={innerRef}
+        ref={setRefs}
         onScroll={onScroll}
         className="omni-scroll-area-inner"
         style={{

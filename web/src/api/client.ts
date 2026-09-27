@@ -63,6 +63,8 @@ export const taskApi = {
   rename: (taskId: string, objective: string) =>
     http.post(`/api/runtime/tasks/${taskId}/state`, { objective }),
   remove: (taskId: string) => http.delete(`/api/runtime/tasks/${taskId}`),
+  openFolder: (taskId: string) =>
+    http.post(`/api/runtime/tasks/${taskId}/open_folder`),
   skills: (taskId: string) => http.get(`/api/runtime/tasks/${taskId}/skills`),
   history: (taskId: string) => http.get(`/api/runtime/tasks/${taskId}/history`),
 };
