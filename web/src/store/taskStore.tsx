@@ -2,8 +2,8 @@
 // 单页 shell，视图通过 state 切换（无路由跳转）
 // 使用 React Context 实现，不引入额外依赖。
 import React, { createContext, useContext, useMemo, useRef, useState, useCallback, useEffect } from "react";
-import { runtimeApi, taskApi, projectApi, settingsApi } from "../api/client";
-import type { ChatMsg, RuntimeSnapshot, SkillInfo, ProcessItem } from "../types";
+import { runtimeApi, taskApi, projectApi, settingsApi, approvalsApi } from "../api/client";
+import type { ChatMsg, RuntimeSnapshot, SkillInfo, ProcessItem, ApprovalCardInfo } from "../types";
 
 export interface DebugLog {
   ts: number;
@@ -69,6 +69,10 @@ interface TaskStoreValue {
   pushProcessLog: (m: ProcessItem) => void;
   clearProcessLogs: () => void;
 
+  // S2 审批：待批卡（顶置在 Chat 输入框上方）+ 决议入口
+  pendingApprovals: ApprovalCardInfo[];
+  decideApproval: (approvalId: string, action: "approve" | "deny", remember?: boolean) => Promise<void>;
+
   // K1：记忆更新轻提示（Curator 蒸馏/合并后由 SSE 推送，数秒后自动淡出）
   memoryHint: MemoryHint | null;
   memorySignal: number; // 每次记忆更新自增，供 Memory Tab 作为刷新依赖
@@ -109,6 +113,8 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
   // 对话区实时过程流（思考 + 工具调用），与右栏 debug 日志解耦
   const [processLogs, setProcessLogs] = useState<ProcessItem[]>([]);
+  // S2 审批：待批卡（SSE approval 事件 / live approvals 通道，按 approval_id upsert）
+  const [pendingApprovals, setPendingApprovals] = useState<ApprovalCardInfo[]>([]);
   // K1：记忆更新轻提示（SSE 推送后短暂显示，自动淡出）
   const [memoryHint, setMemoryHint] = useState<MemoryHint | null>(null);
   const [memorySignal, setMemorySignal] = useState<number>(0);
@@ -205,7 +211,10 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         thinking?: ProcessItem[];
         message?: ProcessItem[];
         toolcall?: ProcessItem[];
+        approvals?: ApprovalCardInfo[];
       };
+      // S2：进行中的待批卡一并恢复（刷新 / 切任务后重建顶置卡，§6.3）
+      setPendingApprovals(d.approvals || []);
       if (!d?.running) return;
       const items: ProcessItem[] = [
         ...(d.thinking || []).map((x) => ({ ...x, type: "thinking" as const })),
@@ -231,6 +240,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     setCurrentTaskId(taskId);
     try { localStorage.setItem("omniagent.currentTaskId", taskId); } catch { /* ignore */ }
     clearProcessLogs();
+    setPendingApprovals([]);
     loadHistory(taskId);
     // 回放进行中这一轮的实时过程（见 seedLiveLogs 注释）
     seedLiveLogs(taskId);
@@ -421,6 +431,32 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         /* ignore */
       }
     });
+    // S2 审批卡：顶置在输入框上方，按 approval_id upsert（多张卡纵向堆叠）
+    es.addEventListener("approval", (ev) => {
+      try {
+        const card = JSON.parse((ev as MessageEvent).data) as ApprovalCardInfo;
+        setPendingApprovals((prev) => {
+          const idx = prev.findIndex((a) => a.approval_id === card.approval_id);
+          if (idx >= 0) {
+            const next = prev.slice();
+            next[idx] = card;
+            return next;
+          }
+          return [...prev, card];
+        });
+      } catch {
+        /* ignore */
+      }
+    });
+    // S2 决议 / 超时 / 取消：收起对应卡（时间线里随后出现带结果的 toolcall 卡）
+    es.addEventListener("approval_resolved", (ev) => {
+      try {
+        const m = JSON.parse((ev as MessageEvent).data) as { approval_id: string };
+        setPendingApprovals((prev) => prev.filter((a) => a.approval_id !== m.approval_id));
+      } catch {
+        /* ignore */
+      }
+    });
     // message 事件：对话区实时「口播」气泡（模型每轮自然语言结论，按 id 增量 upsert，与思考一起流式）
     es.addEventListener("message", (ev) => {
       try {
@@ -455,7 +491,11 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
             loadHistory(s.task_id);
           }
         }
-        if (!s.running) refreshTasks();
+        if (!s.running) {
+          // 任务终态：不允许还有卡悬着（后端已置 cancelled，前端兜底清空）
+          setPendingApprovals([]);
+          refreshTasks();
+        }
       } catch {
         /* ignore */
       }
@@ -559,6 +599,18 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [pushMessage]);
 
+  // S2 审批决议：REST 决议；乐观移卡（approval_resolved 事件与 /live 兜底对齐）
+  const decideApproval = useCallback(async (approvalId: string, action: "approve" | "deny", remember?: boolean) => {
+    setPendingApprovals((prev) => prev.filter((a) => a.approval_id !== approvalId));
+    try {
+      await approvalsApi.decide(approvalId, action, remember);
+    } catch (err) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string };
+      const msg = e?.response?.data?.error || e?.message || "请重试";
+      pushMessage({ role: "system", text: `（审批提交失败：${msg}）`, ts: Date.now() });
+    }
+  }, [pushMessage]);
+
   const deleteTask = useCallback(async (taskId: string) => {
     try {
       await taskApi.remove(taskId);
@@ -606,6 +658,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       connectStream, disconnectStream, sendMessage, injectMessage, stopTask,
       maxSteps, setMaxSteps,
       fullAccessByTask, setFullAccessForTask,
+      pendingApprovals, decideApproval,
       taskTitles,
       taskObjectives,
       debugLogs, pushDebugLog, clearDebugLogs,
@@ -613,7 +666,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       deleteTask, renameTask,
       memoryHint, memorySignal,
     }),
-    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, memoryHint, memorySignal]
+    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval, memoryHint, memorySignal]
   );
 
   return <TaskStoreContext.Provider value={value}>{children}</TaskStoreContext.Provider>;

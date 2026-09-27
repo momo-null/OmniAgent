@@ -50,6 +50,7 @@ import { useTaskStore } from "../../store/taskStore.tsx";
 import CharacterTab from "./CharacterTab";
 import ProfileTab from "./ProfileTab";
 import MemoryTab from "./MemoryTab";
+import SecurityTab from "./SecurityTab";
 
 const DEFAULT_MODELS_DIR = "D:\\AI\\Models";
 
@@ -806,6 +807,7 @@ export default function Settings() {
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label="通用" />
         <Tab label="伙伴" />
+        <Tab label="安全" />
         <Tab label="模型" />
         <Tab label="通道" />
         <Tab label="编排" />
@@ -813,10 +815,11 @@ export default function Settings() {
       </Tabs>
       {tab === 0 && <GeneralTab />}
       {tab === 1 && <CompanionTab />}
-      {tab === 2 && <ModelTab />}
-      {tab === 3 && <ChannelsTab />}
-      {tab === 4 && <OrchestrationTab />}
-      {tab === 5 && <AboutTab />}
+      {tab === 2 && <SecurityTab />}
+      {tab === 3 && <ModelTab />}
+      {tab === 4 && <ChannelsTab />}
+      {tab === 5 && <OrchestrationTab />}
+      {tab === 6 && <AboutTab />}
     </Box>
   );
 }

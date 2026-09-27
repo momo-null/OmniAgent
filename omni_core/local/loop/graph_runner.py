@@ -64,12 +64,20 @@ class GraphRunnerMixin:
         # 绑定当前任务的临时工作目录：脚本 / 截图等临时产物默认落 tasks/<task_id>/tmp/。
         from omni_core.tools.workspace import set_task
         set_task(spec.task_id)
+        # S0/S1/S2 安全上下文随 run 绑定（运行级配置快照一次性凝固；run 内不变）
+        from omni_core.tools import policy as security_policy
+        security_policy.bind(
+            task_id=spec.task_id,
+            full_access=bool(getattr(self, "full_access", False)),
+            security_cfg=(self._cfg.get("security") or {}),
+        )
         try:
             return self._run_graph(spec)
         finally:
             WorldModel.release(spec.task_id)
             self._cleanup_task_tmp(spec.task_id)
             set_task(None)
+            security_policy.unbind()
 
     @staticmethod
     def _cleanup_task_tmp(task_id: str) -> None:

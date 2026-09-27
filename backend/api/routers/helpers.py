@@ -53,7 +53,7 @@ def _ensure_outbox(task_id: str) -> Dict[str, "collections.deque"]:
 # 因此页面刷新或切换 task 后，进行中的这一轮没有任何可回放来源（前端 processLogs 空，
 # history jsonl 里也没有该轮）。这里另存一份**按 id upsert 的有界快照**，由
 # GET /api/runtime/live 提供给前端在挂载/切任务时回放——不改 SSE 协议本身。
-_LIVE_CHANNELS = ("thinking", "message", "toolcall")
+_LIVE_CHANNELS = ("thinking", "message", "toolcall", "approvals")
 _LIVE_LIMIT = 200                     # 每通道保留条数上限（超出丢最旧）
 _LIVE_SNAPSHOT: Dict[str, Dict[str, "collections.OrderedDict"]] = {}
 _live_lock = threading.RLock()        # 写入在 agent 线程、读取在请求线程
@@ -101,6 +101,13 @@ def _try_start_task(task_id: str, agent_id: str = AGENT_MAIN) -> bool:
 def _finish_task(task_id: str, agent_id: str = AGENT_MAIN) -> None:
     """标记 (task_id, agent_id) 为非运行。"""
     manager.finish(task_id, agent_id)
+    # S2：任务终态——待批卡全部置 cancelled（唤醒阻塞的工具线程）、任务级审批记忆清空。
+    # 不允许任务结束后还有卡悬着（§6.2）。
+    try:
+        from backend.services.approvals import cancel_task_approvals
+        cancel_task_approvals(task_id)
+    except Exception:
+        pass
 
 def _is_any_running() -> bool:
     return manager.is_any_running()
@@ -204,6 +211,36 @@ def push_tool_call(role: str, name: str, arguments: str, result: str,
     }
     _ensure_outbox(tid)["toolcall"].append(entry)
     _live_push(tid, "toolcall", entry["id"], entry)
+
+def push_approval(card: Any, task_id: str = "") -> None:
+    """S2 审批卡：SSE `approval` 事件 + live 快照 approvals 通道（按 approval_id upsert）。
+
+    card 为 omni_core.tools.policy.ApprovalCard（鸭子类型读取，避免反向依赖内核类型）。
+    """
+    tid = task_id or _running_task_id() or "_global"
+    entry = {
+        "approval_id": card.approval_id,
+        "task_id": tid,
+        "tool": card.tool, "unit": card.unit, "risk": card.risk,
+        "arguments": card.arguments or {},
+        "created_at": card.created_at, "wait_seconds": card.wait_seconds,
+        "ts": time.time(),
+    }
+    _ensure_outbox(tid)["approval"].append(entry)
+    _live_push(tid, "approvals", entry["approval_id"], entry)
+
+
+def push_approval_resolved(approval_id: str, outcome: str, task_id: str = "") -> None:
+    """S2 决议 / 超时 / 取消：SSE `approval_resolved` 事件；并从 live 快照移除该卡。"""
+    tid = task_id or _running_task_id() or "_global"
+    _ensure_outbox(tid)["approval_resolved"].append(
+        {"approval_id": approval_id, "outcome": outcome, "ts": time.time()})
+    with _live_lock:
+        try:
+            _live_box(tid)["approvals"].pop(approval_id, None)
+        except Exception:
+            pass
+
 
 def _upsert(box: "collections.deque", channel: str, block_id: str, entry: dict):
     """按 block_id 在通道内 upsert（存在则原地更新 content，保留原 ts 防时间线跳序）。"""

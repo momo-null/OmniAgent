@@ -107,6 +107,53 @@ def _unbind_env_tool_backends():
                 bind(None)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_security():
+    """用例间重置 S2 安全状态：审批 sink 与 SecurityContext。
+
+    TestClient lifespan 会注册真实 SseApprovalSink（阻塞等人决议）——直调工具的
+    用例若不重置会被它挂住；未注册时内核回落 AutoDenySink（fail-closed，不挂测试）。
+    需要审批流的用例显式装 `approve_all_sink` 或本地脚本化 sink。
+    """
+    from omni_core.tools import policy as _policy
+    _policy.set_sink(None)
+    _policy.unbind()
+    yield
+    _policy.set_sink(None)
+    _policy.unbind()
+
+
+class _ApproveAllSink:
+    """测试用放行 sink：记录收到的卡片，全部批准（不写任务级记忆）。"""
+
+    def __init__(self):
+        from omni_core.tools import policy as _policy
+        self._policy = _policy
+        self.requests = []
+
+    def request(self, card):
+        self.requests.append(card)
+        return self._policy.Decision(approved=True)
+
+    def remembered(self, task_id, key):
+        return False
+
+    def remember(self, task_id, key):
+        pass
+
+
+@pytest.fixture
+def approve_all_sink():
+    """装一个全部放行的审批 sink（并绑定 standard 档安全上下文）供直调工具用例使用。"""
+    from omni_core.tools import policy as _policy
+    sink = _ApproveAllSink()
+    _policy.set_sink(sink)
+    _policy.bind(task_id="t_sec", full_access=False, security_cfg={})
+    yield sink
+    _policy.set_sink(None)
+    _policy.unbind()
+
+
 @pytest.fixture
 def enable_plugin():
     """打开一个插件：写它的自有配置 ``~/.omniagent/plugins/<name>.yaml`` 的 ``enabled``。

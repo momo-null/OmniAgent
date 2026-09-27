@@ -56,8 +56,11 @@ def test_contextvar_isolated_between_tasks():
 
 # --- 工具默认落点 -----------------------------------------------------------
 
-def test_shell_exec_default_cwd_is_task_tmp():
-    """命令默认工作目录 = 当前任务 tmp：产物**不进项目目录**。"""
+def test_shell_exec_default_cwd_is_task_tmp(approve_all_sink):
+    """命令默认工作目录 = 当前任务 tmp：产物**不进项目目录**。
+
+    S2 起命令执行过审批门：直调用例经 ``approve_all_sink`` 放行（见 conftest）。
+    """
     set_task("t_tmp_cwd")
     try:
         RP.ensure_task_dirs("t_tmp_cwd")

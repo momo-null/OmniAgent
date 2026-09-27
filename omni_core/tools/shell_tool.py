@@ -63,6 +63,7 @@ def _clip(text: str, limit: int) -> str:
                 "命令的工作目录、以及相对路径基准，默认 = 当前任务目录。"
                 "注意：此工具会在你的机器上真实执行命令。",
     unit="core",
+    risk="exec",
 )
 def shell_exec(
     command: str,

@@ -33,7 +33,8 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 # UI 可编辑的配置节（白名单，避免前端任意写导致破坏）
 # 三通道单一真源：brain 顶层，executor/vision 嵌套在 runtime 下。
-_EDITABLE_KEYS = ("runtime", "brain", "local_model", "llm")
+# S0/S2：security = 权限模式档位 / 允许根 / 审批等待（sandbox-permission-design.md §4）。
+_EDITABLE_KEYS = ("runtime", "brain", "local_model", "llm", "security")
 
 # 各通道中需脱敏的密钥字段名
 _API_KEY_FIELDS = ("api_key",)

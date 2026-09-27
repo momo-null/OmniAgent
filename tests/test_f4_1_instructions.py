@@ -16,6 +16,7 @@ from agents import Model
 
 from omni_core.brain.sdk_loop import _TailInjectModel
 from omni_core.local.knowledge_inject import compose_injection_block
+from omni_core.tools.base import call_tool
 from omni_core.tools.loader import load_plugins, plugin_module
 
 
@@ -103,25 +104,25 @@ def test_tail_inject_reports_once():
     assert seen[0][1] == ["memory"]
 
 
-# --- 4. 纪律文件写保护（F4.1b 维持现状，不做改动） ------------------------------
-def test_agents_md_write_blocked(tmp_path, fs):
+# --- 4. 纪律文件写保护（F4.1b：检查已收编进 S1 policy，经统一出口返回结构化拒绝） ---
+def test_agents_md_write_blocked(tmp_path, fs, approve_all_sink):
     p = tmp_path / "AGENTS.md"
-    r = fs.write_file(str(p), "nope")
-    assert r["ok"] is False and "只读" in r["error"]
+    r = call_tool("write_file", {"path": str(p), "content": "nope"})
+    assert r["ok"] is False and r["denied"] is True and r["rule"] == "discipline_file"
     assert not p.exists()
     # 编辑同样被拒
     p.write_text("orig", encoding="utf-8")
-    e = fs.edit_file(str(p), "orig", "changed")
-    assert e["ok"] is False and "只读" in e["error"]
+    e = call_tool("edit_file", {"path": str(p), "old_string": "orig", "new_string": "changed"})
+    assert e["ok"] is False and e["denied"] is True and e["rule"] == "discipline_file"
     assert p.read_text(encoding="utf-8") == "orig"
-    # 普通文件不受影响
-    ok = fs.write_file(str(tmp_path / "ok.md"), "yes")
+    # 普通文件不受影响（tmp_path 在允许根外 → 经 approve_all_sink 批准放行）
+    ok = call_tool("write_file", {"path": str(tmp_path / "ok.md"), "content": "yes"})
     assert ok["ok"] is True
 
 
-def test_agents_md_write_guard_covers_nested_name(tmp_path, fs):
+def test_agents_md_write_guard_covers_nested_name(tmp_path, fs, approve_all_sink):
     """嵌套同名文件同样受保护（大小写不敏感）。"""
     nested = Path(tmp_path) / "sub" / "agents.md"
-    r = fs.write_file(str(nested), "nope")
-    assert r["ok"] is False and "只读" in r["error"]
+    r = call_tool("write_file", {"path": str(nested), "content": "nope"})
+    assert r["ok"] is False and r["denied"] is True and r["rule"] == "discipline_file"
     assert not nested.exists()

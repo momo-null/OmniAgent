@@ -79,6 +79,13 @@ async def lifespan(app: FastAPI):
         logger.info("全局数据根: %s", runtime_paths.global_omni())
     except Exception as e:  # 建目录失败不应阻断启动
         logger.warning("启动预建全局目录失败（已忽略）: %s", e)
+    # S2 审批后端：注册 SSE sink（未注册时内核回落 AutoDenySink，fail-closed）
+    try:
+        from backend.services.approvals import install_approval_sink
+        install_approval_sink()
+        logger.info("S2 审批 sink 已注册（SSE 推卡 + REST 决议）")
+    except Exception as e:  # 注册失败不阻断启动（回落 AutoDeny，安全侧）
+        logger.warning("注册 S2 审批 sink 失败（将回落 AutoDeny）: %s", e)
     yield
     # P1 工具插件：进程退出前依次调用各插件 shutdown()（异常吞掉，不阻断退出）。
     try:

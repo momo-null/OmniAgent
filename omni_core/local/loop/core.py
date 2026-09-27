@@ -103,6 +103,9 @@ class ToolLoop(
         # 运行期内不再重读全局 config（设置面板运行期变更不影响本运行）。
         self._cfg = config_snapshot if config_snapshot is not None else (config.load_config() or {})
         self.agent_id = agent_id
+        # S2 审批总开关（per-task「完全访问」）：graph_runner 绑定进 SecurityContext。
+        # 此前为 inert 挂点（capability-unit 重构），S2 落地后转正。
+        self.full_access = bool(full_access)
         _cfg = self._cfg
         _rt = (_cfg.get("runtime") or {})
 

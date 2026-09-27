@@ -57,14 +57,21 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _safe(path: str) -> Path:
-    """相对路径解析到当前任务临时目录（tasks/<task_id>/tmp/）；绝对路径原样。"""
+    """相对路径解析到当前任务临时目录（tasks/<task_id>/tmp/）；绝对路径原样。
+
+    S1 路径漏斗在 ``resolve_path`` 内统一生效（绝对拒绝区）。
+    """
     from omni_core.tools.workspace import resolve_path
     return resolve_path(path)
 
 
-def _is_discipline_file(p: Path) -> bool:
-    """F4.1：纪律文件（AGENTS.md）对 agent 只读，禁止任何写入/覆盖/编辑。"""
-    return p.name.lower() == "agents.md"
+def _ensure_writable(p: Path) -> None:
+    """写入口围栏（S1 允许根 / S2 根外审批；AGENTS.md 等载体拒绝已收编进 policy）。
+
+    必须在**任何副作用之前**调用（阻塞式审批设计，无需重入函数）。
+    """
+    from omni_core.tools.policy import ensure_writable
+    ensure_writable(p)
 
 
 @function_tool(
@@ -118,8 +125,7 @@ def write_file(path: str, content: str) -> Dict[str, Any]:
         content: 文件内容
     """
     p = _safe(path)
-    if _is_discipline_file(p):
-        return {"ok": False, "error": "AGENTS.md 为只读纪律文件，禁止写入/覆盖"}
+    _ensure_writable(p)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
@@ -141,8 +147,7 @@ def edit_file(path: str, old_string: str, new_string: str) -> Dict[str, Any]:
         new_string: 替换后文本
     """
     p = _safe(path)
-    if _is_discipline_file(p):
-        return {"ok": False, "error": "AGENTS.md 为只读纪律文件，禁止写入/覆盖"}
+    _ensure_writable(p)
     if not p.is_file():
         return {"ok": False, "error": f"文件不存在: {path}"}
     try:
@@ -272,6 +277,7 @@ def mkdir(path: str) -> Dict[str, Any]:
         path: 目录路径
     """
     p = _safe(path)
+    _ensure_writable(p)
     try:
         p.mkdir(parents=True, exist_ok=True)
     except Exception as e:

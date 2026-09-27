@@ -74,6 +74,7 @@ def _html_to_text(html: str) -> str:
 @function_tool(
     description="抓取网页 URL 并返回可读正文（HTML 转文本）。用于读文章、查文档、验证事实。",
     unit="web",
+    risk="network",
 )
 def web_fetch(url: str) -> Dict[str, Any]:
     """抓取网页。
@@ -108,6 +109,7 @@ def web_fetch(url: str) -> Dict[str, Any]:
 @function_tool(
     description="联网搜索（自研，无密钥）：返回标题/链接/摘要列表。用于搜最新资讯、查资料。",
     unit="web",
+    risk="network",
 )
 def web_search(query: str, max_results: int = 8) -> Dict[str, Any]:
     """联网搜索。

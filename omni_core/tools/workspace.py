@@ -42,6 +42,14 @@ def task_tmp_dir() -> Path:
 
 
 def resolve_path(path: Union[str, Path]) -> Path:
-    """相对路径解析到当前任务临时目录；绝对路径原样返回。"""
+    """相对路径解析到当前任务临时目录；绝对路径原样返回。
+
+    S1 路径漏斗：解析结果统一过 ``policy.guard_path`` 绝对拒绝区
+    （``~/.omniagent/**`` 除当前任务 tmp 外读写全拒）——经本函数解析路径的
+    工具（filesystem 全部、emulator adb 本地路径等）零改动被覆盖。
+    """
     p = Path(path).expanduser()
-    return p if p.is_absolute() else task_tmp_dir() / p
+    p = p if p.is_absolute() else task_tmp_dir() / p
+    from omni_core.tools.policy import guard_path
+    guard_path(p)
+    return p

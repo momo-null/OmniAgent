@@ -93,6 +93,7 @@ def function_tool(
     source: str = "core",
     percept: Optional[str] = None,
     timeout: Optional[float] = None,
+    risk: Optional[str] = None,
 ) -> Callable[[Callable], Callable]:
     """把业务函数注册为平级 tool 插件（**用 SDK 的 function_tool**）。
 
@@ -107,9 +108,12 @@ def function_tool(
         percept: 世界模型感知类型——``"state"`` → 结果并入环境状态文本；
             ``"collected"`` → 结果并入采集清单。内核据此分发，**零工具名字面量**。
         timeout: 单次工具调用超时（秒）。
+        risk: S2 风险类别自声明（sandbox-permission-design.md §4）——
+            ``"exec"``（命令执行）/ ``"actuate"``（键鼠设备注入）/ ``"network"``
+            （网络出站）。声明后执行前过前置门；未声明=纯/读（S1 漏斗仍生效）。
 
     Usage::
-        @function_tool(description="点击归一化坐标", unit="host")
+        @function_tool(description="点击归一化坐标", unit="host", risk="actuate")
         def click(x: float, y: float) -> dict:
             \"\"\"点击屏幕。
 
@@ -123,8 +127,13 @@ def function_tool(
         # 严格模式要求所有属性必填且 additionalProperties=false，不适用。
         # failure_error_function：工具异常回成结构化错误串给 agent 自主重试，
         # 不抛穿框架循环（设计 §5.0 错误传播）。
+        # 统一包裹层（S2 注入点）：risk 前置门 + PolicyRefusal → 结构化拒绝，
+        # 插件/环境作者零感知、无法绕过；wraps 保全 SDK schema 生成。
+        from omni_core.tools.policy import wrap_tool
+        guarded = wrap_tool(func, tool_name=name or getattr(func, "__name__", ""),
+                            unit=unit, risk=risk)
         tool = sdk_function_tool(
-            func,
+            guarded,
             name_override=name,
             description_override=description or None,
             strict_mode=False,
@@ -133,6 +142,8 @@ def function_tool(
             failure_error_function=_tool_error_result,
         )
         meta = {"percept": percept} if percept else {}
+        if risk:
+            meta["risk"] = risk
         register_tool(ToolPlugin(
             name=tool.name, tool=tool, unit=unit, source=source, meta=meta,
         ))

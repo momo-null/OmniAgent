@@ -116,7 +116,8 @@ def test_type_tool_uses_type_name_not_builtin():
 
 
 # --- 键鼠路由 ---------------------------------------------------------------
-def test_keyboard_and_mouse_route_to_backend():
+def test_keyboard_and_mouse_route_to_backend(approve_all_sink):
+    """S2 起键鼠为 actuate 类过审批门：直调用例经 approve_all_sink 放行（见 conftest）。"""
     fake = _bind(_FakeExec())
     assert call_tool("press", {"key": "enter"})["ok"] is True
     assert call_tool("hotkey", {"keys": "ctrl,c"})["keys"] == ["ctrl", "c"]
@@ -129,7 +130,7 @@ def test_keyboard_and_mouse_route_to_backend():
     assert ("click", {"x": 0.5, "y": 0.4}) in fake.calls
 
 
-def test_drag_routes_to_backend():
+def test_drag_routes_to_backend(approve_all_sink):
     fake = _bind(_FakeExec())
     res = call_tool("drag", {"from_x": 0.1, "from_y": 0.2, "to_x": 0.8, "to_y": 0.9})
     assert res["ok"] is True

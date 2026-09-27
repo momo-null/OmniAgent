@@ -43,7 +43,7 @@ def _percept_text(percept: Any) -> str:
 # 键盘 / 鼠标
 # ---------------------------------------------------------------------------
 @function_tool(description="按下并释放单个键（本机键名，如 enter / space / a / ctrl）",
-               unit="host", source="env")
+               unit="host", source="env", risk="actuate")
 def press(key: str) -> Dict[str, Any]:
     """按下并释放单个键。
 
@@ -55,7 +55,7 @@ def press(key: str) -> Dict[str, Any]:
 
 
 @function_tool(description="按下组合键，keys 为逗号分隔字符串（如 'ctrl,c'）",
-               unit="host", source="env")
+               unit="host", source="env", risk="actuate")
 def hotkey(keys: str) -> Dict[str, Any]:
     """按下组合键。
 
@@ -67,7 +67,8 @@ def hotkey(keys: str) -> Dict[str, Any]:
     return {"ok": bool(ok), "keys": key_list}
 
 
-@function_tool(name="type", description="在当前焦点处输入一段文本", unit="host", source="env")
+@function_tool(name="type", description="在当前焦点处输入一段文本", unit="host", source="env",
+               risk="actuate")
 def input_text(text: str) -> Dict[str, Any]:
     """输入文本。
 
@@ -89,7 +90,7 @@ def wait(ms: int = 500) -> Dict[str, Any]:
     return res if isinstance(res, dict) else {"ok": True, "waited_ms": int(ms)}
 
 
-@function_tool(description="点击归一化坐标处（0~1）", unit="host", source="env")
+@function_tool(description="点击归一化坐标处（0~1）", unit="host", source="env", risk="actuate")
 def click(x: float, y: float) -> Dict[str, Any]:
     """点击归一化坐标。
 
@@ -101,7 +102,8 @@ def click(x: float, y: float) -> Dict[str, Any]:
     return {"ok": bool(ok)}
 
 
-@function_tool(description="从一点拖到另一点（归一化坐标）", unit="host", source="env")
+@function_tool(description="从一点拖到另一点（归一化坐标）", unit="host", source="env",
+               risk="actuate")
 def drag(from_x: float, from_y: float, to_x: float, to_y: float) -> Dict[str, Any]:
     """归一化坐标拖拽。
 

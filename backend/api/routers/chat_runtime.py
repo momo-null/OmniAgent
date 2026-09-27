@@ -320,6 +320,16 @@ async def _stream_gen(task_id: str = ""):
             for m in tcmsgs:
                 yield _sse("toolcall", m)
 
+            # 1f) S2 审批：approval（推卡）+ approval_resolved（决议/超时/取消）
+            amsgs = list(box["approval"])
+            box["approval"].clear()
+            for m in amsgs:
+                yield _sse("approval", m)
+            armsgs = list(box["approval_resolved"])
+            box["approval_resolved"].clear()
+            for m in armsgs:
+                yield _sse("approval_resolved", m)
+
             # 1) chat outbox（task-scoped，含结尾结果框 / system 状态）殿后，确保沉在对话最末
             chat_msgs = list(box["chat"])
             box["chat"].clear()

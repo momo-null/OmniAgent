@@ -145,6 +145,19 @@ export const signalsApi = {
   steady: () => http.get<SteadyState>("/api/runtime/signals/steady"),
 };
 
+// ── S2 审批（/api/runtime/approvals + /audit） ─────────
+export const approvalsApi = {
+  // 人工决议一张待批卡（approve|deny，remember=本任务内不再询问同类操作）
+  decide: (approvalId: string, action: "approve" | "deny", remember?: boolean) =>
+    http.post(`/api/runtime/approvals/${encodeURIComponent(approvalId)}/decision`, {
+      action,
+      remember: !!remember,
+    }),
+  // 审计记录尾部 N 条（设置页「安全」区消费）
+  audit: (limit = 200) =>
+    http.get("/api/runtime/audit", { params: { limit } }),
+};
+
 // ── Plan C 运行时控制台（/api/runtime） ─────────────
 export const runtimeApi = {
   projects: () => http.get("/api/runtime/projects"),

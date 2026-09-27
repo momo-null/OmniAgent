@@ -209,6 +209,15 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
         # 内核工具限流（缺省见 shell_tool._LIMITS；配置缺项即用缺省，不会报错）
         # 插件自有配置（filesystem / web / vision …）一律不进本文件，见 ~/.omniagent/plugins/<name>.yaml
         "shell_exec": {"timeout_sec": 30.0, "max_output": 8000},
+        # S0 权限模式与 S2 审批（sandbox-permission-design.md §4；随 run 快照进入 run，改后下次 run 生效）
+        "security": {
+            "mode": "standard",        # standard | read_only（read_only=危险动作自动拒绝）
+            "allow_write_roots": [],   # 额外允许写入的根（绝对路径列表）
+            "approval": {
+                "wait_seconds": 600,   # 审批等待上限（秒）；0 = 无限等；超时按拒绝处理
+            },
+            "audit": True,             # 审计落盘开关（~/.omniagent/audit/YYYY-MM.jsonl）
+        },
         "long_task": {
             "repeat_guard": 3,
             # F2.4 主链墙钟（秒）：0 = 不检查（大步数预算下默认不检查，避免被 120s 子任务墙钟腰斩）

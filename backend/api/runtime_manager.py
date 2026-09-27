@@ -22,7 +22,9 @@ from typing import Any, Dict, List, Optional, Tuple
 AGENT_MAIN = "main"
 
 # task-scoped outbox 通道（与前端 SSE 事件类型一一对应）。
-_OUTBOX_KEYS = ("chat", "debug", "thinking", "toolcall", "message")
+# S2 审批：approval=推卡；approval_resolved=决议/超时/取消（前端据此收起顶置卡）。
+_OUTBOX_KEYS = ("chat", "debug", "thinking", "toolcall", "message",
+                "approval", "approval_resolved")
 
 
 @dataclass

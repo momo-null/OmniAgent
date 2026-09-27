@@ -1459,7 +1459,10 @@ def run_subtask_sdk(
         if verify_fail_max and state.verify_fail >= verify_fail_max:
             return _result(False, f"verify 连续失败 {state.verify_fail} 次", state.steps, True,
                            f"verify 连续失败 {state.verify_fail} 次", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
-        if wallclock_sec and (time.time() - started) >= wallclock_sec:
+        # 墙钟结算扣除审批等待（等待是人的延迟，不是 agent 的延迟；§6.2）——
+        # 否则 worker 子任务（缺省 120s 墙钟）里一次长等待会在批准后被误判墙钟超时
+        from omni_core.tools.policy import gate_wait_seconds
+        if wallclock_sec and (time.time() - started - gate_wait_seconds()) >= wallclock_sec:
             return _result(False, "墙钟超时（wallclock_sec）", state.steps, True, "墙钟超时（wallclock_sec）", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
 
         # 显式完成条件短路（沿旧循环语义）：已达成即收尾，不必等 task_done。

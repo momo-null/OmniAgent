@@ -191,6 +191,21 @@ export interface ProcessItem {
   result?: string;
 }
 
+// ── S2 审批卡（SSE `approval` 事件 / GET /live approvals 通道） ──
+// 通用渲染（零工具特判）：风险标签由 risk 映射，参数整体以 JSON 展示
+export interface ApprovalCardInfo {
+  approval_id: string;
+  task_id: string;
+  tool: string;
+  unit: string;
+  risk: string; // exec | actuate | network | write
+  arguments: Record<string, unknown>;
+  created_at: number;
+  wait_seconds: number; // 0 = 无限等
+  ts?: number;
+}
+
+
 // ── tool 插件层（GET /api/runtime/tools） ─────────────
 // 自研工具与外部 MCP 工具完全平级，用 source 区分来源
 export interface ToolInfo {

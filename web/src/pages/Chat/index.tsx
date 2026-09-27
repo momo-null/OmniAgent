@@ -9,6 +9,7 @@ import {
   Chip,
   IconButton,
   Button,
+  Checkbox,
   FormControlLabel,
   Alert,
   Popover,
@@ -27,9 +28,81 @@ import PublicRounded from "@mui/icons-material/PublicRounded";
 import { useTaskStore } from "../../store/taskStore.tsx";
 import ScrollArea from "../../components/ScrollArea.tsx";
 import Markdown from "../../components/Markdown.tsx";
-import type { ChatMsg, ProcessItem } from "../../types";
+import type { ChatMsg, ProcessItem, ApprovalCardInfo } from "../../types";
 import type { DebugLog } from "../../store/taskStore";
 import { characterApi } from "../../api/client";
+
+// S2 审批卡风险标签（通用三词 + 网络，零工具特判——前端不认识具体工具）
+const RISK_LABEL: Record<string, string> = {
+  exec: "命令执行",
+  actuate: "键鼠操作",
+  network: "网络访问",
+  write: "写入文件",
+};
+
+// 顶置审批卡（§6.3）：参数等宽展示、可折叠完整 JSON；actuate 默认勾选任务级记忆
+function ApprovalCardView({ card, onDecide }: {
+  card: ApprovalCardInfo;
+  onDecide: (id: string, action: "approve" | "deny", remember?: boolean) => void;
+}) {
+  const [remember, setRemember] = useState(card.risk === "actuate");
+  const [argsOpen, setArgsOpen] = useState(false);
+  const argsText = useMemo(() => {
+    try {
+      return JSON.stringify(card.arguments ?? {}, null, 2);
+    } catch {
+      return String(card.arguments);
+    }
+  }, [card]);
+  const riskLabel = RISK_LABEL[card.risk] ?? "工具调用";
+  return (
+    <Alert
+      severity="warning"
+      icon={<WarningAmberRounded fontSize="small" />}
+      sx={{ mb: 1, flexShrink: 0, borderRadius: 2, alignItems: "flex-start" }}
+    >
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+          {riskLabel} · {card.tool}
+        </Typography>
+        <Chip size="small" label={card.unit} variant="outlined" sx={{ height: 20 }} />
+      </Stack>
+      <Box
+        sx={{
+          maxHeight: argsOpen ? 220 : 72, overflow: "auto", mb: 0.5,
+          bgcolor: "action.hover", borderRadius: 1, p: 1,
+          fontFamily: "monospace", fontSize: 12, whiteSpace: "pre-wrap",
+          wordBreak: "break-all",
+        }}
+      >
+        {argsText}
+      </Box>
+      <Button size="small" sx={{ minWidth: 0, px: 0.5, mb: 0.5 }}
+        onClick={() => setArgsOpen((v) => !v)}
+        startIcon={argsOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}>
+        {argsOpen ? "收起参数" : "展开完整参数"}
+      </Button>
+      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ flexWrap: "wrap", gap: 0.5 }}>
+        <FormControlLabel
+          control={<Checkbox size="small" checked={remember}
+            onChange={(e) => setRemember(e.target.checked)} />}
+          label={<Typography variant="caption">本任务内不再询问同类操作</Typography>}
+          sx={{ mr: 0 }}
+        />
+        <Stack direction="row" spacing={1}>
+          <Button size="small" onClick={() => onDecide(card.approval_id, "deny", false)}>拒绝</Button>
+          <Button size="small" variant="contained" color="warning"
+            onClick={() => onDecide(card.approval_id, "approve", remember)}>允许</Button>
+        </Stack>
+      </Stack>
+      <Typography variant="caption" sx={{ color: "text.secondary", display: "block" }}>
+        {card.wait_seconds > 0
+          ? `${Math.round(card.wait_seconds)} 秒未处理将自动拒绝`
+          : "将一直等待人工决议"}
+      </Typography>
+    </Alert>
+  );
+}
 
 function roleColor(role: string): "primary" | "secondary" | "default" {
   if (role === "agent") return "primary";
@@ -340,7 +413,7 @@ function LogRow({ log }: { log: DebugLog }) {
 }
 
 export default function Chat() {
-  const { messages, running, sendMessage, injectMessage, stopTask, debugLogs, clearDebugLogs, processLogs, memoryHint, currentTaskId, fullAccessByTask, setFullAccessForTask } = useTaskStore();
+  const { messages, running, sendMessage, injectMessage, stopTask, debugLogs, clearDebugLogs, processLogs, memoryHint, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval } = useTaskStore();
   const [draft, setDraft] = useState("");
   const [logOpen, setLogOpen] = useState(false);
   // 助手名：从角色卡 frontmatter 解析（缺省 OmniAgent），用于顶栏与消息标签
@@ -464,6 +537,15 @@ export default function Chat() {
             </Box>
           </ScrollArea>
         </Paper>
+
+        {/* S2 审批卡：顶置在输入框上方，不随时间线滚走；决议后收起（§6.3） */}
+        {pendingApprovals.length > 0 && (
+          <Box sx={{ flexShrink: 0, mb: 1 }}>
+            {pendingApprovals.map((card) => (
+              <ApprovalCardView key={card.approval_id} card={card} onDecide={decideApproval} />
+            ))}
+          </Box>
+        )}
 
         {/* Codex 风格胶囊输入框：圆角容器 + 内嵌发送/停止按钮 */}
         <Box
@@ -589,7 +671,7 @@ export default function Chat() {
             <CapabilityRow icon={<PublicRounded />} label="互联网和已连接的应用" desc="访问网站、发送数据并使用已启用的工具" tag="默认已启用" />
           </Stack>
           <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1.5 }}>
-            仅对当前任务生效，切换任务后自动关闭。
+            仅对当前任务生效，切换任务后自动关闭。OmniAgent 自身的配置与记忆目录始终拒绝访问（完全访问也不例外）。
           </Typography>
           <Stack direction="row" justifyContent="flex-end" spacing={1}>
             <Button size="small" onClick={() => setConfirmAnchorEl(null)}>取消</Button>

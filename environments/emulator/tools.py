@@ -43,7 +43,7 @@ def _percept_text(percept: Any) -> str:
 # ---------------------------------------------------------------------------
 # 键盘 / 鼠标
 # ---------------------------------------------------------------------------
-@function_tool(description="按下并释放单个键，如 enter / space / esc / a / win", unit="emulator", source="env")
+@function_tool(description="按下并释放单个键，如 enter / space / esc / a / win", unit="emulator", source="env", risk="actuate")
 def press(key: str) -> Dict[str, Any]:
     """按下并释放单个键。
 
@@ -54,7 +54,7 @@ def press(key: str) -> Dict[str, Any]:
     return {"ok": bool(ok)}
 
 
-@function_tool(description="按下组合键，keys 为逗号分隔字符串", unit="emulator", source="env")
+@function_tool(description="按下组合键，keys 为逗号分隔字符串", unit="emulator", source="env", risk="actuate")
 def hotkey(keys: str) -> Dict[str, Any]:
     """按下组合键。
 
@@ -66,7 +66,7 @@ def hotkey(keys: str) -> Dict[str, Any]:
     return {"ok": bool(ok), "keys": key_list}
 
 
-@function_tool(name="type", description="在当前焦点处输入一段文本", unit="emulator", source="env")
+@function_tool(name="type", description="在当前焦点处输入一段文本", unit="emulator", source="env", risk="actuate")
 def input_text(text: str) -> Dict[str, Any]:
     """输入文本。
 
@@ -88,7 +88,7 @@ def wait(ms: int = 500) -> Dict[str, Any]:
     return res if isinstance(res, dict) else {"ok": True, "waited_ms": int(ms)}
 
 
-@function_tool(description="点击归一化坐标处", unit="emulator", source="env")
+@function_tool(description="点击归一化坐标处", unit="emulator", source="env", risk="actuate")
 def click(x: float, y: float) -> Dict[str, Any]:
     """点击归一化坐标。
 
@@ -100,7 +100,7 @@ def click(x: float, y: float) -> Dict[str, Any]:
     return {"ok": bool(ok)}
 
 
-@function_tool(description="从一点拖到另一点（归一化坐标），用于滑动列表、拖动元素等", unit="emulator", source="env")
+@function_tool(description="从一点拖到另一点（归一化坐标），用于滑动列表、拖动元素等", unit="emulator", source="env", risk="actuate")
 def drag(from_x: float, from_y: float, to_x: float, to_y: float) -> Dict[str, Any]:
     """归一化坐标拖拽。
 
@@ -156,7 +156,7 @@ def get_ui_tree() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # 设备原语（不支持的后端返回明确错误 dict，不抛异常）
 # ---------------------------------------------------------------------------
-@function_tool(description="按控件 resource-id 点击（比坐标更可靠）", unit="emulator", source="env")
+@function_tool(description="按控件 resource-id 点击（比坐标更可靠）", unit="emulator", source="env", risk="actuate")
 def tap_by_id(resource_id: str) -> Dict[str, Any]:
     """按控件 id 点击。
 
@@ -166,7 +166,7 @@ def tap_by_id(resource_id: str) -> Dict[str, Any]:
     return _require_em().tap_by_id(resource_id)
 
 
-@function_tool(description="定位界面上的指定文字并点击其中心；找不到时返回当前可见文字列表", unit="emulator", source="env")
+@function_tool(description="定位界面上的指定文字并点击其中心；找不到时返回当前可见文字列表", unit="emulator", source="env", risk="actuate")
 def tap_text(text: str) -> Dict[str, Any]:
     """定位文字并点击。
 
@@ -176,7 +176,7 @@ def tap_text(text: str) -> Dict[str, Any]:
     return _require_em().tap_text(text)
 
 
-@function_tool(description="启动指定包名的应用", unit="emulator", source="env")
+@function_tool(description="启动指定包名的应用", unit="emulator", source="env", risk="actuate")
 def launch_app(package: str) -> Dict[str, Any]:
     """启动应用。
 
@@ -186,7 +186,7 @@ def launch_app(package: str) -> Dict[str, Any]:
     return _require_em().launch_app(package)
 
 
-@function_tool(description="按下设备按键码（Android keycode：3=HOME, 4=BACK, 66=ENTER）", unit="emulator", source="env")
+@function_tool(description="按下设备按键码（Android keycode：3=HOME, 4=BACK, 66=ENTER）", unit="emulator", source="env", risk="actuate")
 def press_keycode(code: int) -> Dict[str, Any]:
     """按下设备按键码。
 
