@@ -6,7 +6,8 @@
 1. 蒸馏去重命中率  = 新蒸馏 facts 中已被 MEMORY.md 覆盖比例（Curator 蒸馏时比对）
 2. skill 晋升率     = 全局 skills 中 active 占比（单位任务 candidate→active 转化近似）
 3. 步数方差         = 同域任务步数离散度（telemetry 运行报告）
-4. 人工介入频率     = 交互段 C₁ refuted 轮占比（K2 signals，时间窗平滑）
+4. 人工介入频率     = 交互段可判轮（approved/refuted/new_task）中 C₁ refuted 占比
+                     （K2 signals，时间窗平滑；ambiguous 不计分母，全 ambiguous → 无数据）
 
 域收敛判据（初值，标「实测校准」）：去重命中率 ≥80% 且晋升率趋平 且介入频率 ≤5%。
 收敛后由 Curator 自动降频（跳过蒸馏 / 合并阈值提升至 10）。
@@ -101,24 +102,34 @@ def _step_variance() -> Dict[str, Any]:
 
 
 def _intervention_rate() -> Dict[str, Any]:
-    """交互段 C₁ refuted 轮占比（人工介入频率），带时间窗平滑标注。"""
+    """交互段可判轮中 C₁ refuted 占比（人工介入频率），带时间窗平滑标注。
+
+    ambiguous（含 LLM 不可用兜底）不计入分母：全 ambiguous 时返回 rate=None
+    （视为尚无数据），避免「LLM 不可用 → refuted 恒 0 → 介入频率假 0 → 假收敛」。
+    """
     agg = sig_mod.read_aggregate()
     inter = agg.get("interactive", {})
+    dist = agg.get("c1_dist") or {}
     n = int(inter.get("n", 0))
-    ref = int((agg.get("c1_dist") or {}).get("refuted", 0))
-    rate = round(ref / n, 4) if n else None
-    return {"rate": rate, "refuted": ref, "n_interactive": n}
+    ref = int(dist.get("refuted", 0))
+    amb = int(dist.get("ambiguous", 0))
+    judged = ref + int(dist.get("approved", 0)) + int(dist.get("new_task", 0))
+    rate = round(ref / judged, 4) if judged else None
+    return {"rate": rate, "refuted": ref, "judged": judged,
+            "ambiguous": amb, "n_interactive": n}
 
 
 def _intervention_timeline(window: int = 5) -> List[float]:
     """介入频率衰减曲线数据：按时间序对交互段 run 取滚动窗口 refuted 占比。
 
-    每个点 = 截至该 run 最近 ``window`` 个交互 run 中 refuted 比例（0~1）。
-    无交互样本时返回空列表（曲线平直/无数据）。
+    每个点 = 截至该 run 最近 ``window`` 个**可判**交互 run 中 refuted 比例（0~1）；
+    ambiguous（含 LLM 不可用兜底）不计入窗口，否则 LLM 故障会画出假 0 衰减曲线。
+    无可判样本时返回空列表（曲线平直/无数据）。
     """
     agg = sig_mod.read_aggregate()
     tl = agg.get("timeline") or []
-    inter = [p for p in tl if p.get("mode") == "interactive"]
+    inter = [p for p in tl
+             if p.get("mode") == "interactive" and p.get("c1") != "ambiguous"]
     if not inter:
         return []
     out: List[float] = []

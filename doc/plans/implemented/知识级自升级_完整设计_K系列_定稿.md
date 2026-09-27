@@ -178,12 +178,15 @@ K2–K5 主干已落地，K2 / K5 经真机验证。下列为**明确未做**项
 
 **5.6.3 新增模块 `omni_core/local/signals.py`**（已落地；纯函数 + 分级判定，零写入任务原始数据）：
 
-分类器采用**两级**：默认启发式（确定性、零额外 LLM 成本、可单测），brain 可用时用 LLM 覆盖；
-LLM 失败静默回退启发式，并置模块级熔断 `_LLM_CLASSIFIER_BROKEN`，避免 brain 不可达时每轮干等超时。
+分类器（2026-09-27 随 K4 移除调整）：C₁ 改 **LLM 主判**（关键字启发式子串误伤，已删），
+`runtime.signals.llm_classifier=false` 或 LLM 不可用时保守判 `ambiguous`（宁可不判也不误伤）；
+C₂ 保留启发式兜底，brain 可用时以 LLM 覆盖。熔断 `_LLM_CLASSIFIER_BROKEN` 带时间窗自动复位
+（`_LLM_CLASSIFIER_RETRY_SEC` 默认 600s 后试探重试），既避免 brain 不可达时每轮干等超时，
+也避免一次故障导致永久停摆（下游 K5 介入频率会因此退化为无数据而非假 0）。
 
-- `classify_c1(agent_msg, next_user_msg, classifier=None)` → `approved`/`refuted`/`new_task`/`ambiguous`（启发式；`classifier` 可注入）。
-- `classify_c2(objective, terminal_observation, classifier=None)` → `success`/`fail`/`unknown`；**仅** objective + 终态观测，绝不给轨迹/推理/结论。
-- `classify_c1_llm(...) / classify_c2_llm(...)`：复用 `config["brain"]` 通道（LLM 级），返回 `None` 表示不可用 → 回退启发式。
+- `classify_c1(agent_msg, next_user_msg, classifier=None)` → `approved`/`refuted`/`new_task`/`ambiguous`（LLM 主判；`classifier` 可注入覆盖，关闭/不可用兜底 `ambiguous`）。
+- `classify_c2(objective, terminal_observation, classifier=None)` → `success`/`fail`/`unknown`（启发式兜底 + LLM 覆盖）；**仅** objective + 终态观测，绝不给轨迹/推理/结论。
+- `classify_c1_llm(...) / classify_c2_llm(...)`：复用 `config["brain"]` 通道（LLM 级），返回 `None` 表示不可用（C₁ → 保守判 `ambiguous`；C₂ → 保留启发式结果）。
 - `consistency_contribution(a_success, c_label) -> dict`：返回 `{fake_success, miss_rate, divergence, uncertain, n}`，对应 §5.3。
   **校正**：`divergence` 仅在 C 可判（`approved`/`success`/`refuted`/`fail`）时计入；
   `C=unknown/ambiguous` 只记 `uncertain`，不虚高分歧率（早期实现误记，已修）。

@@ -82,7 +82,6 @@ class CuratorReport:
     flagged_low_quality: List[str] = field(default_factory=list)
     rollouts_distilled: int = 0
     memory_merged: int = 0
-    profile_candidates: int = 0   # P0：本次蒸馏进画像候选区的条数（待人工确认）
     dedup_hit_rate: float = 0.0   # K5：新蒸馏 facts 中已被 MEMORY.md 覆盖比例
     errors: List[str] = field(default_factory=list)
 
@@ -98,7 +97,6 @@ class CuratorReport:
             "flagged_low_quality": self.flagged_low_quality,
             "rollouts_distilled": self.rollouts_distilled,
             "memory_merged": self.memory_merged,
-            "profile_candidates": self.profile_candidates,
             "dedup_hit_rate": self.dedup_hit_rate,
             "errors": self.errors,
         }

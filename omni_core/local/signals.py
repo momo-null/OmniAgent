@@ -8,13 +8,16 @@
 - B  模型自报：assistant 结论口播（本轮 agent 终态文本）。
 - C  真值：交互段用 C₁（下一轮 user 消息裁决）/ 自主段用 C₂（终态观测评审）。
 
-分类器默认启发式实现（确定性、零额外 LLM 成本、可单测）；``classifier`` 参数可注入
-LLM 通道（设计 §5.6.3「复用 config brain」）以升级精度，校准用 C₃ 人工抽检比对。
+分类器（2026-09-27 随 K4 移除调整）：C₂ 保留启发式兜底（确定性、零额外 LLM 成本、可单测）；
+C₁ 改 LLM 主判（``classifier`` 参数可注入覆盖），``runtime.signals.llm_classifier=false``
+或 LLM 不可用时保守判 ambiguous（宁可不判也不误伤；关键字启发式已随 K4 移除）。
+校准用 C₃ 人工抽检比对。
 """
 from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,13 +89,15 @@ class SignalRecord:
 
 
 # ---------------------------------------------------------------------------
-# 分类器（默认启发式；可注入 LLM 通道升级）
+# 分类器（C₂ 启发式兜底；C₁ LLM 主判；均可注入 classifier 覆盖）
 # ---------------------------------------------------------------------------
 def classify_c1(agent_msg: str, next_user_msg: str,
                 classifier: Optional[Callable[[str, str], str]] = None) -> str:
     """C₁ 对话批准：agent 轮后下一个 user 消息即裁决。
 
-    approved / refuted / new_task / ambiguous。``classifier`` 可注入 LLM 实现。
+    approved / refuted / new_task / ambiguous。LLM 主判（``classifier`` 可注入覆盖）；
+    ``runtime.signals.llm_classifier=false`` 或 LLM 不可用时保守判 ambiguous
+    （宁可不判也不误伤——关键字启发式已随 K4 移除）。
     """
     if classifier is not None:
         try:
@@ -101,10 +106,10 @@ def classify_c1(agent_msg: str, next_user_msg: str,
                 return lab
         except Exception:
             pass
-    # LLM 主判（可靠、不写死场景）；不可用时保守判 ambiguous（宁可不判也不误伤）
-    lab = classify_c1_llm(agent_msg or "", next_user_msg or "")
-    if lab:
-        return lab
+    if _llm_classifier_enabled():
+        lab = classify_c1_llm(agent_msg or "", next_user_msg or "")
+        if lab:
+            return lab
     return "ambiguous"
 
 
@@ -352,8 +357,11 @@ def read_terminal_observation(task_id: str, run_id: str = "") -> str:
 # ---------------------------------------------------------------------------
 # LLM 分类器（设计 §5.6.3：复用 config brain 通道）
 # ---------------------------------------------------------------------------
-# 熔断：brain 不可达时置 True，后续 run 直接走启发式，避免每轮都等超时。
+# 熔断：brain 不可达时置 True，后续 run 保守判 ambiguous，避免每轮都等超时；
+# 带时间窗自动复位——超过 _LLM_CLASSIFIER_RETRY_SEC 后试探性重试（brain 可能已恢复/补配）。
 _LLM_CLASSIFIER_BROKEN = False
+_LLM_CLASSIFIER_BROKEN_AT = 0.0
+_LLM_CLASSIFIER_RETRY_SEC = 600.0
 
 
 def _llm_classifier_enabled() -> bool:
@@ -367,15 +375,18 @@ def _llm_classifier_enabled() -> bool:
 
 
 def _llm_call(system: str, user: str) -> Optional[str]:
-    """用 config brain 做一次轻量分类；异常/超时一律返回 None（回退启发式）。"""
-    global _LLM_CLASSIFIER_BROKEN
+    """用 config brain 做一次轻量分类；异常/超时一律返回 None（调用方保守兜底）。"""
+    global _LLM_CLASSIFIER_BROKEN, _LLM_CLASSIFIER_BROKEN_AT
     if _LLM_CLASSIFIER_BROKEN:
-        return None
+        if time.monotonic() - _LLM_CLASSIFIER_BROKEN_AT < _LLM_CLASSIFIER_RETRY_SEC:
+            return None
+        _LLM_CLASSIFIER_BROKEN = False  # 试探性复位：本次成功则保持，失败则再熔断
     try:
         import config as _cfg
         brain_cfg = (_cfg.load_config() or {}).get("brain") or {}
         if not brain_cfg.get("base_url") or not brain_cfg.get("model"):
             _LLM_CLASSIFIER_BROKEN = True
+            _LLM_CLASSIFIER_BROKEN_AT = time.monotonic()
             return None
         from omni_core.brain.llm import LLMClient
         client = LLMClient(brain_cfg, timeout=float(brain_cfg.get("classify_timeout", 15.0)))
@@ -386,11 +397,12 @@ def _llm_call(system: str, user: str) -> Optional[str]:
         return (getattr(reply, "content", "") or "").strip()
     except Exception:
         _LLM_CLASSIFIER_BROKEN = True
+        _LLM_CLASSIFIER_BROKEN_AT = time.monotonic()
         return None
 
 
 def classify_c1_llm(agent_msg: str, next_user_msg: str) -> Optional[str]:
-    """C₁ 的 LLM 裁决；返回 None 表示不可用（调用方回退启发式）。"""
+    """C₁ 的 LLM 裁决；返回 None 表示不可用（调用方保守判 ambiguous）。"""
     if not (next_user_msg or "").strip():
         return None
     out = _llm_call(
@@ -442,7 +454,8 @@ def collect_run_signal(
 
     - 交互段（有 prev_assistant）→ C₁ 裁决，mode=interactive
     - 自主段（无 prev_assistant，如首条即长任务）→ C₂ 评审，mode=autonomous
-    - 分级判定：先启发式，brain 可用时以 LLM 覆盖（失败静默回退）
+    - 判定分级：C₁ 由 classify_c1 内部 LLM 主判（不可用保守 ambiguous）；C₂ 启发式
+      兜底、brain 可用时以 LLM 覆盖（失败静默回退）
     """
     try:
         has_prev = bool((prev_assistant or "").strip())

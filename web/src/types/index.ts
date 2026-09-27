@@ -348,7 +348,7 @@ export interface SteadyState {
     distill_dedup_hit_rate: number | null;
     skill_promotion_rate: { rate: number | null; active: number; total: number; series: number[] };
     step_variance: { variance: number | null; mean: number | null; n: number };
-    human_intervention_rate: { rate: number | null; refuted: number; n_interactive: number };
+    human_intervention_rate: { rate: number | null; refuted: number; judged: number; ambiguous: number; n_interactive: number };
     intervention_timeline: number[];
   };
   checks: Record<string, unknown>;

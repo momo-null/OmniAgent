@@ -79,7 +79,7 @@ def user_profile() -> Path:
 
 
 def profile_candidates() -> Path:
-    """画像候选暂存 ``memory/profile_candidates.md``（纠偏蒸馏待人工确认）。"""
+    """画像候选暂存 ``memory/profile_candidates.md``（候选留存，人工确认后晋升 user_profile.md）。"""
     return global_memory() / "profile_candidates.md"
 
 
