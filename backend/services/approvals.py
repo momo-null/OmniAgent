@@ -56,7 +56,11 @@ class SseApprovalSink(policy.ApprovalSink):
         return decision
 
     def resolve(self, approval_id: str, action: str, remember: bool) -> bool:
-        """REST 决议入口（approvals_api 调）。返回 False = 卡不存在或已决议。"""
+        """REST 决议入口（approvals_api 调）。返回 False = 卡不存在或已决议。
+
+        remember 透传进 Decision，由内核门（_pre_gate）统一调 ``sink.remember``
+        入库——单一存储路径，任何 sink 实现语义一致。
+        """
         approved = action == "approve"
         with _lock:
             rec = _pending.get(approval_id)
@@ -64,7 +68,8 @@ class SseApprovalSink(policy.ApprovalSink):
                 return False
             card = rec["card"]
             rec["decision"] = Decision(approved=approved,
-                                       rule="" if approved else "user_deny")
+                                       rule="" if approved else "user_deny",
+                                       remember=bool(remember and approved))
             rec["event"].set()
             _pending.pop(approval_id, None)
         outcome = "approved" if approved else "user_deny"
