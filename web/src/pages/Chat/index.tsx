@@ -407,7 +407,7 @@ function LogRow({ log }: { log: DebugLog }) {
 }
 
 export default function Chat() {
-  const { messages, running, sendMessage, injectMessage, stopTask, debugLogs, clearDebugLogs, processLogs, memoryHint, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval } = useTaskStore();
+  const { messages, running, sendMessage, injectMessage, stopTask, debugLogs, clearDebugLogs, processLogs, memoryHint, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval, taskObjectives } = useTaskStore();
   const [draft, setDraft] = useState("");
   const [logOpen, setLogOpen] = useState(false);
   // 助手名：从角色卡 frontmatter 解析（缺省 OmniAgent），用于顶栏与消息标签
@@ -419,7 +419,7 @@ export default function Chat() {
       .catch(() => {});
   }, []);
   const [confirmAnchorEl, setConfirmAnchorEl] = useState<HTMLElement | null>(null);
-  // 完全访问按 task 记忆：每个 task 各自记住开关，切回时恢复，不串到其他 task
+  // 完全访问按当前 task 读取（跟随当前任务；切换任务由 refreshTasks 从 task.json 回填各自值）
   const fullAccess = fullAccessByTask[currentTaskId] ?? false;
   const endRef = useRef<HTMLDivElement | null>(null);
 
@@ -509,8 +509,11 @@ export default function Chat() {
       >
         <Stack direction="row" justifyContent="space-between" alignItems="center"
           sx={{ mb: 1, pt: 1, pb: 1, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>{assistantName}</Typography>
-          {/* 顶栏右侧：助手名即当前角色（单角色助手）；预留模型切换等控制位 */}
+          {/* 顶栏左侧：只显示当前任务 objective（不存在则为空）；新对话也为空 */}
+          <Typography variant="subtitle1" noWrap sx={{ fontWeight: 600 }}>
+            {currentTaskId ? (taskObjectives[currentTaskId] || "") : ""}
+          </Typography>
+          {/* 顶栏右侧：预留模型切换等控制位 */}
         </Stack>
 
         {/* K1 记忆更新轻提示（Curator 蒸馏/合并后由 SSE 推送，自动淡出） */}
@@ -588,7 +591,7 @@ export default function Chat() {
           sx={{
             border: "1px solid", borderColor: "divider",
             borderRadius: "28px",
-            bgcolor: "action.hover",
+            bgcolor: "#2e2e2e",
             p: 1,
             mx: "40px",
             flexShrink: 0,
@@ -699,9 +702,6 @@ export default function Chat() {
             <CapabilityRow icon={<TerminalIcon />} label="命令执行" desc="在宿主机运行系统命令" tag="默认已启用" />
             <CapabilityRow icon={<PublicRounded />} label="互联网和已连接的应用" desc="访问网站、发送数据并使用已启用的工具" tag="默认已启用" />
           </Stack>
-          <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1.5 }}>
-            仅对当前任务生效，切换任务后自动关闭。OmniAgent 自身的配置与记忆目录始终拒绝访问（完全访问也不例外）。
-          </Typography>
           <Stack direction="row" justifyContent="flex-end" spacing={1}>
             <Button size="small" onClick={() => setConfirmAnchorEl(null)}>取消</Button>
             <Button size="small" color="warning" variant="contained" startIcon={<WarningAmberRounded />}

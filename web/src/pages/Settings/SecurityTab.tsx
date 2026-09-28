@@ -106,7 +106,7 @@ export default function SecurityTab() {
           「标准」档：危险动作（命令执行 / 键鼠 / 允许根外写入）逐项弹卡人工批准；
           「只读」档：危险动作自动拒绝（挂机实验 / 不可信内容用）。
           每个任务的「完全访问」开关在 Chat 页单独控制，开启后不弹卡——
-          但 OmniAgent 自身的配置与记忆目录始终拒绝访问。
+          各任务独立记录在 task.json，跟随当前任务切换。
         </Alert>
         <FormControl>
           <RadioGroup row value={mode} onChange={(e) => setMode(e.target.value)}>

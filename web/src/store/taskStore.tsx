@@ -54,7 +54,7 @@ interface TaskStoreValue {
   maxSteps: number;
   setMaxSteps: (n: number) => void;
 
-  // 完全访问按 task 记忆：每个 task 各自记住开关，切换任务时恢复，不串到其他 task
+  // 完全访问按 task 持久化：每个 task 各自写自己的 task.json，跟随当前任务，切换任务时读取各自值
   fullAccessByTask: Record<string, boolean>;
   setFullAccessForTask: (taskId: string, val: boolean) => void;
 
@@ -287,7 +287,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         }
         return next;
       });
-      // 按 task 记忆的完全访问默认值：从服务端 task.json 回填（刷新页面后从磁盘恢复）
+      // 按 task 从服务端 task.json 回填完全访问默认值（跟随当前任务，切换任务读取各自值）
       setFullAccessByTask((prev) => {
         const next = { ...prev };
         for (const t of d.tasks || []) {
@@ -546,7 +546,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
 
   const setFullAccessForTask = useCallback((taskId: string, val: boolean) => {
     setFullAccessByTask((prev) => ({ ...prev, [taskId]: val }));
-    // 持久化到该 task 的 task.json（跟随 task 写磁盘，刷新不丢）；空 taskId（新建前）跳过
+    // 持久化到该 task 的 task.json（跟随当前任务）；空 taskId（新建对话未发首条前）无法落盘，跳过
     if (taskId) taskApi.updateState(taskId, { full_access: val }).catch(() => {});
   }, []);
 
@@ -569,7 +569,11 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         full_access: fullAccess,
       });
       const tid = (res.data as { task_id?: string })?.task_id;
-      if (tid) setCurrentTaskId(tid);
+      if (tid) {
+        setCurrentTaskId(tid);
+        // 首条消息新建任务时若开了完全访问，落盘到新 task 的 task.json（弥补空 taskId 时写不进的坑）
+        if (fullAccess) taskApi.updateState(tid, { full_access: true }).catch(() => {});
+      }
     } catch (err) {
       // 透出后端拒绝/失败原因（如「已有任务在运行（task_id=...）」），便于前端展示排队/拒绝原因。
       const _e = err as { response?: { data?: { error?: string } }; message?: string };
