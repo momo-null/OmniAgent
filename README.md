@@ -8,6 +8,8 @@
 >
 > **构建方式（诚实说明）**：ReAct 循环与 function-call 协议由 **OpenAI Agents SDK**（`Runner`）承载，多 agent 状态机编排由 **LangGraph** 承载。本项目自研的是 **L2 编排层**（收尾门控 / 升级判定 / 预算与墙钟 / 上下文管理）、**工具运行时与插件层**、**知识层**（世界模型 / 技能 / 全局记忆）与 **执行后端**（设备 / GUI）。因此本项目的贡献是「编排 + 工具 + 知识层」，**不是 agent 循环本身**。
 >
+> **技术底座**：`OpenAI Agents SDK` · `LangGraph` · `MCP` · 本地模型生命周期管理 · 知识级自升级（技能 / 全局记忆提炼）。
+>
 > **版本 X3**：在线强模型做规划与约束，本地快模型做快速执行与视觉感知；任务完成后把成功经验蒸馏成技能与全局记忆（知识级自升级主线）。
 > ⚠️ 免责声明：个人学习项目，不保证稳定性与体验，使用产生的一切后果自行承担。
 
@@ -17,11 +19,11 @@
 - 两层执行循环：在线大脑规划（低频）+ 本地小模型高频执行（工具调用）。
 - 通用工具运行时：加能力 = 写工具 / Provider，内核零场景硬编码（红线 lint + CI 守护）。
 - 本地模型生命周期管理、MCP 接入、GUI / 设备操控执行后端。
-- 知识级自升级**链路**：轨迹落盘 → 蒸馏 → 全局记忆 / Skill / World-Model 合并 → 下次注入。
+- 知识级自升级**闭环**（2026-09-28 真机验证）：轨迹落盘 → Curator 蒸馏（rollout）→ 全局记忆合并（MEMORY.md → memory_summary 注入）→ Skill 提取与跨任务 N=3 晋级（active + 全局）→ 新任务消费（零工具凭注入记忆准确复述历史事实）。
 
 **尚未验证（诚实边界）**
-- 知识级自升级的**有效性对照实验（ablation）尚未完成**——「注入记忆是否真的让任务做得更好」**目前没有数据结论**。
-  故本项目**不声称**自进化已被证明有效，只声称链路已打通、真机跑通。
+- 知识级自升级的**有效性对照实验（ablation，K3/V3）尚未完成**——「注入记忆是否真的让任务做得更好」（≥20 次同域开/关对照，判据：步数降 ≥15% 且成功率不降）**目前没有数据结论**。
+  故本项目**不声称**自进化已被证明有效；已证实的边界 = 闭环链路真机跑通、注入内容可被模型消费（2026-09-28）。
 - 单域、小样本，非生产级。
 
 ## 文档导航（权威来源）
@@ -39,7 +41,6 @@
 
 - **它是什么**：通用 Agent 内核（运行时）。控制流归大脑，程序退化为工具运行时（ToolLoop 薄壳）；ReAct 循环由 OpenAI Agents SDK 承载。
 - **能力 == 工具**：加能力 = 写工具 / Provider，绝不改内核。GUI / 设备操控是经工具清单动态注入的能力，而非 agent 身份。
-- **与 X1/X2 的根本区别**：X2 死因为具体任务写大量专属逻辑、退化成「传统软件做 agent」；X3 推翻被动程序控制，模型规划并决策调用工具，程序只做工具运行时。
 
 > 详细定位、目标用户、与旧版差异见 **产品设计 §1**。
 
@@ -131,11 +132,11 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
 - Two-tier execution loop: online brain for planning (low frequency) + local small model for high-frequency execution (tool calling).
 - General tool runtime: adding a capability = writing a tool / provider; zero scene-specific logic in the kernel (enforced by a red-line lint + CI).
 - Local model lifecycle management, MCP integration, GUI / device execution backends.
-- Knowledge-level self-upgrade *pipeline*: trajectory → distillation → global-memory / skill / world-model merge → re-injection.
+- Knowledge-level self-upgrade *closed loop* (verified on real machine, 2026-09-28): trajectory → Curator distillation (rollouts) → global-memory merge (MEMORY.md → memory_summary injection) → skill extraction with cross-task N=3 promotion (active + global) → consumption by a new task (zero tool calls, accurately reciting injected history).
 
 **Not yet verified (honest caveat)**
-- The **effectiveness ablation of knowledge-level self-upgrade is not done** — there is **no data-backed conclusion** on whether memory injection actually improves task performance.
-  This project therefore does **not** claim that self-evolution is proven effective; it only claims the pipeline is wired up and runs on real hardware.
+- The **effectiveness ablation of knowledge-level self-upgrade is not done (K3/V3)** — there is **no data-backed conclusion** on whether memory injection actually improves task performance (requires ≥20 same-domain on/off comparison runs; pass = steps down ≥15% with no success-rate regression).
+  This project therefore does **not** claim that self-evolution is proven effective; the verified boundary is: the closed loop runs end-to-end on real hardware, and injected memory is demonstrably consumed by the model (2026-09-28).
 - Single domain, small sample size; not production-grade.
 
 ## Documentation (authoritative sources)
@@ -153,7 +154,6 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
 
 - **What it is**: a general-purpose agent kernel (runtime). Control flow lives in the brain; the program degrades to a tool runtime (a thin ToolLoop shell). The ReAct loop itself is provided by the OpenAI Agents SDK.
 - **Capability == tool**: adding a capability = writing a tool / provider — never modifying the kernel. GUI / device control is a capability dynamically injected via the tool list, not the agent's identity.
-- **Difference from X1 / X2**: X2 died from hard-coding large amounts of task-specific logic, degrading into "traditional software pretending to be an agent". X3 rejects passive program control: the model plans and decides which tools to call; the program is only a tool runtime.
 
 > See **Product Design §1** for detailed positioning, target users and differences from earlier versions.
 

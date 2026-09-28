@@ -15,13 +15,18 @@
 ### K 系列遗留缺口（K2–K5 主干已落地，以下为明确未做项）
 - 来源：`doc/plans/知识级自升级_完整设计_K系列_定稿.md` §2「已知缺口」+ §5.6.6 / §6.1 / §7.1 / §8.1
 - 状态：🟡 **待办**（不影响闭环运行，属增强项；主干已移至「三、已完成」）
-- 明细：
-    1. 回溯过滤（清除 C 判脏记忆）— §5.6.6
-    2. 准入升级 → `approved_success` — §5.6.6（当前仍 `plain_success`）
-    3. V3 ablation 结论 — §6（脚本就绪，需 ≥20 次同域对照人工长跑）
-    4. 多域分区 — §8（v1 为单域常量 `single-domain(v1)`）
-    5. K6 LLM 蒸馏增强 — §2（可选远期，M5 语料供给；依赖 K3 通过后决议）
-    6. 真实自然收敛验证 — §8（K5 仅模拟法验证过降频触发，需长期积累至判据自然满足）
+- 更新（2026-09-28 自学习真机验证）：memory 闭环三断点已修复并真机验证通过——
+    1. `finish.py` 补 `steps_data`（此前仅测试构造，真机 candidate skill 永不创建）；
+    2. `curator.distill_task_memory` facts 空时以 brain `record` 工具沉淀的 notes 兜底（此前成功任务恒无 rollout）；
+    3. `curator._cross_task_promote` 跨任务证据聚合（`memory/skill_evidence.json` 按 objective_pattern 累计成功，≥3 晋级 active + save_global；此前 skill 库按 task 隔离，N=3 门跨任务结构性无法达成）。
+  真机验证：3 个同 objective 任务 → rollout ×3 + evidence count=3 → 第 3 次晋升全局（status=active）；新任务禁工具凭 memory_summary 注入准确复述历史 facts（消费侧通过）。
+- 明细与**收尾验收用例**：
+    1. 回溯过滤（清除 C 判脏记忆）— §5.6.6。**用例**：构造 C1 标 `refuted` 的任务 → 蒸馏时该任务的 facts/lessons 被排除或打脏标记 → MEMORY.md 无脏条目；判据 = refuted 任务不再产生 rollout。
+    2. 准入升级 → `approved_success` — §5.6.6（当前仍 `plain_success`）。**前置**：`GET /signals/summary` C1 样本 ≥20。**用例**：置准入为 approved_success → 仅「A.success 且下轮 session 无证伪」任务进蒸馏 → 验证「成功后下一轮失败」的任务其 rollout 被判脏剔除。
+    3. V3 ablation 结论 — §6（脚本就绪：`review_rollouts.py` + `effectiveness.py`，需 ≥20 次同域对照人工长跑）。**用例**：同域同 objective ×20 对照（开/关 memory 注入各 10）→ 判据 = 步数均值降 ≥15% 且成功率不降。2026-09-28 的 9 个同 objective 任务及其 facts 已沉淀为种子域样本（MEMORY.md）。
+    4. 多域分区 — §8（v1 为单域常量 `single-domain(v1)`）。**用例**：steady_state 按 domain 分桶出数、各域独立收敛判据 → 单域常量退役。
+    5. K6 LLM 蒸馏增强 — §2（可选远期，M5 语料供给；依赖 K3 通过后决议）。**用例**：LLM 改写后的 rollout 与规则版抽检比对，语义保真率 ≥90%。
+    6. 真实自然收敛验证 — §8（K5 仅模拟法验证过降频触发）。**用例**：`steady_state.json` 的 `converged=true` 由真实信号自然翻转（非注入模拟值）→ 翻转后下一个任务跳过蒸馏（Curator 日志「已收敛：跳过蒸馏」可见）→ 再人为降信号验证可退出收敛态。
 - 已闭环（2026-09-19）：
     - ~~K4 真机 5 例纠偏入库验证~~ ✅ 已完成——开启 `corrective_source` 后 3 个任务 /
       5 条纠偏全部入库，且正常认可零误采。
@@ -60,8 +65,15 @@
        触发 = 第一个**执行类**（有写/执行副作用）第三方 MCP server 真要接入时；
        路线已钉死：自注册转调（`list_tools()` 包成 FunctionTool + gate，`source="mcp"`），不包 SDK 对象。
     3. **`security.deny_read_roots`**（§5.1 可选增强）：额外凭证目录读黑名单 glob（如 `.ssh/**`），默认空，未实现。
-    4. **mcp.json 示例补过渡期纪律注释**（§6.5）：收口前 mcp.json 只接只读类 server（搜索/文档类），
-       执行类不接——写进示例注释即可，非代码。（小项，未做）
+    4. ~~**mcp.json 示例补过渡期纪律注释**（§6.5）~~ ✅ 已完成（2026-09-28）——注释已写入
+       `omni_core/tools/mcp_servers.py` 模块 docstring 的配置示例段。
+- 已确认的历史问题（非待办，留档备查）：
+    1. **MCP server 不可达导致服务 / 任务长时间不可用**：**历史问题，已修复**（2026-09-25）。
+       现象：不可达 server 触发 10 次指数退避 ≈143s 零输出空等（记录见 `omni_core/brain/sdk_loop.py:930`
+       常量注释）。修复机制（T4.2）：`_MCP_CONNECT_BUDGET_SEC = 8.0` 连接探活总预算 + 连续失败 10 次
+       进程内熔断 + 单 server 隔离；回归用例 `tests/test_t42_mcp_reconnect.py`。
+    2. **MCP 配置缓存**：`config.load_mcp_config()` 有模块级缓存——**外部手改 `mcp.json` 需重启后端**；
+       经前端 MCP 页保存走 `save_mcp_config`（会失效缓存）则即改即生效。排障先排除这一条。
 
 ### 画像/角色卡/记忆 · 未实现项（2026-09-27 收割自 profile-character-memory-design.md，已归档 implemented/）
 - 来源：`plans/implemented/profile-character-memory-design.md`（P0 已实施并真机验证，见该文状态行）
@@ -89,10 +101,10 @@
 
 ### 性能与体验优化分析 · 遗留未做项（2026-09-19 基线，部分完成）
 - 来源：`plans/implemented/OmniAgent-性能与体验优化分析-2026-09-19.md`
-- 状态：🟡 部分完成——O5 已落（T4.6 知识注入落轨迹）；O4 已被 T2.4（技能目录 + load_skill 按需加载）替代实现；§2.1 子 agent 事故修复、§6 当次修复均完成
+- 状态：🟡 部分完成——O5 已落（T4.6 知识注入落轨迹）；O4 已被 T2.4（技能目录 + load_skill 按需加载）替代实现；**O1（MCP 实机实证）与 O3（视觉兜底纪律）已于 2026-09-28 收口**；§2.1 子 agent 事故修复、§6 当次修复均完成
 - 明细（未做项，按优先级）：
-    1. **O1 收尾（P0 验收）**：MCP 工具一等函数**实机实证**——`connect()` 修复后代码前置已就绪，跑新任务验证 agent 弃用 `run_python` 旁路、schema dump/回读消失；若仍走旁路，再深挖暴露链路 vs 行为引导
-    2. **O3（P1 轻量）**：`prompt.py` 的 `capability_block` 补视觉兜底纪律——「已连接提供结构化状态的集成（如 MCP）时，优先用它获取状态/操作，视觉仅兜底」，零风险、不硬编码领域
+    1. ~~**O1 收尾（P0 验收）**：MCP 工具一等函数**实机实证**~~ ✅ 已完成（2026-09-28）——接入 Playwright MCP（`@playwright/mcp` 0.0.82，stdio，timeout 30s），实连 6.1s（8s 预算内）、25 个 `browser_*` 工具全部列出；任务 `t_4f17cc4b39c6`（bing 搜 Playwright MCP 第一页标题）done/success，工具链 `browser_navigate(1) + browser_type(1) + browser_snapshot(2)`，**纯 MCP 零旁路**、结果正确（`run_python` 已随 capability-unit 删除，旁路前提不存在）
+    2. ~~**O3（P1 轻量）**：`prompt.py` 的 `capability_block` 补视觉兜底纪律~~ ✅ 已完成（2026-09-28）——`_CAPABILITY_BLOCKS` 两段末尾各追加「已连接提供结构化状态的外部集成（如 MCP）时优先用它们，视觉 / 观测类工具仅作兜底」；`tests/test_m2p5.py` 的原有关键词断言保持通过
     3. **O6（轻量）**：收紧子 agent 上下文——`tool_loop.py` 的 `_exec_runtime_ctx` 移除 `global_skills_dir`，子 agent 只保留 `task_dir` / `task_skills_dir` 最小角色锚点（依赖原文档 §2.2 边界主张拍板）
     4. O2（外部工程侧）：RimWorld 桥接脚本 `mcp_call.py` 统一 UTF-8 编码（解 GBK 解码 / 编码双向 bug，`PYTHONIOENCODING=utf-8` + 响应 charset 探测）——不在本仓库，完成后与 O1 实证合并验收
     5. MCP isError 标记（观察项）：「Object reference not set」类服务端异常文本伪装成业务观察返回，现有错误三分法（协议/业务/真失败）无法区分——当前模型可自愈、维持观察；若实机复现频繁，需 MCP 工具层给该类异常打 isError 标记（来源：F4.1b 复跑观察结论 + `plans/implemented/2026-09-20-tool-selection-issues.md` 问题七延伸）

@@ -148,8 +148,9 @@
 **红线**：内核零场景硬编码；能力默认关、需显式开启；`trajectory.jsonl` 只读（信号层不写任务原始数据）；
 `PUT /memory` 不校验内容；对外口径统一。
 
-**诚实边界**：K2 / K5 已真机验证；**C₃ 人工抽检校准已落地**（写入端点 + 真机验证）；**K3 的 V3 ablation 尚未跑出结论**
-（需 ≥20 次同域对照长跑），故不宣称「记忆注入已证明有效」。
+**诚实边界**：K2 / K5 已真机验证；**C₃ 人工抽检校准已落地**（写入端点 + 真机验证）；
+**memory 闭环已真机验证**（2026-09-28：学习→蒸馏→跨任务 N=3 晋级→合并→注入→消费，三断点修复后逐环验证，见 Backlog K 系列）；
+**K3 的 V3 ablation 尚未跑出结论**（需 ≥20 次同域对照长跑），故不宣称「记忆注入已证明让任务做得更好」，仅宣称「闭环跑通、注入可被消费」。
 
 ### 6.5 画像·角色卡·记忆三位一体（单角色伙伴，P0 已落地）
 
@@ -176,7 +177,7 @@
 ## 8. 前端重构（Codex 风格，前端里程碑）
 
 - **交互范式**：对话框下任务 + 实时进展流（SSE）+ 执行中可实时插话。单页 shell（无路由跳转，视图内部 state 切换），两栏布局（Sidebar 任务平铺 + 主区 Chat/技能工具/设置整页覆盖）。
-- **页面命运（Plan C 已执行完成，2026-08-01）**：删除 `AgentControl`/`Training`/`Runtime` 整页（X2 遗留、全 404）；`ModelHub` 降级为 Settings 内「模型」Tab；新建 `Chat`/`SkillsAndTools`(Skills/Tools/MCP 三 Tab)/`Settings`(通用/模型/通道/关于) 四页；`react-router-dom` 已移除，改 React Context 自研 `taskStore`（零依赖）。
+- **页面命运（Plan C 已执行完成，2026-08-01）**：删除 `AgentControl`/`Training`/`Runtime` 整页（旧版遗留、全 404）；`ModelHub` 降级为 Settings 内「模型」Tab；新建 `Chat`/`SkillsAndTools`(Skills/Tools/MCP 三 Tab)/`Settings`(通用/模型/通道/关于) 四页；`react-router-dom` 已移除，改 React Context 自研 `taskStore`（零依赖）。
 - **设置→伙伴 Tab（2026-09-26 落地）**：`Settings` 新增「伙伴」父 Tab，下含 角色 / 画像 / 记忆 三个子 Tab。画像候选区只读（`InputProps.readOnly`，勿用 slotProps——MUI 此版不兼容）；角色卡全文可读可改（`GET/PUT /api/runtime/character`）。
 - **记忆入口收敛（2026-09-26 落地）**：记忆 Tab 从 `SkillsAndTools` 移除（原 Skills/Tools/MCP/记忆 四 Tab → Skills/Tools/MCP/稳态 四 Tab），记忆能力统一收敛到「设置→伙伴→记忆」——编辑 + 统计 + rollouts 溯源列表 + 单条 Drawer + 删除 rollout + 一键重置（输入 reset 确认）Dialog。前端 `assistantName` 动态取角色卡 `name:`。
 - **统一 `/chat` 单入口（2026-08-02）**：删除 `/run` 与 `runtimeApi.run`，所有交互统一走 `POST /api/runtime/chat`。一个会话 = 一个 task；首条消息后端自动建 task（落盘）并回填 `task_id`。`/chat` 内部跑双 agent 协作：先 probe planner——无 tool_calls 即纯闲聊（只走主模型，不碰 executor）；有 tool_calls 则转入 `run_task_two_layer`（planner 规划 + executor 执行）。`max_steps` 兜底 + `/stop` 中断。
