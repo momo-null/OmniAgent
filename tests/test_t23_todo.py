@@ -58,7 +58,9 @@ def _make_tools(allow_dispatch=True, todo_store=None):
 def _invoke(tool, **kwargs):
     from types import SimpleNamespace
 
-    ctx = SimpleNamespace(tool_name=tool.name)
+    # openai-agents 0.22.x 的 _on_invoke_tool_impl 会读取
+    # ctx._function_tool_arguments（None = 走默认参数解析），fake ctx 需带上。
+    ctx = SimpleNamespace(tool_name=tool.name, _function_tool_arguments=None)
     return asyncio.run(tool.on_invoke_tool(ctx, json.dumps(kwargs)))
 
 

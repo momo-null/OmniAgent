@@ -30,7 +30,11 @@ def _gate():
 
 
 def _invoke(tool, **kwargs):
-    ctx = types.SimpleNamespace(tool_name=getattr(tool, "name", "tool"))
+    # openai-agents 0.22.x 的 _on_invoke_tool_impl 会读取
+    # ctx._function_tool_arguments（None = 走默认参数解析），fake ctx 需带上。
+    ctx = types.SimpleNamespace(
+        tool_name=getattr(tool, "name", "tool"), _function_tool_arguments=None
+    )
     return asyncio.run(tool.on_invoke_tool(ctx, json.dumps(kwargs)))
 
 
