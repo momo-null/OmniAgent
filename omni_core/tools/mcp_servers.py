@@ -30,6 +30,10 @@
         enabled: false
         url: http://127.0.0.1:8010/mcp
 
+过渡期纪律（sandbox-permission-design §6.5）：MCP 审批未收口前，mcp.json 只接
+**只读类** server（搜索 / 文档 / 浏览器快照类）；执行类（有写 / 执行副作用）
+暂不接，待自注册转调收口后再放行。
+
 工具命名（T4.1 探测结论，留存备查）：
     本版 agents SDK 原生即为 MCP 工具加前缀：``mcp_<server>__<tool>``
     （见 agents/mcp/util.py ``_build_prefixed_tool_base_name``），同名冲突时
