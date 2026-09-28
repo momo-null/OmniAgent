@@ -124,6 +124,24 @@ class FinishMixin:
                 run_record_for_curator = dict(run_meta)
                 run_record_for_curator["reason"] = reason
                 run_record_for_curator["run_id"] = run_meta.get("run_id", "")
+                # 自学习修复：补 steps_data（此前仅测试构造，真机缺失导致
+                # from_run_record 恒 None → candidate skill 永不创建 → N=3 晋级死链）。
+                # 从本 run 轨迹 jsonl 提取 action 序列（tool+args），内核通用、零场景假设。
+                _steps_data: List[Dict[str, Any]] = []
+                try:
+                    if store is not None and Path(store.path).exists():
+                        for _line in Path(store.path).read_text(encoding="utf-8").splitlines():
+                            try:
+                                _rec = json.loads(_line)
+                            except Exception:
+                                continue
+                            _act = _rec.get("action")
+                            if isinstance(_act, dict) and _act.get("tool"):
+                                _steps_data.append(
+                                    {"tool": _act.get("tool", ""), "args": _act.get("args") or {}})
+                except Exception:
+                    _steps_data = []
+                run_record_for_curator["steps_data"] = _steps_data
                 curator_report = curator.run_once(run_record_for_curator)
                 result["curator_report"] = curator_report.to_dict()
                 if self.verbose and curator_report.flagged_low_quality:

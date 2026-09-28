@@ -27,10 +27,11 @@ from typing import Any, Dict, List, Optional
 
 from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local.world_model import WorldModel
-from omni_core.local.skill_library import SkillLibrary, Skill
+from omni_core.local.skill_library import SkillLibrary, Skill, _safe_filename
 from omni_core.local.runtime_paths import (
     task_dir,
     global_memory,
+    global_skills,
     memory_rollouts,
     memory_rollout_file,
     memory_master,
@@ -58,6 +59,7 @@ DEFAULTS: Dict[str, Any] = {
     "high_retry_threshold": 3,        # retry_count >= 此值 → low_quality
     "high_intervention_threshold": 0.5,  # brain_intervention_rate >= 此值 → low_quality
     "min_steps_for_skill": 2,         # 少于此步数的成功轨迹不提取 skill（太短无信息）
+    "promotion_threshold": 3,         # N=3 晋升门：跨任务累计成功次数达标 → active + 全局
 }
 
 # 注入视图（memory_summary.md）截断上限（字符）。唯一出处：PUT /memory 与合并再生
@@ -126,6 +128,7 @@ class Curator:
         self.high_retry_threshold: int = int(cfg["high_retry_threshold"])
         self.high_intervention_threshold: float = float(cfg["high_intervention_threshold"])
         self.min_steps_for_skill: int = int(cfg["min_steps_for_skill"])
+        self.promotion_threshold: int = int(cfg["promotion_threshold"])
         self._last_dedup_hit_rate: float = 0.0  # K5：最近一次蒸馏的去重命中率
 
     # ==================================================================
@@ -317,8 +320,59 @@ class Curator:
             result["created"] = 1
         if promote_result.get("promoted"):
             result["promoted"] = 1
+        # 跨任务证据聚合（N=3 晋级修复）：skill 库按 task 隔离，相同 objective 跨任务
+        # 各自 created、success_count 恒为 1，N=3 门结构性无法达成。此处按
+        # objective_pattern 全局累计成功次数，达标时将 skill 晋级 active + 落全局。
+        try:
+            if self._cross_task_promote(lib, candidate):
+                result["promoted"] = 1
+        except Exception:
+            pass  # 晋级失败不影响主流程（run_once 外层有统一错误兜底）
 
         return result
+
+    def _cross_task_promote(self, lib: SkillLibrary, candidate: Skill) -> bool:
+        """跨任务 N=3 晋级：全局证据文件按 objective_pattern 累计成功次数。
+
+        - 计数语义：每次成功 run +1（task 内连续性由 record_failure 归零兜底；
+          跨任务取累计成功，幂等由调用点「每次成功 run 触发一次」保证）。
+        - 达标动作：本 task 的 candidate skill → status=active + scope=global →
+          save_global（跨任务复利）；全局已有同名 skill 则只标记不再重写。
+        - 证据文件：``memory/skill_evidence.json``（{objective_pattern: {count, promoted, task_ids}}）。
+        """
+        ev_path = global_memory() / "skill_evidence.json"
+        data: Dict[str, Any] = {}
+        try:
+            if ev_path.exists():
+                data = json.loads(ev_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            data = {}
+        key = candidate.objective_pattern
+        entry = data.get(key) or {"count": 0, "promoted": False, "task_ids": []}
+        entry["count"] = int(entry.get("count", 0)) + 1
+        if self.task_id not in entry.get("task_ids", []):
+            entry.setdefault("task_ids", []).append(self.task_id)
+
+        promoted = False
+        if not entry.get("promoted") and entry["count"] >= self.promotion_threshold:
+            gdir = global_skills()
+            gfile = gdir / f"{_safe_filename(candidate.name)}.md"
+            if not gfile.exists():
+                skill = lib.load(candidate.name)
+                if skill is not None:
+                    skill.metadata.status = "active"
+                    skill.metadata.scope = "global"
+                    lib.save_global(skill)
+                    promoted = True
+            entry["promoted"] = True
+
+        data[key] = entry
+        try:
+            ev_path.parent.mkdir(parents=True, exist_ok=True)
+            ev_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return promoted
 
     # ==================================================================
     # 4. flag_low_quality
@@ -421,6 +475,10 @@ class Curator:
                 wm = WorldModel(task_id=task_id)
                 wm.load()
                 facts = [f for f in (wm.facts or []) if f and f != "_(暂无)_"]
+                # 自学习修复：brain 经 record 工具沉淀的 notes 同为任务发现，
+                # facts 为空时兜底为蒸馏原料（否则成功任务恒无 rollout）。
+                if not facts and wm.notes:
+                    facts = [n for n in (wm.notes or []) if n and n != "_(暂无)_"]
             except Exception:
                 facts = []
         else:
