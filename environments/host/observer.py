@@ -1,12 +1,12 @@
-"""观测工具（MVP 轻量版）：复用 EasyOCR 引擎做 OCR，纯 CPU、不加载 YOLO。
+"""观测工具（MVP 轻量版）：OCR 用 RapidOCR（ONNXRuntime，CPU），纯 CPU、不加载 YOLO。
 
 为什么不复用 PerceptionModule：原 PerceptionModule.__init__ 会同时加载
 EasyOCR + YOLO + torch，且 YOLO 模型路径/设备配置可能缺失导致整条链路起不来。
 MVP 计算器场景只需要文字识别，故这里独立一个轻量 observer：
 - 截屏用 mss（与原模块一致）
-- OCR 用 EasyOCR，CPU 模式。注意：本机缓存的识别权重只有 zh_sim_g2.pth
-  （英文 english_g2 缺失且下载源被墙），故用 lang=['ch_sim']——中文模型含
-  数字/字母识别，计算器数字可正常读出，且零下载。模型目录指向真实缓存 ~/.EasyOCR。
+- OCR 用 RapidOCR（utils/ocr.py）。**曾用 EasyOCR：它依赖 torch(cu128)，
+  首次 OCR 会把整套 CUDA 运行时拖进后端进程，实测 RSS 130MB → 4.5GB 且不释放**；
+  RapidOCR 走 ONNXRuntime，常驻约 200MB，中英文识别良好。
 - 活动窗口标题用 pyautogui.getActiveWindow()
 
 模型读取器懒加载（首次 observe 触发），避免 import 期拖慢。
@@ -18,7 +18,6 @@ import time
 import mss
 import numpy as np
 import pyautogui
-import yaml
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # OmniAgent/
 _OCR_READER = None
@@ -29,31 +28,12 @@ _OCR_READER = None
 _LOCAL = threading.local()
 
 
-def _model_path() -> str:
-    try:
-        with open(os.path.join(_ROOT, "config.yaml"), "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
-        return cfg.get("models", {}).get("easyocr", {}).get("model_path", "./models/easyocr")
-    except Exception:
-        return "./models/easyocr"
-
-
 def _get_reader():
+    """OCR 读取器（RapidOCR / ONNXRuntime，见 utils/ocr.py）。"""
     global _OCR_READER
     if _OCR_READER is None:
-        import easyocr
-
-        # 本机缓存识别权重只有 zh_sim_g2.pth（english_g2 缺失），故用
-        # ['ch_sim']：中文模型含数字/字母识别，且 ~/.EasyOCR/model 下
-        # craft+zh_sim_g2 均已缓存、md5 校验通过，零下载。
-        # 注意：easyocr 查 model_storage_directory/<filename>，而缓存实际在
-        # ~/.EasyOCR/model/ 子目录，故此处必须带 '/model' 一级。
-        _OCR_READER = easyocr.Reader(
-            ["ch_sim"],
-            gpu=False,
-            model_storage_directory=os.path.expanduser("~/.EasyOCR/model"),
-            verbose=False,
-        )
+        from utils.ocr import get_reader
+        _OCR_READER = get_reader()
     return _OCR_READER
 
 

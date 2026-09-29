@@ -22,21 +22,18 @@ import time
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, Optional
 
-# EasyOCR 懒导入：GPU 渲染的界面（如 Unity 自绘 UI）文字不在层级树中，
-# 必须从截图做图像 OCR。复用 observer 的缓存 reader 避免重复初始化。
+# OCR 懒导入：GPU 渲染的界面（如 Unity 自绘 UI）文字不在层级树中，
+# 必须从截图做图像 OCR。复用缓存 reader 避免重复初始化。
+# 引擎为 RapidOCR（ONNXRuntime / CPU，见 utils/ocr.py）——原来用 EasyOCR，
+# 它依赖 torch(cu128)，一 import 就把后端进程 RSS 顶到 4.5GB 且不释放。
 _EMULATOR_OCR_READER = None
 
 
 def _get_ocr_reader():
     global _EMULATOR_OCR_READER
     if _EMULATOR_OCR_READER is None:
-        import easyocr
-        _EMULATOR_OCR_READER = easyocr.Reader(
-            ["ch_sim"],
-            gpu=True,
-            model_storage_directory=os.path.expanduser("~/.EasyOCR/model"),
-            verbose=False,
-        )
+        from utils.ocr import get_reader
+        _EMULATOR_OCR_READER = get_reader()
     return _EMULATOR_OCR_READER
 
 from utils import get_logger
