@@ -1,5 +1,47 @@
 // 后端数据类型定义（与 backend 返回的 JSON 对齐）
 
+// ── 模型路由（~/.omniagent/models.json，/api/runtime/models） ──
+// 目录与通用配置隔离：厂商/模型清单只在这里，config.yaml 保持引擎参数。
+export interface ModelEntry {
+  id: string; // 模型 id（请求体里的真实 model 字段）
+  label: string; // 展示名（空则回退 id）
+  vision: boolean;
+}
+
+export interface ModelProvider {
+  id: string; // 目录内唯一 key（selection 形如 `${id}/${model.id}`）
+  label: string; // 分组显示名
+  base_url: string;
+  api_key_set: boolean; // 明文不回传，仅表示已配置
+  models: ModelEntry[];
+}
+
+// 设置页编辑用的原始条目（api_key 为空串 = 保持不变）
+export interface ModelProviderDraft {
+  label: string;
+  base_url: string;
+  api_key: string;
+  api_key_env?: string;
+  models: ModelEntry[];
+}
+
+export interface ModelSlotCurrent {
+  selection: string; // 空 = 目录未选
+  model: string; // 实际生效的模型 id
+  base_url: string;
+  provider_id: string;
+  // catalog=目录真源；none=未配置
+  source: "catalog" | "none";
+}
+
+export interface ModelsIndex {
+  ok?: boolean;
+  providers: ModelProvider[];
+  defaults: Record<string, string>;
+  current: Record<string, ModelSlotCurrent>;
+  _meta?: { path: string; exists: boolean };
+}
+
 export interface ModelInfo {
   name: string;
   description: string;

@@ -90,7 +90,7 @@ class TestPydanticValidation:
 # === P0.3 密钥脱敏 ===
 class TestKeyMasking:
     def test_get_settings_no_api_key(self, client, monkeypatch, tmp_path):
-        """GET /api/settings 不得返回明文 api_key"""
+        """GET /api/settings 不得返回 brain 的端点键（端点真源已收敛到 models.json）"""
         from omni_core.local import runtime_paths as P
         monkeypatch.setattr(P, "_GLOBAL", tmp_path / ".omniagent")
         P.ensure_global_dirs()
@@ -103,8 +103,11 @@ class TestKeyMasking:
         assert r.status_code == 200
         data = r.json()
         brain = data.get("brain", {})
-        assert "api_key" not in brain
-        assert brain.get("api_key_set") is True
+        # 端点键（含脱敏伪字段）一律不下发；brain 只承载引擎参数
+        for k in ("api_key", "api_key_set", "model", "base_url", "provider"):
+            assert k not in brain
+        # 引擎参数仍在
+        assert "maxInputTokens" in brain
 
     def test_put_settings_empty_key_preserves(self, client, monkeypatch, tmp_path):
         """PUT 时空字符串 api_key 表示保持不变"""
@@ -145,10 +148,9 @@ class TestKeyMasking:
         g = client.get("/api/settings")
         assert g.status_code == 200
         brain = g.json().get("brain", {})
-        assert "api_key" not in brain
-        assert brain.get("api_key_set") is True
-        # 其他字段应正常返回
-        assert brain.get("model") == "gpt-x"
+        # 端点键不下发（PUT 收下的历史键也不再回显）
+        for k in ("api_key", "api_key_set", "model", "base_url"):
+            assert k not in brain
 
 
 # === M3 工具插件层枚举（前端 Skills&Tools 面板数据源） ===

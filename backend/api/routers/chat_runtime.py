@@ -55,7 +55,7 @@ import backend.api.router_runtime as _rt
 
 router = APIRouter(tags=["runtime"])
 
-def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, full_access: Optional[bool] = None, agent_id: str = AGENT_MAIN):
+def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, full_access: Optional[bool] = None, agent_id: str = AGENT_MAIN, model: Optional[str] = None):
     """统一 agent 入口（单入口处理闲聊 + 双 agent 任务执行）。
 
     一个会话 = 一个 task（首条消息由调用方在外部建好 task 并传入 task_id）。
@@ -64,12 +64,15 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     - planner（主模型）：规划 / 反思，看全局。
     M10 统一入口（run_task）：
     - 主 agent（主模型）默认自己把任务做完；需要并行时它调 dispatch，
-      编排层用 Send 扇出子 agent（runtime.executor 指向的模型，可配本地高频模型）。
+      编排层用 Send 扇出子 agent（模型目录 worker 槽位指向的模型，可配本地高频模型）。
     - 不再有「两层」的固定角色划分。
 
     单链路统一（2026-09-17）：闲聊与执行走同一条 run_task 入口，不再做"首条轻量 probe 判断"。
     每轮消息直接进 run_task，由大脑自己决定纯文本回答（方案 B 收尾）还是调用工具执行；
     后续消息（task_id 已有）沿用同一 task 上下文。
+
+    ``model``：本次运行的模型选择 ``"<provider_id>/<model_id>"``（模型路由，2026-09-29），
+    仅作用于 main 槽位；空 = 用目录默认 / 配置。
     """
     # 阶段 1：运行体句柄存于 RuntimeManager 复合键 (task_id, agent_id)，不再用全局 _loop
     _last_answer = ""  # 累积大脑最后一段口播，作为结尾「结果框」内容
@@ -79,7 +82,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     try:
         from omni_core.local.loop import ToolLoop, TaskSpec
 
-        brain_cfg, executor_cfg = _make_brain_cfg()
+        brain_cfg, executor_cfg = _make_brain_cfg(model)
         # 阶段 0.5：运行级配置快照——一次性加载，运行期内 ToolLoop 不再重读全局 config
         cfg = config.load_config() or {}
 
@@ -559,7 +562,7 @@ async def api_chat(request: Request):
 
     push_chat("user", last_user, task_id=task_id)
     threading.Thread(target=_rt._dispatch_chat,
-                     args=(task_id, messages, max_steps, full_access, AGENT_MAIN), daemon=True).start()
+                     args=(task_id, messages, max_steps, full_access, AGENT_MAIN, req.model), daemon=True).start()
     return JSONResponse({"ok": True, "task_id": task_id, "msg": "已下发"})
 
 @router.post("/wake")

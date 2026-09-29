@@ -46,7 +46,8 @@ interface TaskStoreValue {
 
   connectStream: () => void;
   disconnectStream: () => void;
-  sendMessage: (text: string, fullAccess?: boolean) => Promise<void>;
+  // 模型路由：model 为本次请求的选择 "<provider_id>/<model_id>"；空 = 用目录默认/配置
+  sendMessage: (text: string, fullAccess?: boolean, model?: string) => Promise<void>;
   // M8 软注入：运行中向 agent 插话（不打断当前步骤，下一轮可见）；失败回显系统消息
   injectMessage: (text: string) => Promise<void>;
   stopTask: () => void;
@@ -550,7 +551,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     if (taskId) taskApi.updateState(taskId, { full_access: val }).catch(() => {});
   }, []);
 
-  const sendMessage = useCallback(async (text: string, fullAccess?: boolean) => {
+  const sendMessage = useCallback(async (text: string, fullAccess?: boolean, model?: string) => {
     const content = text.trim();
     if (!content || runningRef.current) return;
     // 乐观渲染用户消息：发送瞬间上屏。后端不回传 user 消息（仅 push agent/system/debug），
@@ -567,6 +568,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         task_id: currentTaskIdRef.current,
         max_steps: maxSteps,
         full_access: fullAccess,
+        ...(model ? { model } : {}),
       });
       const tid = (res.data as { task_id?: string })?.task_id;
       if (tid) {

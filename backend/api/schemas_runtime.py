@@ -24,6 +24,10 @@ class ChatRequest(BaseModel):
     task_id: Optional[str] = None
     max_steps: int = Field(default=40, ge=1, le=2000)
     full_access: Optional[bool] = None
+    # 模型路由（2026-09-29）：本次请求使用的模型选择，形如 "<provider_id>/<model_id>"。
+    # 只接受该形状（不含 URL/空格），是否真实存在由 router 白名单二次校验。
+    model: Optional[str] = Field(default=None, max_length=200,
+                                 pattern=r"^[^\s/]+/[^\s/].*$")
 
     @field_validator("task_id")
     @classmethod

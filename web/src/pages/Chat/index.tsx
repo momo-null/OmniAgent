@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, useMemo, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import {
   Box,
   Paper,
@@ -30,9 +30,13 @@ import PublicRounded from "@mui/icons-material/PublicRounded";
 import { useTaskStore } from "../../store/taskStore.tsx";
 import ScrollArea, { THUMB_RIGHT, THUMB_WIDTH } from "../../components/ScrollArea.tsx";
 import Markdown from "../../components/Markdown.tsx";
-import type { ChatMsg, ProcessItem, ApprovalCardInfo } from "../../types";
+import ModelPicker from "../../components/ModelPicker.tsx";
+import type { ChatMsg, ProcessItem, ApprovalCardInfo, ModelsIndex } from "../../types";
 import type { DebugLog } from "../../store/taskStore";
-import { characterApi } from "../../api/client";
+import { characterApi, modelCatalogApi } from "../../api/client";
+
+// 选中模型的本地兜底：后端目录为准，本地只用于首屏即时显示（切换后由后端 defaults 持久化）
+const MODEL_SEL_KEY = "omni.selected_model";
 
 // S2 审批卡风险标签（通用三词 + 网络，零工具特判——前端不认识具体工具）
 const RISK_LABEL: Record<string, string> = {
@@ -472,6 +476,26 @@ export default function Chat() {
   const fullAccess = fullAccessByTask[currentTaskId] ?? false;
   const endRef = useRef<HTMLDivElement | null>(null);
 
+  // ── 模型路由：目录来自 ~/.omniagent/models.json（后端分组），本地只缓存选中项 ──
+  const [catalog, setCatalog] = useState<ModelsIndex | null>(null);
+  const [modelSel, setModelSel] = useState<string>(() => localStorage.getItem(MODEL_SEL_KEY) || "");
+  const refreshCatalog = useCallback(() => {
+    modelCatalogApi.list().then((r) => {
+      const d = r.data as ModelsIndex;
+      setCatalog(d);
+      // 后端 defaults 为准：本地缓存若指向已删除的条目则回退到后端解析值
+      const sel = d?.current?.main?.selection || "";
+      if (sel !== modelSel && !(modelSel && !sel)) setModelSel(sel);
+    }).catch(() => {});
+  }, [modelSel]);
+  useEffect(() => { refreshCatalog(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const pickModel = (sel: string) => {
+    setModelSel(sel);
+    localStorage.setItem(MODEL_SEL_KEY, sel);
+    // 选中即成为该槽位默认（写回目录）；失败不影响本轮发送（发送时仍按 selection 覆盖）
+    modelCatalogApi.setDefault("main", sel).catch(() => {});
+  };
+
   // 对话时间线：messages（user/agent/system）+ 实时过程流（thinking/tool_call）
   // 按 ts 归并，过程流自然落在对应 user 消息与最终 agent 总结之间。
   const timeline = useMemo(() => {
@@ -554,7 +578,7 @@ export default function Chat() {
       return;
     }
     setDraft("");
-    sendMessage(text, fullAccess);
+    sendMessage(text, fullAccess, modelSel || undefined);
   };
 
   return (
@@ -720,26 +744,36 @@ export default function Chat() {
               label="完全访问"
               sx={{ mr: 0 }}
             />
-            {/* 单按钮上下文逻辑：
-                - 非运行态：始终「发送」（空输入禁用）
-                - 运行态 + 空输入：显示「停止」（红）
-                - 运行态 + 有输入：显示「发送」（点即软注入/插话，不打断当前步骤） */}
-            <IconButton
-              onClick={running ? (draft.trim() ? handleInject : stopTask) : handleSend}
-              disabled={!running && !draft.trim()}
-              aria-label={running && !draft.trim() ? "停止" : "发送"}
-              title={running && !draft.trim() ? "停止当前任务" : (running ? "插话（软注入）：不打断当前步骤" : "发送")}
-              sx={{
-                width: 36, height: 36, flexShrink: 0,
-                bgcolor: running && !draft.trim() ? "error.main" : "primary.main",
-                // 中性主题下 primary 是亮灰底，必须用深色字；停止状态是红色底，仍用白字
-                color: (t) => (running && !draft.trim() ? "#fff" : t.palette.primary.contrastText),
-                "&:hover": { bgcolor: running && !draft.trim() ? "error.dark" : "primary.dark" },
-                "&:disabled": { bgcolor: "action.disabledBackground", color: "action.disabled" },
-              }}
-            >
-              {running && !draft.trim() ? <StopIcon /> : <SendIcon />}
-            </IconButton>
+            <Stack direction="row" spacing={0.5} alignItems="center">
+              {/* 模型选择：靠近发送键，只显示模型名（运行中禁止切换） */}
+              <ModelPicker
+                value={modelSel}
+                providers={catalog?.providers ?? []}
+                current={catalog?.current?.main}
+                disabled={running}
+                onChange={pickModel}
+              />
+              {/* 单按钮上下文逻辑：
+                  - 非运行态：始终「发送」（空输入禁用）
+                  - 运行态 + 空输入：显示「停止」（红）
+                  - 运行态 + 有输入：显示「发送」（点即软注入/插话，不打断当前步骤） */}
+              <IconButton
+                onClick={running ? (draft.trim() ? handleInject : stopTask) : handleSend}
+                disabled={!running && !draft.trim()}
+                aria-label={running && !draft.trim() ? "停止" : "发送"}
+                title={running && !draft.trim() ? "停止当前任务" : (running ? "插话（软注入）：不打断当前步骤" : "发送")}
+                sx={{
+                  width: 36, height: 36, flexShrink: 0,
+                  bgcolor: running && !draft.trim() ? "error.main" : "primary.main",
+                  // 中性主题下 primary 是亮灰底，必须用深色字；停止状态是红色底，仍用白字
+                  color: (t) => (running && !draft.trim() ? "#fff" : t.palette.primary.contrastText),
+                  "&:hover": { bgcolor: running && !draft.trim() ? "error.dark" : "primary.dark" },
+                  "&:disabled": { bgcolor: "action.disabledBackground", color: "action.disabled" },
+                }}
+              >
+                {running && !draft.trim() ? <StopIcon /> : <SendIcon />}
+              </IconButton>
+            </Stack>
           </Box>
         </Box>
         <Popover

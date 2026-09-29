@@ -9,11 +9,12 @@ from fastapi import APIRouter
 
 from backend.api.routers import (
     helpers, chat_runtime, tools_api, memory_api, signals_api, tasks_api,
-    snapshot_api, approvals_api, diagnostics_api,
+    snapshot_api, approvals_api, diagnostics_api, models_api,
 )
 
 router = APIRouter(prefix="/api/runtime", tags=["runtime"])
 router.include_router(chat_runtime.router)
+router.include_router(models_api.router)
 router.include_router(tools_api.router)
 router.include_router(memory_api.router)
 router.include_router(signals_api.router)
@@ -62,4 +63,7 @@ from backend.api.routers.snapshot_api import (  # noqa: F401
 )
 from backend.api.routers.diagnostics_api import (  # noqa: F401
     memory_diagnostics,
+)
+from backend.api.routers.models_api import (  # noqa: F401
+    list_models, put_models, set_model_default,
 )

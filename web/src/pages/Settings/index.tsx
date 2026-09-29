@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Box,
   Tabs,
@@ -51,8 +51,7 @@ import CharacterTab from "./CharacterTab";
 import ProfileTab from "./ProfileTab";
 import MemoryTab from "./MemoryTab";
 import SecurityTab from "./SecurityTab";
-
-const DEFAULT_MODELS_DIR = "D:\\AI\\Models";
+import ModelProviders from "./ModelProviders";
 
 // ── 透传参数（extra_args）与投影路径的「UI ↔ 侧注」映射 ──────────────────────
 // extra_args：多行文本，**每行一个 argv token** ⇒ 与后端 argv 数组一一对应，
@@ -187,7 +186,10 @@ function ModelDetail({ model, draft, setDraft, busy, saving, validateBusy, onSta
 function ModelTab() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [drafts, setDrafts] = useState<Record<string, LaunchParams>>({});
-  const [modelsDir, setModelsDir] = useState<string>(DEFAULT_MODELS_DIR);
+  // 扫描目录来自配置 local_model.models_dir（后端下发生效值）；失焦即持久化
+  const [modelsDir, setModelsDir] = useState<string>("");
+  const modelsDirRef = useRef("");
+  const savedDirRef = useRef("");
   const [gpu, setGpu] = useState<GpuInfo | null>(null);
   const [error, setError] = useState<string>("");
   const [busy, setBusy] = useState<string>("");
@@ -199,7 +201,7 @@ function ModelTab() {
 
   const refresh = async () => {
     try {
-      const [m, g] = await Promise.all([modelApi.list(modelsDir), systemApi.gpu()]);
+      const [m, g] = await Promise.all([modelApi.list(modelsDirRef.current || undefined), systemApi.gpu()]);
       setModels(m.data as ModelInfo[]);
       setGpu((g.data as GpuInfo) ?? null);
     } catch (e) { setError((e as Error).message); }
@@ -210,7 +212,26 @@ function ModelTab() {
   }, [models]);
 
   // A：去掉 5s 自动轮询，界面保持安静；状态更新只在显式刷新 / 启停 / 校验后发生
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    // 先取配置里的扫描目录（后端下发生效值），再按它刷新模型列表
+    settingsApi.get().then((r) => {
+      const md = ((r.data as Record<string, unknown>)?.local_model as Record<string, unknown> | undefined)?.models_dir;
+      const dir = typeof md === "string" ? md : "";
+      modelsDirRef.current = dir;
+      savedDirRef.current = dir;
+      setModelsDir(dir);
+    }).catch(() => {}).finally(() => { refresh(); });
+  }, []);
+
+  // 目录失焦：与已保存值不同则写回 local_model.models_dir（配置化，前端不再写死路径）
+  const handleDirBlur = () => {
+    const v = modelsDir.trim();
+    if (v === savedDirRef.current) { refresh(); return; }
+    settingsApi.put({ local_model: { models_dir: v } })
+      .then(() => { savedDirRef.current = v; setSaveMsg("扫描目录已保存到配置"); })
+      .catch((e) => setError((e as Error).message))
+      .finally(() => { refresh(); });
+  };
 
   const handleStart = async (m: ModelInfo) => {
     setBusy(m.name); setError("");
@@ -250,6 +271,9 @@ function ModelTab() {
     <Box>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {saveMsg && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSaveMsg("")}>{saveMsg}</Alert>}
+      {/* 在线模型目录（models.json）与本地模型同页：上=在线提供方，下=本地 llama.cpp 模型 */}
+      <ModelProviders />
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>本地模型（llama.cpp）</Typography>
       <Card sx={{ mb: 2 }}><CardContent>
         <Stack direction="row" justifyContent="space-between" alignItems="center">
           <Typography variant="subtitle2">GPU 监控</Typography>
@@ -263,8 +287,8 @@ function ModelTab() {
       </CardContent></Card>
       <Card sx={{ mb: 2 }}><CardContent>
         <Stack direction="row" spacing={1} alignItems="center">
-          <TextField label="模型目录（扫描根目录）" size="small" fullWidth value={modelsDir}
-            onChange={(e) => setModelsDir(e.target.value)} onBlur={refresh} />
+          <TextField label="模型目录（扫描根目录，失焦自动保存到配置）" size="small" fullWidth value={modelsDir}
+            onChange={(e) => setModelsDir(e.target.value)} onBlur={handleDirBlur} />
           <Button variant="outlined" onClick={refresh}>扫描</Button>
         </Stack>
       </CardContent></Card>
@@ -445,7 +469,7 @@ function OrchestrationTab() {
 
         <Typography variant="subtitle2" sx={{ mt: 1 }}>单大脑长任务压缩（不启本地模型时生效）</Typography>
         <FormControlLabel control={<Switch checked={ltEnabled} onChange={(e) => setLtEnabled(e.target.checked)} />}
-          label={<LabelWithTip text="启用长任务压缩 (brain.long_task.enabled)" desc="未配置子 agent 模型（executor）时，主模型单大脑长跑会按间隔压缩历史；关闭则不做压缩。" />} />
+          label={<LabelWithTip text="启用长任务压缩 (brain.long_task.enabled)" desc="未在「模型」页给子 agent（worker）选模型时，主模型单大脑长跑会按间隔压缩历史；关闭则不做压缩。" />} />
         <TextField label={<LabelWithTip text="压缩间隔 (brain.long_task.max_turns)" desc="单大脑路径下，每跑 N 轮把历史压缩成一段摘要，防止上下文溢出。用完不会停任务，只控制压缩频率。" />} type="number" value={ltMaxTurns}
           onChange={(e) => setLtMaxTurns(Number(e.target.value) || 16)} />
         <FormControlLabel control={<Switch checked={ltCompress} onChange={(e) => setLtCompress(e.target.checked)} />}
@@ -453,7 +477,7 @@ function OrchestrationTab() {
 
         <Divider />
         <Typography variant="subtitle2" sx={{ mt: 1 }}>上下文治理（高级）</Typography>
-        <TextField label={<LabelWithTip text="模型上下文上限 (brain.maxInputTokens)" desc="该模型的输入 Token 上限。填 0 = 关闭 Model 适配层粘性压缩；>0 时按此上限动态计算压缩阈值（前缀复用，省 token）。新 schema 请在「通道」页的 Provider 上配同名字段。" />} type="number" value={maxInputTokens}
+        <TextField label={<LabelWithTip text="模型上下文上限 (brain.maxInputTokens)" desc="该模型的输入 Token 上限。填 0 = 关闭 Model 适配层粘性压缩；>0 时按此上限动态计算压缩阈值（前缀复用，省 token）。" />} type="number" value={maxInputTokens}
           helperText="缺省 300000（代码内置；1M 上下文模型可填 1000000）；填 0 = 显式关闭粘性压缩"
           onChange={(e) => setMaxInputTokens(Number(e.target.value) || 0)} />
         <TextField label={<LabelWithTip text="粘性压缩尾部保留比例 (brain.long_task.retain_ratio)" desc="超阈值时，尾部会话保留「上限 × 该比例」的 Token，其余压成摘要。留空/0 = 取默认 0.5。" />} type="number" value={retainRatio}
@@ -476,259 +500,6 @@ function OrchestrationTab() {
   );
 }
 
-interface ChannelCfg {
-  enabled?: boolean;
-  provider?: string;
-  base_url?: string;
-  model?: string;
-  api_key?: string;
-  api_key_env?: string;
-  capabilities?: { vision?: boolean };
-  request?: { temperature?: number; max_tokens?: number };
-}
-
-// M-new：模型 Provider（端点定义，可被多个 agent 引用）
-interface ProviderCfg {
-  provider?: string;
-  base_url?: string;
-  model?: string;
-  api_key?: string;
-  api_key_env?: string;
-  capabilities?: { vision?: boolean };
-  // 模型输入 Token 上限：0 = 关闭 Model 适配层粘性压缩
-  maxInputTokens?: number;
-}
-
-// M-new：Agent 配置（model 字段引用某个 provider 的名称）
-interface AgentCfg {
-  enabled?: boolean;
-  model?: string;
-  tools?: string[];
-  dispatchable?: string[];
-}
-
-// 通道/Provider/Agent 的右栏编辑表单（替代原折叠卡片 + Select 下拉）
-function ChannelForm({ title, subtitle, cfg, onChange, canDisable }: {
-  title: string; subtitle: string; cfg: ChannelCfg; onChange: (c: ChannelCfg) => void; canDisable?: boolean;
-}) {
-  const apiKeySet = (cfg as any).api_key_set as boolean | undefined;
-  return (
-    <Card><CardContent>
-      <Typography variant="subtitle2">{title}</Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>{subtitle}</Typography>
-      <Stack spacing={2} sx={{ maxWidth: 480 }}>
-        {canDisable && (
-          <FormControlLabel control={<Switch checked={cfg.enabled !== false}
-            onChange={(e) => onChange({ ...cfg, enabled: e.target.checked })} />} label="启用" />
-        )}
-        <TextField label="base_url" size="small" fullWidth value={cfg.base_url ?? ""}
-          onChange={(e) => onChange({ ...cfg, base_url: e.target.value })} />
-        <TextField label="model" size="small" fullWidth value={cfg.model ?? ""}
-          onChange={(e) => onChange({ ...cfg, model: e.target.value })} />
-        <TextField label="api_key（留空保持不变）" size="small" fullWidth type="password"
-          placeholder={apiKeySet ? "（已设置，留空保持不变）" : "（未设置）"}
-          value={cfg.api_key ?? ""} onChange={(e) => onChange({ ...cfg, api_key: e.target.value })} />
-        {cfg.capabilities && (
-          <FormControlLabel control={<Switch checked={!!cfg.capabilities?.vision}
-            onChange={(e) => onChange({ ...cfg, capabilities: { vision: e.target.checked } })} />} label="视觉能力" />
-        )}
-      </Stack>
-    </CardContent></Card>
-  );
-}
-
-function ProviderForm({ name, cfg, onChange, onRemove }: {
-  name: string; cfg: ProviderCfg; onChange: (c: ProviderCfg) => void; onRemove: () => void;
-}) {
-  const apiKeySet = (cfg as any).api_key_set as boolean | undefined;
-  return (
-    <Card><CardContent>
-      <Stack direction="row" justifyContent="space-between" alignItems="center">
-        <Typography variant="subtitle2">Provider：{name || "(未命名)"}</Typography>
-        <Button size="small" color="error" onClick={onRemove}>删除</Button>
-      </Stack>
-      <Stack spacing={2} sx={{ mt: 1, maxWidth: 480 }}>
-        <TextField label="base_url" size="small" fullWidth value={cfg.base_url ?? ""}
-          onChange={(e) => onChange({ ...cfg, base_url: e.target.value })} />
-        <TextField label="model" size="small" fullWidth value={cfg.model ?? ""}
-          onChange={(e) => onChange({ ...cfg, model: e.target.value })} />
-        <TextField label="api_key（留空保持不变）" size="small" fullWidth type="password"
-          placeholder={apiKeySet ? "（已设置，留空保持不变）" : "（未设置）"}
-          value={cfg.api_key ?? ""} onChange={(e) => onChange({ ...cfg, api_key: e.target.value })} />
-        <TextField label="api_key_env" size="small" fullWidth value={cfg.api_key_env ?? ""}
-          onChange={(e) => onChange({ ...cfg, api_key_env: e.target.value })} />
-        <TextField label={<LabelWithTip text="上下文上限 maxInputTokens（0=关闭）" desc="该模型的输入 Token 上限。填 0 关闭 Model 适配层粘性压缩；>0 时启用粘性增量压缩（请求前缀复用，省 token 且避免上下文溢出）。" />} type="number" size="small" fullWidth value={cfg.maxInputTokens ?? 0}
-          onChange={(e) => onChange({ ...cfg, maxInputTokens: Number(e.target.value) || 0 })} />
-        <FormControlLabel control={<Switch checked={!!cfg.capabilities?.vision}
-          onChange={(e) => onChange({ ...cfg, capabilities: { vision: e.target.checked } })} />} label="视觉能力" />
-      </Stack>
-    </CardContent></Card>
-  );
-}
-
-function AgentForm({ name, cfg, onChange, onRemove, providerNames }: {
-  name: string; cfg: AgentCfg; onChange: (c: AgentCfg) => void; onRemove: () => void; providerNames: string[];
-}) {
-  const toolsText = (cfg.tools || []).join(", ");
-  const dispatchText = (cfg.dispatchable || []).join(", ");
-  return (
-    <Card><CardContent>
-      <Stack direction="row" justifyContent="space-between" alignItems="center">
-        <Typography variant="subtitle2">Agent：{name}</Typography>
-        <Button size="small" color="error" onClick={onRemove}>删除</Button>
-      </Stack>
-      <Stack spacing={2} sx={{ mt: 1, maxWidth: 480 }}>
-        <FormControlLabel control={<Switch checked={cfg.enabled !== false}
-          onChange={(e) => onChange({ ...cfg, enabled: e.target.checked })} />} label="启用" />
-        <FormControl size="small" fullWidth>
-          <InputLabel id={`${name}-model`}>model（引用 provider）</InputLabel>
-          <Select labelId={`${name}-model`} label="model（引用 provider）" value={cfg.model ?? ""}
-            onChange={(e) => onChange({ ...cfg, model: e.target.value })}>
-            {providerNames.length === 0
-              ? <MenuItem value=""><em>请先在上方添加 provider</em></MenuItem>
-              : providerNames.map((n) => <MenuItem key={n} value={n}>{n}</MenuItem>)}
-          </Select>
-        </FormControl>
-        <TextField label="tools（逗号分隔）" size="small" fullWidth value={toolsText}
-          onChange={(e) => onChange({ ...cfg, tools: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
-        <TextField label="dispatchable（逗号分隔，可派发的子 agent）" size="small" fullWidth value={dispatchText}
-          onChange={(e) => onChange({ ...cfg, dispatchable: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })} />
-      </Stack>
-    </CardContent></Card>
-  );
-}
-
-type SelKey = { kind: "provider" | "agent" | "channel"; name: string };
-
-function ChannelsTab() {
-  const [brain, setBrain] = useState<ChannelCfg>({});
-  const [executor, setExecutor] = useState<ChannelCfg>({ enabled: true });
-  const [localAsTool, setLocalAsTool] = useState<ChannelCfg>({ enabled: true });
-  const [providers, setProviders] = useState<Record<string, ProviderCfg>>({});
-  const [agents, setAgents] = useState<Record<string, AgentCfg>>({});
-  const [saved, setSaved] = useState("");
-  const [error, setError] = useState("");
-  const [sel, setSel] = useState<SelKey | null>({ kind: "channel", name: "brain" });
-  useEffect(() => {
-    settingsApi.get().then((r) => {
-      const d = r.data as any;
-      // 通道单一真源：brain 顶层；executor/agents 嵌套在 runtime 下
-      // （vision 已降为纯插件：配置在 ~/.omniagent/plugins/vision.yaml，前端只有 Tools 页一个开关）
-      if (d?.brain) setBrain(d.brain);
-      const rt = d?.runtime || {};
-      if (rt.executor) setExecutor(rt.executor);
-      if (rt.agents) setAgents(rt.agents);
-      if (d?.llm?.local_as_tool) setLocalAsTool(d.llm.local_as_tool);
-      if (d?.llm?.providers) setProviders(d.llm.providers);
-    }).catch(() => {});
-  }, []);
-  const providerNames = Object.keys(providers);
-  const agentNames = Object.keys(agents);
-  const handleSave = async () => {
-    setError(""); setSaved("");
-    try {
-      // 通道（brain / executor / local_as_tool）+ provider/agent schema 一并提交。
-      const patch: Record<string, unknown> = {
-        brain,
-        runtime: { executor, agents },
-        llm: { local_as_tool: localAsTool, providers },
-      };
-      const r = await settingsApi.put(patch);
-      setSaved((r.data as any)?.ok ? "已保存通道配置" : "保存失败");
-    } catch (e) { setError((e as Error).message); }
-  };
-  const addProvider = () => {
-    const name = window.prompt("新 Provider 名称（如 online / local）：");
-    if (!name) return;
-    const key = name.trim();
-    if (!key || providers[key]) return;
-    setProviders({ ...providers, [key]: { provider: "openai-compatible", base_url: "", model: "" } });
-    setSel({ kind: "provider", name: key });
-  };
-  const addAgent = () => {
-    const name = window.prompt("新 Agent 名称（如 main / worker）：");
-    if (!name) return;
-    const key = name.trim();
-    if (!key || agents[key]) return;
-    setAgents({ ...agents, [key]: { enabled: true, model: providerNames[0] || "", tools: [], dispatchable: [] } });
-    setSel({ kind: "agent", name: key });
-  };
-  const removeProvider = (name: string) => {
-    const n = { ...providers }; delete n[name]; setProviders(n);
-    if (sel?.kind === "provider" && sel.name === name) setSel(null);
-  };
-  const removeAgent = (name: string) => {
-    const n = { ...agents }; delete n[name]; setAgents(n);
-    if (sel?.kind === "agent" && sel.name === name) setSel(null);
-  };
-
-  const OLD_CHANNELS: { key: string; title: string; subtitle: string; cfg: ChannelCfg; set: (c: ChannelCfg) => void; canDisable: boolean }[] = [
-    { key: "brain", title: "主模型", subtitle: "主 agent（默认自己跑完整任务）", cfg: brain, set: setBrain, canDisable: false },
-    { key: "executor", title: "子 agent 模型", subtitle: "主 agent 派发子任务时用的模型（可配本地高频模型）", cfg: executor, set: setExecutor, canDisable: true },
-    { key: "local_as_tool", title: "本地模型（工具）", subtitle: "以 local_infer 工具暴露，由主模型决定是否派发", cfg: localAsTool, set: setLocalAsTool, canDisable: true },
-  ];
-
-  return (
-    <Box>
-      <Typography variant="subtitle2" gutterBottom>推理通道（多模型接入）</Typography>
-      <Alert severity="info" sx={{ mb: 2 }}>
-        各通道独立可配模型端点。「主模型」可以是在线模型，也可以直接填本地端点；
-        「本地模型（工具）」开启后，本地模型会作为一个工具交给主模型自行判断是否派发。
-      </Alert>
-
-      <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-        <Button variant="outlined" onClick={addProvider}>添加 Provider</Button>
-        <Button variant="outlined" onClick={addAgent}>添加 Agent</Button>
-        <Button variant="contained" onClick={handleSave} sx={{ ml: "auto" }}>保存</Button>
-      </Stack>
-
-      <Box sx={{ display: "flex", gap: 2, alignItems: "flex-start" }}>
-        <Paper variant="outlined" sx={{ width: 300, flexShrink: 0, maxHeight: "70vh", overflow: "auto" }}>
-          <List dense>
-            {providerNames.length > 0 && <ListSubheader>Providers</ListSubheader>}
-            {providerNames.map((name) => (
-              <ListItemButton key={`p-${name}`} selected={sel?.kind === "provider" && sel.name === name}
-                onClick={() => setSel({ kind: "provider", name })}>
-                <ListItemText primary={name} secondary={`${providers[name].model || "—"} @ ${providers[name].base_url || "—"}`} />
-              </ListItemButton>
-            ))}
-            {agentNames.length > 0 && <ListSubheader>Agents</ListSubheader>}
-            {agentNames.map((name) => (
-              <ListItemButton key={`a-${name}`} selected={sel?.kind === "agent" && sel.name === name}
-                onClick={() => setSel({ kind: "agent", name })}>
-                <ListItemText primary={name} secondary={`model: ${agents[name].model || "—"}`} />
-              </ListItemButton>
-            ))}
-            <ListSubheader>旧通道（兼容）</ListSubheader>
-            {OLD_CHANNELS.map((c) => (
-              <ListItemButton key={`c-${c.key}`} selected={sel?.kind === "channel" && sel.name === c.key}
-                onClick={() => setSel({ kind: "channel", name: c.key })}>
-                <ListItemText primary={c.title} secondary={c.canDisable ? (c.cfg.enabled === false ? "已关闭" : "启用") : "常驻"} />
-              </ListItemButton>
-            ))}
-          </List>
-        </Paper>
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          {sel == null && <Alert severity="info">选择左侧配置项以编辑</Alert>}
-          {sel?.kind === "provider" && providers[sel.name] && (
-            <ProviderForm name={sel.name} cfg={providers[sel.name]} onChange={(c) => setProviders({ ...providers, [sel.name]: c })} onRemove={() => removeProvider(sel.name)} />
-          )}
-          {sel?.kind === "agent" && agents[sel.name] && (
-            <AgentForm name={sel.name} cfg={agents[sel.name]} providerNames={providerNames}
-              onChange={(c) => setAgents({ ...agents, [sel.name]: c })} onRemove={() => removeAgent(sel.name)} />
-          )}
-          {sel?.kind === "channel" && (() => {
-            const c = OLD_CHANNELS.find((x) => x.key === sel!.name);
-            if (!c) return null;
-            return <ChannelForm title={c.title} subtitle={c.subtitle} cfg={c.cfg} canDisable={c.canDisable} onChange={c.set} />;
-          })()}
-        </Box>
-      </Box>
-      {saved && <Alert severity="success" sx={{ mt: 2 }}>{saved}</Alert>}
-      {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
-    </Box>
-  );
-}
 
 function AboutTab() {
   return (
@@ -747,7 +518,7 @@ function AboutTab() {
 
       <Card variant="outlined" sx={{ mb: 2 }}>
         <CardContent>
-          <Typography variant="subtitle2">① 双层路径（配了 executor / runtime.agents）</Typography>
+          <Typography variant="subtitle2">① 双层路径（模型页给 worker 槽位选了模型）</Typography>
           <Typography variant="body2" color="text.secondary" component="div">
             主模型规划 + 子模型执行，支持派发多 agent。<br />
             生效配置：
@@ -764,7 +535,7 @@ function AboutTab() {
 
       <Card variant="outlined">
         <CardContent>
-          <Typography variant="subtitle2">② 单大脑路径（未配 executor，不想启本地模型时）</Typography>
+          <Typography variant="subtitle2">② 单大脑路径（worker 槽位未选模型时）</Typography>
           <Typography variant="body2" color="text.secondary" component="div">
             主模型自己跑完整任务，无子 agent。<br />
             生效配置：
@@ -809,7 +580,6 @@ export default function Settings() {
         <Tab label="伙伴" />
         <Tab label="安全" />
         <Tab label="模型" />
-        <Tab label="通道" />
         <Tab label="编排" />
         <Tab label="关于" />
       </Tabs>
@@ -817,9 +587,8 @@ export default function Settings() {
       {tab === 1 && <CompanionTab />}
       {tab === 2 && <SecurityTab />}
       {tab === 3 && <ModelTab />}
-      {tab === 4 && <ChannelsTab />}
-      {tab === 5 && <OrchestrationTab />}
-      {tab === 6 && <AboutTab />}
+      {tab === 4 && <OrchestrationTab />}
+      {tab === 5 && <AboutTab />}
     </Box>
   );
 }

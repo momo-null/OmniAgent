@@ -45,7 +45,7 @@ def _extract_overrides(body: LaunchParams) -> tuple[Dict[str, Any], Optional[str
 
 @router.get("/models")
 async def list_models(
-    models_dir: Optional[str] = Query(None, description="扫描目录，默认 D:\\AI\\Models"),
+    models_dir: Optional[str] = Query(None, description="扫描目录，缺省取配置 local_model.models_dir"),
     mgr: ModelManager = Depends(get_model_hub),
 ) -> List[Dict[str, Any]]:
     """列出所有模型（扫描目录 + 侧注合并结果）"""
@@ -246,7 +246,7 @@ async def kill_orphans(
 
 @router.get("/scan")
 async def scan_models(
-    models_dir: Optional[str] = Query(None, description="扫描目录，默认 D:\\AI\\Models"),
+    models_dir: Optional[str] = Query(None, description="扫描目录，缺省取配置 local_model.models_dir"),
     mgr: ModelManager = Depends(get_model_hub),
 ) -> List[Dict[str, Any]]:
     """扫描本地 GGUF 文件（与 /api/models 相同的统一结果）"""

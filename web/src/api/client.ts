@@ -8,6 +8,7 @@ import type {
   SignalResponse,
   SignalsSummary,
   SteadyState,
+  ModelsIndex,
 } from "../types";
 
 // 使用相对 baseURL，依赖 vite dev 代理将 /api 与 /v1 转发到后端 8000
@@ -160,6 +161,18 @@ export const approvalsApi = {
     http.get("/api/runtime/audit", { params: { limit } }),
 };
 
+// ── 模型路由（/api/runtime/models，目录存 ~/.omniagent/models.json） ──
+export const modelCatalogApi = {
+  // 分组目录 + 各槽位当前生效模型（api_key 不回传）
+  list: () => http.get<ModelsIndex>("/api/runtime/models"),
+  // 整体写回 providers（设置页维护；api_key 空串 = 保持不变）
+  save: (providers: Record<string, unknown>) =>
+    http.put("/api/runtime/models", { providers }),
+  // 设置槽位默认模型；selection 为空串 = 跟随配置
+  setDefault: (slot: string, selection: string) =>
+    http.patch("/api/runtime/models/default", { slot, selection }),
+};
+
 // ── Plan C 运行时控制台（/api/runtime） ─────────────
 export const runtimeApi = {
   projects: () => http.get("/api/runtime/projects"),
@@ -176,6 +189,8 @@ export const runtimeApi = {
     task_id?: string;
     max_steps?: number;
     full_access?: boolean;
+    // 模型路由：本次请求使用的 "<provider_id>/<model_id>"；空 = 用目录默认/配置
+    model?: string;
   }) => http.post("/api/runtime/chat", payload),
   // M8 软注入：运行中向 agent 插话（不打断当前 turn，下一轮可见）
   inject: (payload: { text: string; task_id?: string; agent_id?: string }) =>

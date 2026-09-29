@@ -31,7 +31,6 @@ from omni_core.tools import (
     configure_shell,
     activate_environment,
     build_mcp_servers,
-    configure_local_model_from_config,
 )
 from omni_core.local.runtime_paths import (
     task_trajectory, task_collected, auto_project_id,
@@ -109,9 +108,8 @@ class ToolLoop(
         _cfg = self._cfg
         _rt = (_cfg.get("runtime") or {})
 
-        # M9：取消 runtime.mode 三态。这里只做「多模型接入」——
-        # 主模型（brain）可以在线，也可以直接配成本地端点；是否另起本地模型由
-        # runtime.executor（子 agent 模型）与 llm.local_as_tool（本地模型工具）决定。
+        # 模型路由（2026-09-29）：端点唯一真源是 ~/.omniagent/models.json 目录，
+        # 由调用方按槽位解析后注入；worker「目录里选了才启用」。
         self.brain = LLMClient(brain_cfg, on_debug=self._dbg("brain"))
         self.brain_model = (brain_cfg or {}).get("model", "?")
         # T3.2：保留大脑端点配置原样，供读取模型级上下文上限（maxInputTokens）
@@ -146,8 +144,6 @@ class ToolLoop(
         # 环境已在上方按 runtime.backend 激活；下面装载插件与内建限流。
         _tools_cfg = (_rt.get("tools") or {})
         configure_shell(_rt.get("shell_exec") or {})
-        # M9：本地模型以工具形态注入（是否暴露由 llm.local_as_tool.enabled 决定）。
-        self.local_model_as_tool = configure_local_model_from_config(_cfg, on_debug=self._dbg("local_model"))
         # 外部 MCP：交给 SDK 原生 MCPServer；连接生命周期由 sdk_loop 在运行期负责。
         _mcp_cfg = config.load_mcp_config()
         self.mcp_servers = (
@@ -178,13 +174,16 @@ class ToolLoop(
         self.executor = None
         self.executor_capabilities = {}
         self.executor_is_planner = False  # True 表示子 agent 模型与主模型同源
-        # M-new：子 agent 模型同样经 resolver 解析（新 schema 优先，回退旧 executor）
+        # 子 agent 模型：目录 worker 槽位有选择即启用（无选择 = 主模型兼任）
         if executor_cfg is None:
-            from omni_core.brain.resolve import resolve_agent_model
-            exec_cfg = resolve_agent_model(_cfg, "worker")
+            from omni_core.brain import router as model_router
+            try:
+                exec_cfg = model_router.resolve_slot("worker")
+            except Exception:  # noqa: BLE001
+                exec_cfg = {}
         else:
             exec_cfg = executor_cfg
-        if exec_cfg and exec_cfg.get("enabled"):
+        if exec_cfg:
             try:
                 self.executor = LLMClient(exec_cfg, on_debug=self._dbg("executor"))
                 self.executor_capabilities = (exec_cfg or {}).get("capabilities", {}) or {}

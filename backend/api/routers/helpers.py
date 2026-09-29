@@ -294,27 +294,52 @@ def push_message_stream(role: str, model: str, block_id: str, content: str, task
     _upsert(_ensure_outbox(tid), "message", block_id, entry)
     _live_push(tid, "message", block_id, entry)
 
-def _make_brain_cfg():
-    """构造在线大脑配置（含 executor 透传），供统一 /chat 入口复用。
+def _make_brain_cfg(model: Optional[str] = None):
+    """构造大脑配置（含 worker 透传），供统一 /chat 入口复用。
 
-    M-new：主模型 / 子 agent 模型均经 ``omni_core.brain.resolve`` 解析，
-    优先新 schema（runtime.agents.<id>.model -> llm.providers），回退旧 schema
-    （顶层 brain / runtime.executor）。
+    职责切分（模型路由真源收敛，2026-09-29）：
+    - **端点**唯一真源是模型目录 ``~/.omniagent/models.json``：main 槽位由
+      ``omni_core.brain.router.resolve_slot`` 解析（显式选择 > 目录默认）。
+      目录里没有 main 选择时这里就是空端点，LLMClient 会给出明确报错——
+      不再回退 config 里的任何端点键（旧通道已下线）。
+    - **引擎参数**仍在 ``config.yaml``：此处只从顶层 ``brain`` 挑非端点键
+      （``long_task`` / ``maxInputTokens`` / ``reasoning_mode``）。
+
+    ``model`` 为 ``"<provider_id>/<model_id>"`` 选择，经白名单校验后才覆盖；
+    非法选择被忽略（不报错），避免请求体注入任意端点。
     """
     cfg = _config()
-    from omni_core.brain.resolve import resolve_agent_model
+    # 引擎参数（历史压缩 / 上下文预算 / 推理模式）——与端点无关，始终来自 config。
+    # 显式挑键：config.brain 里残留的端点键（base_url/model/api_key）一律不透传。
+    brain_src = cfg.get("brain") or {}
+    brain_cfg: Dict[str, Any] = {
+        "reasoning_mode": brain_src.get("reasoning_mode", "native"),
+        "maxInputTokens": brain_src.get("maxInputTokens", 0),
+        "long_task": brain_src.get("long_task") or {},
+    }
 
-    brain_cfg = resolve_agent_model(cfg, "main")
-    # 思考路由模式：从配置读取，缺省 native（模型原生吐 reasoning token）
-    brain_cfg = dict(brain_cfg)
-    brain_cfg["reasoning_mode"] = (cfg.get("brain") or {}).get("reasoning_mode", "native")
-    executor_cfg = resolve_agent_model(cfg, "worker")
+    try:
+        from omni_core.brain import router as model_router
+
+        selected = model_router.resolve_slot("main", model)
+        if selected:
+            brain_cfg = {**brain_cfg, **selected}
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 子 agent 模型：目录 worker 槽位（无选择 = 空 dict = 主模型兼任）
+    executor_cfg: Dict[str, Any] = {}
+    try:
+        from omni_core.brain import router as model_router
+
+        executor_cfg = dict(model_router.resolve_slot("worker") or {})
+    except Exception:  # noqa: BLE001
+        executor_cfg = {}
 
     # 子 agent 模型启用但缺 key → 占位，避免 LLMClient 在无 key 端点直接报错
-    if executor_cfg.get("enabled") and not executor_cfg.get("api_key"):
+    if executor_cfg and not executor_cfg.get("api_key"):
         env_key = executor_cfg.get("api_key_env", "OMNI_EXECUTOR_API_KEY")
         if not os.environ.get(env_key):
-            executor_cfg = dict(executor_cfg)
             executor_cfg["api_key"] = "dummy"
     return brain_cfg, executor_cfg
 

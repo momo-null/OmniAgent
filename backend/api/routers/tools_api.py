@@ -24,14 +24,12 @@ async def list_tools():
         import config as app_config
 
         from devices import list_environments, registered_kinds
-        from omni_core.tools import activate_environment, configure_local_model_from_config
+        from omni_core.tools import activate_environment
         from omni_core.tools.base import TOOL_REGISTRY
         from omni_core.tools.env_loader import active_kind
         from omni_core.tools.loader import PluginContext, list_plugins, load_plugins
 
         cfg = app_config.load_config() or {}
-        # M9：本地模型工具是配置驱动的动态注册，枚举前先按配置登记一次
-        configure_local_model_from_config(cfg)
         env_kind = active_kind(cfg)
         # 激活当前环境以登记其工具（只读枚举路径，与运行一致）
         try:

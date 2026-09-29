@@ -47,8 +47,11 @@ class ModelManager(LauncherMixin, ScanMixin, ServeMixin, HealthMixin, ProcessMix
         self.llama_root = self._resolve_path(
             self.config.get("llm_runtime", {}).get("llama_root", "./external/llama")
         )
-        # 模型目录（默认 D:\AI\Models；扫描时调用方可覆盖）
-        self.models_dir = DEFAULT_MODELS_DIR
+        # 模型目录：配置 ``local_model.models_dir`` 优先（Web 模型页可改并持久化），
+        # 未配置时回退 DEFAULT_MODELS_DIR；扫描时调用方仍可逐次覆盖
+        self.models_dir = (
+            config.get_config("local_model.models_dir", "") or DEFAULT_MODELS_DIR
+        )
         # 启动预设（profile）：从 config.yaml 的 model_presets 读取
         self.presets = self.config.get("model_presets", {}) or {}
         # 运行时状态: name -> {pid, port, process, started_at, out_log, err_log, params}

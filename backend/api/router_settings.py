@@ -112,19 +112,24 @@ async def get_settings() -> Dict[str, Any]:
         v = cfg.get(k)
         if v is not None:
             out[k] = _mask_secrets(copy.deepcopy(v))
-    # 给前端一个干净的默认骨架，避免首次无 ~/.omniagent/config.yaml 时缺字段
-    out.setdefault("llm", {})
-    # M-new：新 schema 默认骨架（providers 定义端点，agents 引用）
-    out["llm"].setdefault("providers", {})
+    # 给前端一个干净的默认骨架，避免首次无 ~/.omniagent/config.yaml 时缺字段。
+    # 端点真源已收敛到 ~/.omniagent/models.json（模型路由，2026-09-29）：
+    # 旧通道 runtime.executor / llm.providers / llm.local_as_tool 不再暴露给前端。
     out.setdefault("runtime", {})
-    out["runtime"].setdefault("executor", {"enabled": True})
     out["runtime"].setdefault("vision", {"enabled": False})
-    out["runtime"].setdefault("agents", {})
     out.setdefault("local_model", {"auto_start": False, "default_model": ""})
-    out.setdefault("brain", {})
-    # M9：本地模型工具（enabled 缺省跟随 executor，边界缺省为空→用代码里的中性兜底）
-    out["llm"].setdefault("local_as_tool", {"enabled": bool(
-        (out["runtime"].get("executor") or {}).get("enabled", True))})
+    # 模型目录未配置时给出出厂默认（与管理器生效值一致），供前端输入框初值显示
+    try:
+        from model_hub.manager import DEFAULT_MODELS_DIR
+
+        out["local_model"].setdefault("models_dir", DEFAULT_MODELS_DIR)
+    except Exception:  # noqa: BLE001
+        out["local_model"].setdefault("models_dir", "")
+    # brain 只保留引擎参数（long_task / maxInputTokens / reasoning_mode），端点键不再下发
+    if "brain" in out:
+        for k in ("base_url", "model", "api_key", "api_key_env", "provider"):
+            out["brain"].pop(k, None)
+        out["brain"].pop("api_key_set", None)
     # 暴露设置文件实际位置与是否存在，便于确认持久化（排查「配置丢失」）。
     out["_meta"] = {
         "settings_path": config.SETTINGS_PATH,
@@ -180,7 +185,8 @@ async def put_settings(req: Request) -> JSONResponse:
                 )
         config.save_mcp_config(mcp_patch)
 
-    # 密钥"保持不变"逻辑：空字符串 api_key → 从现有配置恢复原值
+    # 密钥"保持不变"逻辑：空字符串 api_key → 从现有配置恢复原值。
+    # brain 现在只承载引擎参数（无端点键），此处保留以防历史配置回写时丢密钥。
     existing_cfg = config.load_config()
     for section in ("brain",):
         if section in patch:
@@ -188,20 +194,8 @@ async def put_settings(req: Request) -> JSONResponse:
     if "runtime" in patch:
         rt_patch = patch["runtime"]
         rt_existing = existing_cfg.get("runtime", {})
-        for sub in ("executor", "vision"):
-            if sub in rt_patch:
-                _preserve_existing_api_key(rt_patch[sub], rt_existing.get(sub, {}))
-    # M-new：llm.providers.* 的 api_key 同样支持「空串=保持不变」
-    if "llm" in patch:
-        llm_patch = patch["llm"]
-        if isinstance(llm_patch, dict):
-            llm_existing = existing_cfg.get("llm", {})
-            prov_patch = llm_patch.get("providers")
-            if isinstance(prov_patch, dict):
-                prov_existing = llm_existing.get("providers", {})
-                for name, pnode in prov_patch.items():
-                    if isinstance(pnode, dict):
-                        _preserve_existing_api_key(pnode, prov_existing.get(name, {}))
+        if "vision" in rt_patch:
+            _preserve_existing_api_key(rt_patch["vision"], rt_existing.get("vision", {}))
 
     # 读取现有 ~/.omniagent/config.yaml，做 deepMerge 覆盖（不丢其他节）
     existing = copy.deepcopy(config.load_settings())

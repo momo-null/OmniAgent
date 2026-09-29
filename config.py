@@ -22,10 +22,15 @@ CONFIG_PATH = os.path.join(_ROOT, "config.yaml")
 SETTINGS_PATH = os.path.join(os.path.expanduser("~"), ".omniagent", "config.yaml")
 # 外部 MCP 配置：独立文件，不进 config.yaml（避免主配置被反复改动）
 MCP_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".omniagent", "mcp.json")
+# 模型目录（提供方 / 模型清单）：独立文件，与通用配置隔离。
+# 设计：厂商侧信息（base_url / api_key / 模型清单）属于「外部目录」而非引擎参数，
+# 单独存放使 config.yaml 保持场景/厂商无关，也便于整体导入导出与备份。
+MODELS_CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".omniagent", "models.json")
 
 _config_cache: Dict[str, Any] = {}
 _settings_cache: Dict[str, Any] = {}
 _mcp_cache: Dict[str, Any] = {}
+_models_cache: Dict[str, Any] = {}
 _path_logged = False
 _base_warned = False  # 项目级 config.yaml 废弃告警只打一次
 
@@ -98,6 +103,37 @@ def save_mcp_config(mcp: Dict[str, Any]) -> None:
         json.dump(mcp, f, ensure_ascii=False, indent=2)
     _logger.info("已写回 MCP 配置 -> %s", MCP_CONFIG_PATH)
     _mcp_cache = mcp
+
+
+def load_models_config() -> Dict[str, Any]:
+    """读取模型目录 ~/.omniagent/models.json（``{"providers": {...}, "defaults": {...}}``）。
+
+    与 MCP 配置同构：独立文件、独立缓存；文件缺失/损坏一律返回空 dict（不阻断启动）。
+    """
+    global _models_cache
+    if _models_cache:
+        return _models_cache
+    try:
+        if os.path.exists(MODELS_CONFIG_PATH):
+            with open(MODELS_CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    _models_cache = data
+                    return _models_cache
+    except Exception:
+        pass
+    _models_cache = {}
+    return _models_cache
+
+
+def save_models_config(models: Dict[str, Any]) -> None:
+    """写回 ~/.omniagent/models.json 并失效缓存。"""
+    global _models_cache
+    os.makedirs(os.path.dirname(MODELS_CONFIG_PATH), exist_ok=True)
+    with open(MODELS_CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(models, f, ensure_ascii=False, indent=2)
+    _logger.info("已写回模型目录 -> %s", MODELS_CONFIG_PATH)
+    _models_cache = models
 
 
 def deep_merge(target: Dict[str, Any], source: Dict[str, Any]) -> Dict[str, Any]:
@@ -244,10 +280,11 @@ def load_effective_defaults() -> Dict[str, Any]:
 
 def reload_config() -> None:
     """失效缓存（测试或外部修改后强制重读）。"""
-    global _config_cache, _settings_cache, _mcp_cache
+    global _config_cache, _settings_cache, _mcp_cache, _models_cache
     _config_cache = {}
     _settings_cache = {}
     _mcp_cache = {}
+    _models_cache = {}
     load_config()
 
 
