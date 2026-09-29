@@ -142,6 +142,25 @@ class RuntimeManager:
                 }
             return self._outboxes[task_id]
 
+    # --- 只读统计（诊断用：不改动任何业务状态） ---
+    def outbox_stats(self) -> Dict[str, Dict[str, list]]:
+        """outbox 条目快照（浅拷贝引用，仅用于统计条目数与体积）。"""
+        with self._lock:
+            return {tid: {ch: list(dq) for ch, dq in box.items()}
+                    for tid, box in self._outboxes.items()}
+
+    def runs_stats(self) -> Dict[str, int]:
+        """运行体表计数：判断运行体是否在任务结束后仍被钉住。"""
+        with self._lock:
+            recs = list(self._runs.values())
+        return {
+            "count": len(recs),
+            "running": sum(1 for r in recs if r.running),
+            "with_execution_backend": sum(1 for r in recs if r.execution_backend is not None),
+            "with_config_snapshot": sum(1 for r in recs if r.config_snapshot is not None),
+            "with_loop": sum(1 for r in recs if r.loop is not None),
+        }
+
     @property
     def runs(self) -> Dict[Tuple[str, str], RuntimeContext]:
         """只读视图：供测试与诊断按复合键遍历运行体。"""

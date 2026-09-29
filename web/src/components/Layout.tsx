@@ -31,6 +31,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import { taskApi } from "../api/client";
+import { THUMB_COLOR, THUMB_HOVER_COLOR, THUMB_WIDTH } from "./ScrollArea.tsx";
 import { useTaskStore, type MainView } from "../store/taskStore.tsx";
 import Chat from "../pages/Chat";
 import SkillsAndTools from "../pages/SkillsAndTools";
@@ -131,7 +132,20 @@ export default function Layout() {
           </IconButton>
         </Box>
         <Collapse in={tasksOpen} timeout="auto" unmountOnExit>
-          <List dense disablePadding sx={{ pl: 1, pr: 1, maxHeight: 240, overflowY: "auto" }}>
+          <List
+            dense
+            disablePadding
+            sx={{
+              pl: 1, pr: 1, maxHeight: 240, overflowY: "auto",
+              // 与 Chat 区滚动条同色：该列表用原生滚动条，按自绘滑块的配色/宽度对齐
+              scrollbarWidth: "thin",
+              scrollbarColor: `${THUMB_COLOR} transparent`,
+              "&::-webkit-scrollbar": { width: THUMB_WIDTH },
+              "&::-webkit-scrollbar-track": { background: "transparent" },
+              "&::-webkit-scrollbar-thumb": { background: THUMB_COLOR, borderRadius: 3 },
+              "&::-webkit-scrollbar-thumb:hover": { background: THUMB_HOVER_COLOR },
+            }}
+          >
             {tasks.length === 0 ? (
               <ListItemText primary="（暂无任务）" primaryTypographyProps={{ variant: "caption", color: "text.secondary", sx: { pl: 2 } }} />
             ) : (

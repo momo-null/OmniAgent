@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, useMemo, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, useMemo, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import {
   Box,
   Paper,
@@ -20,6 +20,8 @@ import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import BugReportIcon from "@mui/icons-material/BugReport";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import CheckIcon from "@mui/icons-material/Check";
 import PsychologyIcon from "@mui/icons-material/Psychology";
 import TerminalIcon from "@mui/icons-material/Terminal";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
@@ -150,7 +152,12 @@ function CapabilityRow({ icon, label, desc, tag, tagTone = "default" }: {
   );
 }
 
-function MsgRow({ m, showRole = true }: { m: ChatMsg; showRole?: boolean }) {
+// 以下消息类组件全部 memo：SSE 每 0.3s 轮询会让父级高频重渲染，props 不变时
+// 直接跳过，已完成的回复不再重新渲染/重解析，DOM 保持稳定（点击不再跳位）。
+const MsgRow = memo(function MsgRow({ m, showRole = true, copyable = false }: { m: ChatMsg; showRole?: boolean; copyable?: boolean }) {
+  // 回复（实时 agent 与历史 assistant 同源）走 markdown；用户消息不提供复制。
+  // 复制图标只挂在「最后一条回复」上（copyable 由时间线下发），中间回复保持干净。
+  const isReply = m.role === "agent" || m.role === "assistant";
   return (
     <Box sx={{ mb: showRole ? 1.5 : 0.25, display: "flex", flexDirection: "column", alignItems: m.role === "user" ? "flex-end" : "flex-start" }}>
       {/* 角色标签由分组统一渲染（见下方 timeline.map），此处只保留间距控制 */}
@@ -162,14 +169,17 @@ function MsgRow({ m, showRole = true }: { m: ChatMsg; showRole?: boolean }) {
           maxWidth: "85%",
           borderRadius: 2,
           // agent 消息走 markdown 块级排版（容器 pre-wrap 会与 <p> 外距叠加），其余保持原样
-          whiteSpace: m.role === "agent" ? "normal" : "pre-wrap",
+          whiteSpace: isReply ? "normal" : "pre-wrap",
           wordBreak: "break-word",
           boxShadow: "none",
           bgcolor: m.role === "user" ? "action.selected" : "transparent",
         }}
       >
-        {m.role === "agent" ? (
-          <Markdown>{m.text}</Markdown>
+        {isReply ? (
+          <>
+            <Markdown>{m.text}</Markdown>
+            {copyable && <CopyButton text={m.text} />}
+          </>
         ) : (
           <Typography variant="body2" component="span" sx={{ fontSize: 14 }}>
             {m.text}
@@ -178,16 +188,51 @@ function MsgRow({ m, showRole = true }: { m: ChatMsg; showRole?: boolean }) {
       </Paper>
     </Box>
   );
-}
+});
 
 // ── 对话区实时过程流（思考 + 工具调用），与右栏 debug 日志解耦 ─────────────
 
-function StreamCaret() {
-  // 打字机光标：随 running 在流式块末尾闪烁
-  return <span style={{ animation: "omni-blink 1s step-start infinite", marginLeft: 1 }}>▍</span>;
+// 复制按钮（仅挂在「回复」上：思考块 / 工具调用卡片不提供）
+// 独立于鼠标选区，避免流式重渲染把选区冲掉导致复制不到内容。
+function CopyButton({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  if (!text) return null;
+  const copy = async (e: ReactMouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // 非安全上下文（http 且非 localhost）下 Clipboard API 不可用，退回 execCommand
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    setDone(true);
+    window.setTimeout(() => setDone(false), 1200);
+  };
+  return (
+    <IconButton
+      size="small"
+      onClick={copy}
+      title={done ? "已复制" : "复制这条回复"}
+      aria-label="复制这条回复"
+      sx={{
+        width: 24, height: 24, mt: 0.25, ml: -0.25,
+        color: done ? "success.main" : "text.disabled",
+        "&:hover": { color: "text.primary", bgcolor: "transparent" },
+      }}
+    >
+      {done ? <CheckIcon sx={{ fontSize: 15 }} /> : <ContentCopyIcon sx={{ fontSize: 15 }} />}
+    </IconButton>
+  );
 }
 
-function ThinkBlock({ item, streaming }: { item: ProcessItem; streaming?: boolean }) {
+const ThinkBlock = memo(function ThinkBlock({ item, streaming }: { item: ProcessItem; streaming?: boolean }) {
   // 深度思考作辅助信息：固定高度 + 内部滚动，标题灰化，不喧宾夺主；不改 chat 气泡样式
   // 流式打字期间展开；一旦停止（结果 / 下一阶段出现）自动收起
   const [open, setOpen] = useState<boolean>(!!streaming);
@@ -228,17 +273,17 @@ function ThinkBlock({ item, streaming }: { item: ProcessItem; streaming?: boolea
         {open && (
           <ScrollArea maxHeight={200} sx={{ mt: 0.5 }}>
             <Typography variant="body2" sx={{ fontSize: 13, color: "text.secondary", pr: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", display: "block" }}>
-              {text}{streaming && <StreamCaret />}
+              {text}
             </Typography>
           </ScrollArea>
         )}
       </Paper>
     </Box>
   );
-}
+});
 
 // 真流式「口播」气泡（问题1/3）：模型每轮自然语言结论，与思考块一起在对话区时间线流式呈现
-function MessageBubble({ item, streaming, showRole = true }: { item: ProcessItem; streaming?: boolean; showRole?: boolean }) {
+const MessageBubble = memo(function MessageBubble({ item, showRole = true, copyable = false }: { item: ProcessItem; showRole?: boolean; copyable?: boolean }) {
   const text = item.content || "";
   return (
     <Box sx={{ mb: showRole ? 1.5 : 0.25, display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
@@ -250,15 +295,15 @@ function MessageBubble({ item, streaming, showRole = true }: { item: ProcessItem
           wordBreak: "break-word", boxShadow: "none", bgcolor: "transparent",
         }}
       >
-        {/* LLM 口播内容按 markdown 渲染；打字机光标置于块外，避免被解析吞掉 */}
+        {/* LLM 口播内容按 markdown 渲染 */}
         <Markdown>{text}</Markdown>
-        {streaming && <StreamCaret />}
+        {copyable && <CopyButton text={text} />}
       </Paper>
     </Box>
   );
-}
+});
 
-function ToolCallCard({ item }: { item: ProcessItem }) {
+const ToolCallCard = memo(function ToolCallCard({ item }: { item: ProcessItem }) {
   const [open, setOpen] = useState(false);
   const resLen = (item.result || "").length;
   return (
@@ -301,34 +346,38 @@ function ToolCallCard({ item }: { item: ProcessItem }) {
       </Paper>
     </Box>
   );
-}
+});
 
 // 结构化 agent turn：把「思考 + 工具调用 + 结论」渲染为一个归属 agent 的整体，
 // 顺序固定为 思考/工具 在上、结论在中、状态脚注在下（绝不结论在最上）。
-function AgentTurn({ m, showRole = true }: { m: ChatMsg; showRole?: boolean }) {
+const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false }: { m: ChatMsg; showRole?: boolean; copyable?: boolean }) {
   const steps = m.extra?.steps || [];
   const meta = m.extra?.meta;
   // 结论 = LLM 返回内容（B9）：若与最后一条 message step 同源则不重复渲染，
   // 否则以普通 MessageBubble 追加。不再用独立的「最终结果」醒目卡片。
+  const lastMsg = [...steps].reverse().find((s) => s.type === "message") as ProcessItem | undefined;
+  const showText = m.text && !(lastMsg && (lastMsg.content || "") === m.text) ? m.text : "";
+  // 复制图标只挂本 turn 的结论：有独立结论气泡则挂它，否则挂最后一个 message step
+  const lastMsgIdx = steps.reduce((acc, s, i) => (s.type === "message" ? i : acc), -1);
   return (
     <Box sx={{ mb: showRole ? 1.5 : 0.25, display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
       {/* 角色标签由分组统一渲染，此处不再单独渲染 */}
       <Box sx={{ width: "100%" }}>
         {steps.map((s, i) => {
           if (s.type === "thinking") return <ThinkBlock key={`a${i}`} item={s as ProcessItem} />;
-          if (s.type === "message") return <MessageBubble key={`a${i}`} item={s as ProcessItem} />;
+          if (s.type === "message")
+            return <MessageBubble key={`a${i}`} item={s as ProcessItem} copyable={copyable && !showText && i === lastMsgIdx} />;
           if (s.type === "tool_call") return <ToolCallCard key={`a${i}`} item={s as ProcessItem} />;
           return null;
         })}
       </Box>
       {/* B9：最终结果=LLM 返回内容。与最后一条 message step 同源时不重复渲染；不同则普通气泡追加 */}
-      {(() => {
-        const lastMsg = [...steps].reverse().find((s) => s.type === "message") as ProcessItem | undefined;
-        const showText = m.text && !(lastMsg && (lastMsg.content || "") === m.text) ? m.text : "";
-        return showText ? (
-          <MessageBubble item={{ type: "message", content: showText, model: lastMsg?.model } as ProcessItem} />
-        ) : null;
-      })()}
+      {showText ? (
+        <MessageBubble
+          item={{ type: "message", content: showText, model: lastMsg?.model } as ProcessItem}
+          copyable={copyable}
+        />
+      ) : null}
       {meta ? (
         <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
           ✅ 完成：success={meta.success ? "True" : "False"} steps={String(meta.steps)} escalated={String(meta.escalated)} collected={String(meta.collected)}
@@ -336,7 +385,7 @@ function AgentTurn({ m, showRole = true }: { m: ChatMsg; showRole?: boolean }) {
       ) : null}
     </Box>
   );
-}
+});
 
 function kindColor(kind: string): "default" | "primary" | "secondary" | "error" | "success" | "warning" {
   if (kind === "llm_error") return "error";
@@ -431,6 +480,19 @@ export default function Chat() {
     return items;
   }, [messages, processLogs]);
 
+  // 最后一条「回复」的位置：复制图标只挂在这里，更早的回复不再重复挂图标。
+  // 且只在任务执行完成后挂：流式期间（实时口播还在过程流里）、中途停止后残留的
+  // 过程流、断流卡 running，都不会出现按钮——避免回答过程中突然多一个图标。
+  const lastReplyIdx = useMemo(() => {
+    if (running) return -1;
+    for (let i = timeline.length - 1; i >= 0; i -= 1) {
+      const it = timeline[i];
+      if ("type" in it) continue; // 过程流（实时口播/思考/工具）不算「已完成的回复」
+      if (it.role === "agent" || it.role === "assistant") return i;
+    }
+    return -1;
+  }, [timeline, running]);
+
   // 滚动策略（2026-09-27）：贴底跟随 + 任务切换瞬时置底，SSE 流式不打断用户上翻
   const timelineViewportRef = useRef<HTMLDivElement | null>(null);
   const pinnedRef = useRef(true);
@@ -497,7 +559,6 @@ export default function Chat() {
 
   return (
     <Box sx={{ display: "flex", height: "100%", width: "100%", minHeight: 0, overflow: "hidden", bgcolor: "background.default" }}>
-      <style>{`@keyframes omni-blink{0%,100%{opacity:1}50%{opacity:0}}`}</style>
       {/* 左：对话区 */}
       <Box
         sx={{
@@ -548,14 +609,14 @@ export default function Chat() {
                 if (it.type === "thinking")
                   node = <ThinkBlock item={it} streaming={running && isLast} />;
                 else if (it.type === "message")
-                  node = <MessageBubble item={it} streaming={running && isLast} showRole={groupStart} />;
+                  node = <MessageBubble item={it} showRole={groupStart} copyable={i === lastReplyIdx} />;
                 else
                   node = <ToolCallCard item={it} />;
               } else if ((it.role === "agent" || it.role === "assistant") && it.extra?.steps?.length) {
                 // agent 轮若携带结构化 steps，渲染为「思考 + 工具 + 结论」一体的 agent turn
-                node = <AgentTurn m={it} showRole={groupStart} />;
+                node = <AgentTurn m={it} showRole={groupStart} copyable={i === lastReplyIdx} />;
               } else {
-                node = <MsgRow m={it} showRole={groupStart} />;
+                node = <MsgRow m={it} showRole={groupStart} copyable={i === lastReplyIdx} />;
               }
 
               return (

@@ -5,3 +5,13 @@ datasets>=2.16.0
 trl>=0.8.0
 accelerate>=0.26.0
 bitsandbytes>=0.43.0
+
+# ── 重型 / 历史依赖（运行时已不再加载，仅为可选链路保留） ────────────────
+# 这些包从主 requirements.txt 移来：当前运行时不再 import 它们，
+# 已装环境也无需卸载；新环境若不需要训练/实验可直接跳过。
+# - torch：OCR 已改用 RapidOCR(ONNXRuntime)，运行时不再加载；
+#   （曾因 EasyOCR 触发 import torch，把 CUDA 运行时拖进后端进程，RSS 130MB→4.5GB）
+torch>=2.1.0
+# - easyocr / ultralytics：代码已零引用（OCR 走 RapidOCR，YOLO 从未启用）
+easyocr>=1.7.1
+ultralytics>=8.4.0

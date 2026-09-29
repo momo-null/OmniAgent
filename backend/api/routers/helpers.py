@@ -32,6 +32,34 @@ CONFIG_PATH = ROOT / "config.yaml"
 _traj_cursor: Dict[str, Any] = {}
 _cursor_lock = threading.Lock()
 
+# SSE 连接计数（纯计数，供 /api/runtime/memory 诊断判断 _stream_gen 协程是否被回收）
+_sse_open_n = 0
+_sse_n_lock = threading.Lock()
+
+
+def sse_open() -> None:
+    global _sse_open_n
+    with _sse_n_lock:
+        _sse_open_n += 1
+
+
+def sse_close() -> None:
+    global _sse_open_n
+    with _sse_n_lock:
+        _sse_open_n -= 1
+
+
+def sse_connections() -> int:
+    with _sse_n_lock:
+        return _sse_open_n
+
+
+def live_stats() -> Dict[str, Dict[str, list]]:
+    """live 过程快照条目快照（浅拷贝引用，仅用于统计条目数与体积）。"""
+    with _live_lock:
+        return {tid: {ch: list(d.values()) for ch, d in box.items()}
+                for tid, box in _LIVE_SNAPSHOT.items()}
+
 def _task_store():
     from omni_core.local.task_store import TaskStore
     return TaskStore

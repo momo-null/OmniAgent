@@ -31,6 +31,8 @@ from backend.api.routers.helpers import (
     _trajectory_dir,
     _try_start_task,
     asyncio,
+    sse_close,
+    sse_open,
     clear_live_snapshot,
     config,
     json,
@@ -292,6 +294,7 @@ async def _stream_gen(task_id: str = ""):
     时退化为空全局 outbox（兼容）。
     """
     sub_id = task_id or "_global"
+    sse_open()
     try:
         while True:
             # 全局订阅透明跟随当前运行中的 task，消除订阅竞态丢事件
@@ -385,6 +388,8 @@ async def _stream_gen(task_id: str = ""):
             await asyncio.sleep(0.3)
     except asyncio.CancelledError:
         return
+    finally:
+        sse_close()
 
 @router.get("/live")
 async def live(task_id: str = ""):

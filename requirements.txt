@@ -10,13 +10,12 @@ mss>=9.0.1
 # 键鼠控制
 PyAutoGUI>=0.9.54
 
-# 视觉模型
-easyocr>=1.7.1
-ultralytics>=8.4.0
+# 视觉 / OCR
+# OCR 用 RapidOCR（ONNXRuntime，CPU，约 200MB）。已弃用 EasyOCR：它依赖 torch，
+# 一 import 就把 CUDA 运行时拖进后端进程（实测 RSS 130MB → 4.5GB 且不释放）。
+# 不用的重型包（torch / easyocr / ultralytics）已移到 requirements-train.txt。
+rapidocr-onnxruntime>=1.4.0
 opencv-python>=4.8.0
-
-# 深度学习基础
-torch>=2.1.0
 
 # 状态机编排（LangGraph：Send 并发扇出 + update_state 软注入；Agent 循环归 openai-agents）
 langgraph>=0.0.38

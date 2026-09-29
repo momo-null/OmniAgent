@@ -9,7 +9,7 @@ from fastapi import APIRouter
 
 from backend.api.routers import (
     helpers, chat_runtime, tools_api, memory_api, signals_api, tasks_api,
-    snapshot_api, approvals_api,
+    snapshot_api, approvals_api, diagnostics_api,
 )
 
 router = APIRouter(prefix="/api/runtime", tags=["runtime"])
@@ -20,6 +20,7 @@ router.include_router(signals_api.router)
 router.include_router(tasks_api.router)
 router.include_router(snapshot_api.router)
 router.include_router(approvals_api.router)
+router.include_router(diagnostics_api.router)
 
 # 兼容 re-export：保留原模块暴露的全部模块级名（外部零改动）
 from backend.api.routers.helpers import (  # noqa: F401
@@ -58,4 +59,7 @@ from backend.api.routers.tasks_api import (  # noqa: F401
 )
 from backend.api.routers.snapshot_api import (  # noqa: F401
     get_skills, snapshot,
+)
+from backend.api.routers.diagnostics_api import (  # noqa: F401
+    memory_diagnostics,
 )

@@ -79,6 +79,15 @@ async def lifespan(app: FastAPI):
         logger.info("全局数据根: %s", runtime_paths.global_omni())
     except Exception as e:  # 建目录失败不应阻断启动
         logger.warning("启动预建全局目录失败（已忽略）: %s", e)
+    # 栈看门狗：独立守护线程定期写「RSS + 全线程栈」到 ~/.omniagent/logs/stackwatch*.log。
+    # 用于事后取证——进程被拖垮（HTTP 全挂）时诊断端点也访问不了，只能靠落盘快照。
+    # 关闭：OMNI_STACK_WATCH=0
+    try:
+        from backend.services.stack_watch import start_stack_watch
+        if start_stack_watch():
+            logger.info("栈看门狗已启动（~/.omniagent/logs/stackwatch.log）")
+    except Exception as e:  # 看门狗失败不阻断启动
+        logger.warning("启动栈看门狗失败（已忽略）: %s", e)
     # S2 审批后端：注册 SSE sink（未注册时内核回落 AutoDenySink，fail-closed）
     try:
         from backend.services.approvals import install_approval_sink
