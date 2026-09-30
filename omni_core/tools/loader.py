@@ -56,6 +56,8 @@ _MODULE_PREFIX = "_omni_plugin_"
 #: 进程内装载状态（幂等依据 / 取模块句柄）
 _loaded_packages: Dict[str, str] = {}
 _loaded_modules: Dict[str, Any] = {}
+#: 首次装载时各包新增的工具名（幂等路径「归属自愈」用，见 _load_one / load_plugins）
+_loaded_tools: Dict[str, List[str]] = {}
 _last_report: Optional["LoadReport"] = None
 
 #: 默认插件根目录（相对仓库根，不受 cwd 影响）
@@ -143,6 +145,14 @@ def load_plugins(cfg: Optional[Dict[str, Any]] = None, ctx: Optional[PluginConte
                 except Exception as e:
                     report.fail(name, f"startup 钩子失败: {type(e).__name__}: {e}")
                     continue
+                # 归属自愈：startup 可能经「注销 → 重注册」把工具回退为装饰器默认值
+                # （source=core，如视觉插件 _ensure_registered 重跑模块体）。归属是 loader
+                # 的职责——按首次装载记录的工具名单恢复 unit/source，对全部插件生效。
+                for tool_name in _loaded_tools.get(name, []):
+                    p = TOOL_REGISTRY.get(tool_name)
+                    if p is not None:
+                        p.unit = name
+                        p.source = "plugin"
                 report.skip(name, "已装载（幂等跳过 import/注册）")
                 continue
             manifest = _read_manifest(directory, name)
@@ -327,6 +337,7 @@ def _load_one(
 
     _loaded_packages[name] = module_name
     _loaded_modules[name] = module
+    _loaded_tools[name] = added
     report.loaded.append(name)
 
 
