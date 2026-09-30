@@ -3,7 +3,7 @@
 // - 档位随 run 快照生效——改动不影响进行中的 run，下次 run 生效；
 // - 允许根只决定「写」的放行区（~/.omniagent 自身永远拒绝，任何档位都不例外）；
 // - 审计只读（门的干预才记录；agent 不可触达）。
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -76,26 +76,43 @@ export default function SecurityTab() {
     }).catch(() => {});
   };
 
-  const addRoot = () => {
-    const v = newRoot.trim();
-    if (!v || roots.includes(v)) return;
-    setRoots([...roots, v]);
-    setNewRoot("");
-  };
-
-  const handleSave = async () => {
+  // 失焦/勾选即保存（dirty 检查，无变化不提交）；Radio 切换与根增删即时生效
+  const dirtyRef = useRef(false);
+  const save = async (overrides: Record<string, unknown> = {}) => {
+    if (!dirtyRef.current) return;
+    dirtyRef.current = false;
     setError(""); setSaved("");
+    const s = { mode, roots, waitSeconds, ...overrides } as {
+      mode: string; roots: string[]; waitSeconds: number;
+    };
     try {
       await settingsApi.put({
         security: {
-          mode,
-          allow_write_roots: roots,
-          approval: { wait_seconds: waitSeconds >= 0 ? waitSeconds : 600 },
+          mode: s.mode,
+          allow_write_roots: s.roots,
+          approval: { wait_seconds: s.waitSeconds >= 0 ? s.waitSeconds : 600 },
           audit: auditOn,
         },
       });
-      setSaved("已保存到 ~/.omniagent/config.yaml（变更自下次运行生效）");
-    } catch (e) { setError((e as Error).message); }
+      setSaved("已保存（变更自下次运行生效）");
+    } catch (e) { dirtyRef.current = true; setError((e as Error).message); }
+  };
+
+  const addRoot = () => {
+    const v = newRoot.trim();
+    if (!v || roots.includes(v)) return;
+    const next = [...roots, v];
+    dirtyRef.current = true;
+    setRoots(next);
+    setNewRoot("");
+    void save({ roots: next });
+  };
+
+  const removeRoot = (r: string) => {
+    const next = roots.filter((x) => x !== r);
+    dirtyRef.current = true;
+    setRoots(next);
+    void save({ roots: next });
   };
 
   return (
@@ -109,7 +126,7 @@ export default function SecurityTab() {
           各任务独立记录在 task.json，跟随当前任务切换。
         </Alert>
         <FormControl>
-          <RadioGroup row value={mode} onChange={(e) => setMode(e.target.value)}>
+          <RadioGroup row value={mode} onChange={(e) => { const v = e.target.value; dirtyRef.current = true; setMode(v); void save({ mode: v }); }}>
             <FormControlLabel value="standard" control={<Radio />} label="标准（弹卡审批）" />
             <FormControlLabel value="read_only" control={<Radio />} label="只读（自动拒绝）" />
           </RadioGroup>
@@ -117,7 +134,8 @@ export default function SecurityTab() {
         <TextField
           label="审批等待上限（秒，0 = 无限等，超时按拒绝处理）" type="number"
           value={waitSeconds} inputProps={{ min: 0 }}
-          onChange={(e) => setWaitSeconds(Math.max(0, Number(e.target.value) || 0))} />
+          onChange={(e) => { dirtyRef.current = true; setWaitSeconds(Math.max(0, Number(e.target.value) || 0)); }}
+          onBlur={() => void save()} />
         <Box>
           <Typography variant="body2" gutterBottom>允许写入的根（任务临时目录之外；路径围栏的写入放行区）</Typography>
           <Stack direction="row" spacing={1}>
@@ -128,7 +146,7 @@ export default function SecurityTab() {
           </Stack>
           <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: "wrap", gap: 0.5 }}>
             {roots.map((r) => (
-              <Chip key={r} label={r} size="small" onDelete={() => setRoots(roots.filter((x) => x !== r))} />
+              <Chip key={r} label={r} size="small" onDelete={() => removeRoot(r)} />
             ))}
             {roots.length === 0 && (
               <Typography variant="caption" color="text.secondary">
@@ -137,12 +155,9 @@ export default function SecurityTab() {
             )}
           </Stack>
         </Box>
-        <Stack direction="row" justifyContent="space-between" alignItems="center">
-          <Button variant="contained" onClick={handleSave}>保存</Button>
-          <Typography variant="caption" color="text.secondary">审计：{auditOn ? "开启" : "关闭"}</Typography>
-        </Stack>
-        {saved && <Alert severity="success">{saved}</Alert>}
-        {error && <Alert severity="error">{error}</Alert>}
+        <Typography variant="caption" color="text.secondary">审计：{auditOn ? "开启" : "关闭"} ｜ 本页设置失焦/勾选即保存</Typography>
+        {saved && <Alert severity="success" onClose={() => setSaved("")}>{saved}</Alert>}
+        {error && <Alert severity="error" onClose={() => setError("")}>{error}</Alert>}
       </Stack>
 
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>

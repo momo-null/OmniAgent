@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Box, TextField, Button, Alert, Typography, Chip, Stack,
   List, ListItemButton, ListItemText, Divider, Drawer, IconButton,
@@ -39,7 +39,10 @@ export default function MemoryTab() {
     refresh();
   }, []);
 
-  const handleSave = async () => {
+  const dirtyRef = useRef(false);
+  const save = async () => {
+    if (!dirtyRef.current) return;
+    dirtyRef.current = false;
     setSaved("");
     setError("");
     try {
@@ -47,6 +50,7 @@ export default function MemoryTab() {
       setSaved("已保存长期记忆，并已重生成注入视图");
       refresh();
     } catch (e) {
+      dirtyRef.current = true;
       setError((e as Error).message);
     }
   };
@@ -123,12 +127,11 @@ export default function MemoryTab() {
         maxRows={22}
         placeholder={"# Long-term Memory\n\n## 事实\n- \n\n## 经验\n- \n"}
         value={master}
-        onChange={(e) => setMaster(e.target.value)}
+        onChange={(e) => { dirtyRef.current = true; setMaster(e.target.value); }}
+        onBlur={() => void save()}
+        helperText="失焦即保存"
         sx={{ "& textarea": { fontFamily: "monospace", fontSize: 13 } }}
       />
-      <Button variant="contained" onClick={handleSave} sx={{ mt: 1 }}>
-        保存记忆
-      </Button>
 
       <Divider sx={{ my: 2 }} />
 

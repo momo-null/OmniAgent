@@ -3,8 +3,6 @@ import {
   Alert,
   Box,
   Button,
-  Card,
-  CardContent,
   Chip,
   Divider,
   IconButton,
@@ -123,8 +121,7 @@ export default function ModelProviders() {
   };
 
   return (
-    <Card variant="outlined" sx={{ mb: 2 }}>
-      <CardContent>
+    <Paper variant="outlined" sx={{ mb: 2, p: 2 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center">
           <Stack direction="row" spacing={0.5} alignItems="center">
             <Typography variant="subtitle2">在线模型</Typography>
@@ -252,7 +249,6 @@ export default function ModelProviders() {
             </MenuItem>
           ))}
         </Menu>
-      </CardContent>
-    </Card>
+    </Paper>
   );
 }

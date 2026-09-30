@@ -1,14 +1,15 @@
-import { useEffect, useState } from "react";
-import { Box, TextField, Button, Alert, Typography, Divider } from "@mui/material";
+import { useEffect, useRef, useState } from "react";
+import { Box, TextField, Alert, Typography, Divider } from "@mui/material";
 import { profileApi } from "../../api/client";
 
-// 用户画像设置：编辑 user_profile.md 正文 + 查看自动蒸馏的候选区
+// 用户画像设置：编辑 user_profile.md 正文 + 查看自动蒸馏的候选区；失焦即保存
 export default function ProfileTab() {
   const [profile, setProfile] = useState("");
   const [candidates, setCandidates] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [saved, setSaved] = useState("");
   const [error, setError] = useState("");
+  const dirtyRef = useRef(false);
 
   const refresh = () =>
     profileApi
@@ -24,13 +25,16 @@ export default function ProfileTab() {
     refresh();
   }, []);
 
-  const handleSave = async () => {
+  const save = async () => {
+    if (!dirtyRef.current) return;
+    dirtyRef.current = false;
     setSaved("");
     setError("");
     try {
       await profileApi.update(profile);
       setSaved("已保存用户画像，下一轮对话注入");
     } catch (e) {
+      dirtyRef.current = true;
       setError((e as Error).message);
     }
   };
@@ -51,12 +55,11 @@ export default function ProfileTab() {
         maxRows={20}
         placeholder={"# User Profile\n\n## 基本信息\n- 称呼：\n\n## 偏好\n- \n"}
         value={profile}
-        onChange={(e) => setProfile(e.target.value)}
+        onChange={(e) => { dirtyRef.current = true; setProfile(e.target.value); }}
+        onBlur={() => void save()}
+        helperText="失焦即保存"
         sx={{ "& textarea": { fontFamily: "monospace", fontSize: 13 } }}
       />
-      <Button variant="contained" onClick={handleSave} sx={{ mt: 1 }}>
-        保存画像
-      </Button>
       {saved && (
         <Alert severity="success" sx={{ mt: 1 }}>
           {saved}

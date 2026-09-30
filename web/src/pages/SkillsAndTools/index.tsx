@@ -16,9 +16,10 @@ import {
   Switch,
   Radio,
   FormControlLabel,
-  Divider,
+  Paper,
   Tooltip,
 } from "@mui/material";
+import { useTheme } from "@mui/material/styles";
 import BoltIcon from "@mui/icons-material/Bolt";
 import DeleteIcon from "@mui/icons-material/Delete";
 import AddIcon from "@mui/icons-material/Add";
@@ -71,7 +72,7 @@ function SkillsTab() {
               <ListItemText
                 primary={
                   <Stack direction="row" spacing={1} alignItems="center">
-                    <span>{s.name}</span>
+                    <Typography variant="body2" component="span">{s.name}</Typography>
                     <Chip size="small" label={s.status} />
                     <Typography variant="caption" color="text.secondary">{s.success_count}/{s.total_uses}</Typography>
                   </Stack>
@@ -154,52 +155,59 @@ function ToolsTab() {
         <b>工具</b>（只读）。切换 / 开关重启后生效。
       </Alert>
 
-      <Typography variant="subtitle2" gutterBottom>环境（单选）</Typography>
-      <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
-        {data.environments.map((e) => (
-          <FormControlLabel key={e.kind} sx={{ mr: 0 }}
-            control={<Radio size="small" disabled={busy} checked={e.active}
-              onChange={() => { if (!e.active) void setEnv(e.kind); }} />}
-            label={<Chip size="small" variant="outlined" label={e.title}
-              color={e.active ? "primary" : "default"}
-              sx={{ opacity: e.active ? 1 : 0.6 }} />} />
-        ))}
-      </Stack>
+      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+        <Typography variant="subtitle2" gutterBottom>环境（单选）</Typography>
+        <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+          {data.environments.map((e) => (
+            <FormControlLabel key={e.kind} sx={{ mr: 0 }}
+              control={<Radio size="small" disabled={busy} checked={e.active}
+                onChange={() => { if (!e.active) void setEnv(e.kind); }} />}
+              label={<Chip size="small" variant={e.active ? "filled" : "outlined"} label={e.title}
+                color={e.active ? "primary" : "default"}
+                sx={{ opacity: e.active ? 1 : 0.6 }} />} />
+          ))}
+        </Stack>
+      </Paper>
 
-      <Typography variant="subtitle2" gutterBottom>插件（各自一个开关）</Typography>
-      <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
-        {data.plugins.map((p) => (
-          <FormControlLabel key={p.name} sx={{ mr: 0 }}
-            control={<Switch size="small" disabled={busy} checked={p.enabled}
-              onChange={(_e, v) => void togglePlugin(p.name, v)} />}
-            label={<Tooltip title={p.description || p.name}>
-              <Chip size="small" variant="outlined" label={p.title}
-                color={p.enabled ? "primary" : "default"}
-                sx={{ opacity: p.enabled ? 1 : 0.6 }} />
-            </Tooltip>} />
-        ))}
-        {data.plugins.length === 0 && (
-          <Typography variant="caption" color="text.secondary">（无插件）</Typography>
-        )}
-      </Stack>
+      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+        <Typography variant="subtitle2" gutterBottom>插件（各自一个开关）</Typography>
+        <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+          {data.plugins.map((p) => (
+            <FormControlLabel key={p.name} sx={{ mr: 0 }}
+              control={<Switch size="small" disabled={busy} checked={p.enabled}
+                onChange={(_e, v) => void togglePlugin(p.name, v)} />}
+              label={<Tooltip title={p.description || p.name}>
+                <Chip size="small" variant={p.enabled ? "filled" : "outlined"} label={p.title}
+                  color={p.enabled ? "primary" : "default"}
+                  sx={{ opacity: p.enabled ? 1 : 0.6 }} />
+              </Tooltip>} />
+          ))}
+          {data.plugins.length === 0 && (
+            <Typography variant="caption" color="text.secondary">（无插件）</Typography>
+          )}
+        </Stack>
+      </Paper>
 
-      {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError("")}>{error}</Alert>}
       {saved && <Alert severity="success" sx={{ mb: 1 }}>{saved}</Alert>}
 
-      <Typography variant="subtitle2" gutterBottom>当前可用工具（只读）</Typography>
-      <Stack spacing={0.5}>
-        {data.tools.map((t) => (
-          <Stack key={t.name} direction="row" alignItems="center" spacing={1}>
-            <Tooltip title={t.description || t.name}>
-              <Chip size="small" variant="outlined" label={t.name}
-                color={t.source === "mcp" ? "secondary" : (t.source === "plugin" ? "success" : "primary")} />
-            </Tooltip>
-            <Chip size="small" variant="outlined" label={t.source} />
-            {t.source === "env" && <Chip size="small" variant="outlined" label={t.unit} />}
-            {t.source === "mcp" && t.server && <Chip size="small" label={t.server} variant="outlined" />}
-          </Stack>
-        ))}
-      </Stack>
+      <Paper variant="outlined" sx={{ p: 2 }}>
+        <Typography variant="subtitle2" gutterBottom>当前可用工具（只读）</Typography>
+        <Stack spacing={0.5}>
+          {data.tools.map((t) => (
+            <Stack key={t.name} direction="row" alignItems="center" spacing={1}>
+              <Tooltip title={t.description || t.name}>
+                <Chip size="small" variant="outlined" label={t.name}
+                  color={t.source === "mcp" ? "secondary" : (t.source === "plugin" ? "success" : "primary")} />
+              </Tooltip>
+              <Chip size="small" variant="outlined" label={t.source} />
+              {/* unit = 提供者标识：环境 kind / 插件名；core 源与 source 重复不显示 */}
+              {(t.source === "env" || t.source === "plugin") && <Chip size="small" variant="outlined" label={t.unit} />}
+              {t.source === "mcp" && t.server && <Chip size="small" label={t.server} variant="outlined" />}
+            </Stack>
+          ))}
+        </Stack>
+      </Paper>
     </Box>
   );
 }
@@ -274,7 +282,7 @@ function McpTab() {
       )}
 
       {servers.map((s, i) => (
-        <Box key={i} sx={{ mb: 2 }}>
+        <Paper key={i} variant="outlined" sx={{ mb: 2, p: 2 }}>
           <Stack direction="row" spacing={1} alignItems="center">
             <TextField
               size="small"
@@ -326,8 +334,7 @@ function McpTab() {
               onChange={(e) => update(i, { url: e.target.value })}
             />
           </Stack>
-          <Divider sx={{ mt: 2 }} />
-        </Box>
+        </Paper>
       ))}
 
       <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
@@ -356,7 +363,7 @@ export default function SkillsAndTools() {
   const [tab, setTab] = useState(0);
   return (
     <Box sx={{ p: 2, pt: 1.5, maxWidth: 960 }}>
-      <Typography variant="h6" gutterBottom>技能与工具</Typography>
+      <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>技能与工具</Typography>
       <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab label="Skills" />
         <Tab label="Tools" />
@@ -376,7 +383,9 @@ function fmtPct(v?: number | null) {
 }
 
 // 轻量 SVG 衰减曲线（无第三方图表依赖）
+// 配色全部取自主题 token：阈值线=error（负状态语义）、曲线=primary（与全站强调同源）、坐标轴=divider（无色相宣言）
 function DecayCurve({ data, threshold }: { data: number[]; threshold: number }) {
+  const theme = useTheme();
   const W = 460, H = 160, pad = 24;
   const n = data.length;
   const x = (i: number) => pad + (n <= 1 ? 0 : (i / (n - 1)) * (W - 2 * pad));
@@ -386,13 +395,13 @@ function DecayCurve({ data, threshold }: { data: number[]; threshold: number }) 
   return (
     <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, p: 1 }}>
       <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
-        <line x1={pad} y1={ty} x2={W - pad} y2={ty} stroke="#e57373" strokeDasharray="4 4" />
-        <text x={W - pad} y={ty - 4} fontSize="10" fill="#e57373" textAnchor="end">
+        <line x1={pad} y1={ty} x2={W - pad} y2={ty} stroke={theme.palette.error.main} strokeDasharray="4 4" />
+        <text x={W - pad} y={ty - 4} fontSize="10" fill={theme.palette.error.main} textAnchor="end">
           阈值 {fmtPct(threshold)}
         </text>
-        <polyline points={pts} fill="none" stroke="#42a5f5" strokeWidth="2" />
-        <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="#999" />
-        <line x1={pad} y1={pad} x2={pad} y2={H - pad} stroke="#999" />
+        <polyline points={pts} fill="none" stroke={theme.palette.primary.main} strokeWidth="2" />
+        <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke={theme.palette.divider} />
+        <line x1={pad} y1={pad} x2={pad} y2={H - pad} stroke={theme.palette.divider} />
       </svg>
     </Box>
   );

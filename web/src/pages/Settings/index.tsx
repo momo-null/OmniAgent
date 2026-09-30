@@ -4,8 +4,6 @@ import {
   Tabs,
   Tab,
   Typography,
-  Card,
-  CardContent,
   Stack,
   Alert,
   Chip,
@@ -151,7 +149,7 @@ function ModelDetail({ model, draft, setDraft, busy, saving, validateBusy, onSta
   const isBusy = busy === name; const isSaving = saving === name;
   const showValidate = validateResult && validateResult.name === name;
   return (
-    <Card><CardContent>
+    <Paper variant="outlined" sx={{ p: 2 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center">
         <Box>
           <Typography variant="subtitle1">{name} <Chip size="small" label={running ? "运行中" : (model.has_meta ? "已配置" : "默认")} color={running ? "success" : "default"} /></Typography>
@@ -179,7 +177,7 @@ function ModelDetail({ model, draft, setDraft, busy, saving, validateBusy, onSta
           <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", fontFamily: "monospace" }}>{validateResult.reply || "（无回复）"}</Typography>
         </Box>
       )}
-    </CardContent></Card>
+    </Paper>
   );
 }
 
@@ -269,34 +267,34 @@ function ModelTab() {
 
   return (
     <Box>
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
       {saveMsg && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSaveMsg("")}>{saveMsg}</Alert>}
       {/* 在线模型目录（models.json）与本地模型同页：上=在线提供方，下=本地 llama.cpp 模型 */}
       <ModelProviders />
-      <Typography variant="subtitle2" sx={{ mb: 1 }}>本地模型（llama.cpp）</Typography>
-      <Card sx={{ mb: 2 }}><CardContent>
+      {/* 本地模型：一张卡片收编 GPU 监控 + 模型目录扫描 + 操作行（原三漂浮层合并） */}
+      <Paper variant="outlined" sx={{ mb: 2, p: 2 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center">
-          <Typography variant="subtitle2">GPU 监控</Typography>
+          <Typography variant="subtitle2">本地模型（llama.cpp）</Typography>
           <Button size="small" onClick={refresh}>刷新</Button>
         </Stack>
         {gpu && !gpu.error ? (
-          <><Typography variant="body2">{gpu.name}</Typography>
+          <>
+            <Typography variant="body2" sx={{ mt: 1 }}>{gpu.name}</Typography>
             <LinearProgress variant="determinate" value={pct} sx={{ my: 1 }} />
-            <Typography variant="body2">显存 {used.toFixed(0)} / {total.toFixed(0)} MB（{pct.toFixed(1)}%）</Typography></>
-        ) : <Typography variant="body2" color="text.secondary">{gpu?.error ?? "GPU 信息不可用"}</Typography>}
-      </CardContent></Card>
-      <Card sx={{ mb: 2 }}><CardContent>
-        <Stack direction="row" spacing={1} alignItems="center">
+            <Typography variant="caption" color="text.secondary">显存 {used.toFixed(0)} / {total.toFixed(0)} MB（{pct.toFixed(1)}%）</Typography>
+          </>
+        ) : <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{gpu?.error ?? "GPU 信息不可用"}</Typography>}
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1.5 }}>
           <TextField label="模型目录（扫描根目录，失焦自动保存到配置）" size="small" fullWidth value={modelsDir}
             onChange={(e) => setModelsDir(e.target.value)} onBlur={handleDirBlur} />
-          <Button variant="outlined" onClick={refresh}>扫描</Button>
+          <Button size="small" variant="outlined" onClick={refresh}>扫描</Button>
         </Stack>
-      </CardContent></Card>
-      <Stack direction="row" spacing={1} sx={{ mb: 2 }}>
-        <Button variant="outlined" color="secondary" onClick={() => modelApi.stopAll()}>停止全部</Button>
-        <Button variant="outlined" color="error" disabled={busy === "__all__"} onClick={handleKillOrphans}>{busy === "__all__" ? "释放中..." : "强制释放全部"}</Button>
-        <Button variant="outlined" onClick={handleApiTest}>API 连通测试</Button>
-      </Stack>
+        <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+          <Button size="small" variant="outlined" onClick={() => modelApi.stopAll()}>停止全部</Button>
+          <Button size="small" variant="outlined" color="error" disabled={busy === "__all__"} onClick={handleKillOrphans}>{busy === "__all__" ? "释放中..." : "强制释放全部"}</Button>
+          <Button size="small" variant="outlined" onClick={handleApiTest}>API 连通测试</Button>
+        </Stack>
+      </Paper>
       <Box sx={{ display: "flex", gap: 2, alignItems: "flex-start" }}>
         <Paper variant="outlined" sx={{ width: 300, flexShrink: 0, maxHeight: "70vh", overflow: "auto" }}>
           <List dense>
@@ -326,7 +324,7 @@ function ModelTab() {
 function LabelWithTip({ text, desc }: { text: string; desc?: string }) {
   return (
     <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
-      <span>{text}</span>
+      <Typography variant="inherit" component="span">{text}</Typography>
       {desc && (
         <Tooltip title={desc} arrow placement="top">
           <InfoOutlinedIcon sx={{ fontSize: 15, color: "text.disabled", cursor: "help" }} />
@@ -351,33 +349,38 @@ function GeneralTab() {
       if (typeof mem === "boolean") setMemInject(mem);
     }).catch(() => {});
   }, [setMaxSteps]);
-  const handleSave = async () => {
+  // 失焦即保存（dirty 检查，无变化不提交）；Switch 勾选即时生效
+  const dirtyRef = useRef(false);
+  const save = async (memOverride?: boolean) => {
+    if (!dirtyRef.current) return;
+    dirtyRef.current = false;
     setError(""); setSaved("");
     try {
       const v = draft > 0 ? Math.min(draft, 2000) : 40;
+      const m = memOverride ?? memInject;
       await settingsApi.put({
         runtime: {
           default_max_steps: v,
-          knowledge: { memory: { enabled: memInject } },
+          knowledge: { memory: { enabled: m } },
         },
       });
       setMaxSteps(v);
-      setSaved("已保存默认步数上限与记忆注入开关到 ~/.omniagent/config.yaml");
-    } catch (e) { setError((e as Error).message); }
+      setSaved("已保存");
+    } catch (e) { dirtyRef.current = true; setError((e as Error).message); }
   };
   return (
     <Box>
       <Typography variant="subtitle2" gutterBottom>通用</Typography>
-      <Stack spacing={2} sx={{ maxWidth: 360 }}>
+      <Stack spacing={2} sx={{ maxWidth: 480 }}>
         <TextField label={<LabelWithTip text="默认步数上限" desc="单次任务的工具/决策总步数预算，耗尽即停止（budget_exhausted）。前端每次会话默认采用此值；后端 chat 接口未显式传 max_steps 时也会回退到此值。范围 1–2000。" />} type="number" value={draft}
           inputProps={{ min: 1, max: 2000 }}
-          onChange={(e) => setDraft(Math.min(Number(e.target.value) || 40, 2000))} />
-        <FormControlLabel control={<Switch checked={memInject} onChange={(e) => setMemInject(e.target.checked)} />}
+          onChange={(e) => { dirtyRef.current = true; setDraft(Math.min(Number(e.target.value) || 40, 2000)); }}
+          onBlur={() => void save()} />
+        <FormControlLabel control={<Switch checked={memInject} onChange={(e) => { const v = e.target.checked; dirtyRef.current = true; setMemInject(v); void save(v); }} />}
           label={<LabelWithTip text="注入全局记忆摘要 (runtime.knowledge.memory.enabled)" desc="开启后，每轮任务会在系统提示尾部追加全局长期记忆摘要（~/.omniagent/memory 的 memory_summary.md）；关闭则不注入（诚实基线，默认关闭）。" />} />
-        <Button variant="contained" onClick={handleSave} sx={{ alignSelf: "flex-start" }}>保存</Button>
-        {saved && <Alert severity="success">{saved}</Alert>}
-        {error && <Alert severity="error">{error}</Alert>}
-        <Alert severity="info">数据根目录：<code>~/.omniagent/</code>（全局层）。任务资产按 task 平铺存放，不依赖工作目录。</Alert>
+        {saved && <Alert severity="success" onClose={() => setSaved("")}>{saved}</Alert>}
+        {error && <Alert severity="error" onClose={() => setError("")}>{error}</Alert>}
+        <Alert severity="info">数据根目录：<code>~/.omniagent/</code>（全局层）。任务资产按 task 平铺存放，不依赖工作目录。本页设置失焦即保存。</Alert>
       </Stack>
     </Box>
   );
@@ -427,8 +430,13 @@ function OrchestrationTab() {
       if (typeof mit === "number") setMaxInputTokens(mit);
     }).catch(() => {});
   }, []);
-  const handleSave = async () => {
+  // 失焦即保存（dirty 检查，无变化不提交）；Switch 勾选即时生效
+  const dirtyRef = useRef(false);
+  const saveAll = async (overrides: Record<string, unknown> = {}) => {
+    if (!dirtyRef.current) return;
+    dirtyRef.current = false;
     setError(""); setSaved("");
+    const s = { ltEnabled, ltCompress, ...overrides };
     try {
       await settingsApi.put({
         runtime: {
@@ -439,9 +447,9 @@ function OrchestrationTab() {
         brain: {
           maxInputTokens: maxInputTokens || 0,
           long_task: {
-            enabled: ltEnabled,
+            enabled: s.ltEnabled,
             max_turns: ltMaxTurns || 16,
-            compress: ltCompress,
+            compress: s.ltCompress,
             prune: {
               threshold_chars: pruneThreshold || 0,
               head_chars: pruneHead || 0,
@@ -451,50 +459,60 @@ function OrchestrationTab() {
           },
         },
       });
-      setSaved("已保存编排/长任务配置到 ~/.omniagent/config.yaml");
-    } catch (e) { setError((e as Error).message); }
+      setSaved("已保存");
+    } catch (e) { dirtyRef.current = true; setError((e as Error).message); }
   };
   return (
     <Box>
       <Typography variant="subtitle2" gutterBottom>编排 / 长任务</Typography>
       <Stack spacing={2} sx={{ maxWidth: 480 }}>
         <TextField label={<LabelWithTip text="派发最大轮次 (dispatch.max_rounds)" desc="「派发 → 回收」轮次上限，防止主 agent 无限派发子任务。" />} type="number" value={maxRounds}
-          onChange={(e) => setMaxRounds(Number(e.target.value) || 3)} />
+          onChange={(e) => { dirtyRef.current = true; setMaxRounds(Number(e.target.value) || 3); }}
+          onBlur={() => void saveAll()} />
         <TextField label={<LabelWithTip text="派发最大并发 (dispatch.max_parallel)" desc="单轮最多并发多少个子 agent。" />} type="number" value={maxParallel}
-          onChange={(e) => setMaxParallel(Number(e.target.value) || 4)} />
+          onChange={(e) => { dirtyRef.current = true; setMaxParallel(Number(e.target.value) || 4); }}
+          onBlur={() => void saveAll()} />
         <TextField label={<LabelWithTip text="预算提示触发比例 (long_task.budget_hint_ratio)" desc="任务预算用到该比例时，给 agent 一条「已用 X/Y 步」陈述性提示（仅陈述事实，不催促）。0 = 关闭。" />} type="number" value={budgetRatio}
-          onChange={(e) => setBudgetRatio(Number(e.target.value) || 0.75)} />
+          onChange={(e) => { dirtyRef.current = true; setBudgetRatio(Number(e.target.value) || 0.75); }}
+          onBlur={() => void saveAll()} />
         <TextField label={<LabelWithTip text="分块步数 (runtime.chunk_turns)" desc="SDK 单次 Runner.run 内部步数分块大小；块与块之间做终止/升级检查点。一般保持 50。" />} type="number" value={chunkTurns}
-          onChange={(e) => setChunkTurns(Number(e.target.value) || 50)} />
+          onChange={(e) => { dirtyRef.current = true; setChunkTurns(Number(e.target.value) || 50); }}
+          onBlur={() => void saveAll()} />
 
         <Typography variant="subtitle2" sx={{ mt: 1 }}>单大脑长任务压缩（不启本地模型时生效）</Typography>
-        <FormControlLabel control={<Switch checked={ltEnabled} onChange={(e) => setLtEnabled(e.target.checked)} />}
+        <FormControlLabel control={<Switch checked={ltEnabled} onChange={(e) => { const v = e.target.checked; dirtyRef.current = true; setLtEnabled(v); void saveAll({ ltEnabled: v }); }} />}
           label={<LabelWithTip text="启用长任务压缩 (brain.long_task.enabled)" desc="未在「模型」页给子 agent（worker）选模型时，主模型单大脑长跑会按间隔压缩历史；关闭则不做压缩。" />} />
         <TextField label={<LabelWithTip text="压缩间隔 (brain.long_task.max_turns)" desc="单大脑路径下，每跑 N 轮把历史压缩成一段摘要，防止上下文溢出。用完不会停任务，只控制压缩频率。" />} type="number" value={ltMaxTurns}
-          onChange={(e) => setLtMaxTurns(Number(e.target.value) || 16)} />
-        <FormControlLabel control={<Switch checked={ltCompress} onChange={(e) => setLtCompress(e.target.checked)} />}
+          onChange={(e) => { dirtyRef.current = true; setLtMaxTurns(Number(e.target.value) || 16); }}
+          onBlur={() => void saveAll()} />
+        <FormControlLabel control={<Switch checked={ltCompress} onChange={(e) => { const v = e.target.checked; dirtyRef.current = true; setLtCompress(v); void saveAll({ ltCompress: v }); }} />}
           label={<LabelWithTip text="调用主模型生成摘要 (brain.long_task.compress)" desc="开启：压缩时调用主模型生成中文摘要（更省上下文）。关闭：退化为截断兜底，不消耗额外调用。" />} />
 
         <Divider />
         <Typography variant="subtitle2" sx={{ mt: 1 }}>上下文治理（高级）</Typography>
         <TextField label={<LabelWithTip text="模型上下文上限 (brain.maxInputTokens)" desc="该模型的输入 Token 上限。填 0 = 关闭 Model 适配层粘性压缩；>0 时按此上限动态计算压缩阈值（前缀复用，省 token）。" />} type="number" value={maxInputTokens}
           helperText="缺省 300000（代码内置；1M 上下文模型可填 1000000）；填 0 = 显式关闭粘性压缩"
-          onChange={(e) => setMaxInputTokens(Number(e.target.value) || 0)} />
+          onChange={(e) => { dirtyRef.current = true; setMaxInputTokens(Number(e.target.value) || 0); }}
+          onBlur={() => void saveAll()} />
         <TextField label={<LabelWithTip text="粘性压缩尾部保留比例 (brain.long_task.retain_ratio)" desc="超阈值时，尾部会话保留「上限 × 该比例」的 Token，其余压成摘要。留空/0 = 取默认 0.5。" />} type="number" value={retainRatio}
           inputProps={{ min: 0, max: 0.9, step: 0.05 }}
-          onChange={(e) => setRetainRatio(Number(e.target.value) || 0.5)} />
+          onChange={(e) => { dirtyRef.current = true; setRetainRatio(Number(e.target.value) || 0.5); }}
+          onBlur={() => void saveAll()} />
         <TextField label={<LabelWithTip text="工具输出修剪阈值 (prune.threshold_chars)" desc="压缩前先把超长的工具输出做首尾截断，避免单个大 output 撑爆上下文。0 = 关闭（零干预）；建议 8192 左右。" />} type="number" value={pruneThreshold}
-          onChange={(e) => setPruneThreshold(Number(e.target.value) || 0)} />
+          onChange={(e) => { dirtyRef.current = true; setPruneThreshold(Number(e.target.value) || 0); }}
+          onBlur={() => void saveAll()} />
         <TextField label={<LabelWithTip text="修剪保留头部 (prune.head_chars)" desc="超阈值时保留的开头字符数，建议 4096。" />} type="number" value={pruneHead}
-          onChange={(e) => setPruneHead(Number(e.target.value) || 0)} />
+          onChange={(e) => { dirtyRef.current = true; setPruneHead(Number(e.target.value) || 0); }}
+          onBlur={() => void saveAll()} />
         <TextField label={<LabelWithTip text="修剪保留尾部 (prune.tail_chars)" desc="超阈值时保留的结尾字符数（多为结果/报错关键信息），建议 1024。" />} type="number" value={pruneTail}
-          onChange={(e) => setPruneTail(Number(e.target.value) || 0)} />
+          onChange={(e) => { dirtyRef.current = true; setPruneTail(Number(e.target.value) || 0); }}
+          onBlur={() => void saveAll()} />
         <TextField label={<LabelWithTip text="重复失败提醒次数 (runtime.long_task.repeat_guard)" desc="同一工具连续失败达该次数后，下一次请求自动注入一条「换个方案」的提醒（只注入一次）。0 = 关闭，默认 3。" />} type="number" value={repeatGuard}
-          onChange={(e) => setRepeatGuard(Number(e.target.value) || 0)} />
+          onChange={(e) => { dirtyRef.current = true; setRepeatGuard(Number(e.target.value) || 0); }}
+          onBlur={() => void saveAll()} />
 
-        <Button variant="contained" onClick={handleSave} sx={{ alignSelf: "flex-start" }}>保存</Button>
-        {saved && <Alert severity="success">{saved}</Alert>}
-        {error && <Alert severity="error">{error}</Alert>}
+        {saved && <Alert severity="success" onClose={() => setSaved("")}>{saved}</Alert>}
+        {error && <Alert severity="error" onClose={() => setError("")}>{error}</Alert>}
       </Stack>
     </Box>
   );
@@ -516,8 +534,7 @@ function AboutTab() {
         引擎有两条执行路径，同一份配置里只有部分键在对应路径生效——别混：
       </Typography>
 
-      <Card variant="outlined" sx={{ mb: 2 }}>
-        <CardContent>
+      <Paper variant="outlined" sx={{ mb: 2, p: 2 }}>
           <Typography variant="subtitle2">① 分层形态（模型页给 worker 槽位选了模型）</Typography>
           <Typography variant="body2" color="text.secondary" component="div">
             主模型规划 + 子模型执行，支持派发多 agent。<br />
@@ -530,11 +547,9 @@ function AboutTab() {
             </ul>
             <b>brain.long_task.* 在此路径不生效。</b>
           </Typography>
-        </CardContent>
-      </Card>
+      </Paper>
 
-      <Card variant="outlined">
-        <CardContent>
+      <Paper variant="outlined" sx={{ p: 2 }}>
           <Typography variant="subtitle2">② 单主 agent 形态（worker 槽位未选模型时）</Typography>
           <Typography variant="body2" color="text.secondary" component="div">
             主模型自己跑完整任务，无子 agent。<br />
@@ -547,8 +562,7 @@ function AboutTab() {
             </ul>
             <b>编排 · 派发轮次 / 并发在此形态仍生效</b>：派发由主模型自派发执行（并发与上下文隔离仍有价值）。
           </Typography>
-        </CardContent>
-      </Card>
+      </Paper>
     </Box>
   );
 }
@@ -558,7 +572,9 @@ function CompanionTab() {
   const [sub, setSub] = useState(0);
   return (
     <Box>
-      <Tabs value={sub} onChange={(_, v) => setSub(v)} sx={{ mb: 2 }}>
+      {/* 二级 Tabs：字号/高度降一档，与一级 Tabs 形成从属层级 */}
+      <Tabs value={sub} onChange={(_, v) => setSub(v)}
+        sx={{ mb: 2, minHeight: 36, "& .MuiTab-root": { minHeight: 36, py: 0.5, fontSize: 13 } }}>
         <Tab label="角色" />
         <Tab label="画像" />
         <Tab label="记忆" />
