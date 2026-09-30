@@ -4,7 +4,7 @@
 - ``config.yaml``（项目根）：基础/默认配置（依赖项、出厂默认值），可提交、
   可含明文 key 作默认值（但真 key 应移出仓库，见下）。
 - ``~/.omniagent/config.yaml``：**用户全局配置**，启动时 deepMerge 覆盖项目 config。
-  真 API key、``llm.local_as_tool``、``local_model.auto_start`` 只存这里，不进版本库。
+  真 API key、``local_model.auto_start`` 等本机专属项只存这里，不进版本库。
 - 加载顺序：base(项目 config.yaml) ← override(用户 ~/.omniagent/config.yaml)。
 """
 import os

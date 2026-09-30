@@ -33,14 +33,14 @@ RECORD_TOOL_SCHEMA = {
 # ---------------------------------------------------------------------------
 # 元工具 schema（worker 专属 + 收尾）
 # ---------------------------------------------------------------------------
-# 仅在需要时由 tool_loop 附加到工具清单（单大脑 run_task 不加 escalate/verify）：
-#  - escalate：本地执行器判断搞不定时，把现场交回在线大脑。
+# 仅在需要时由 tool_loop 附加到工具清单（主链 run_task 不加 escalate/verify）：
+#  - escalate：子 agent 判断搞不定时，把现场交回主 agent / 编排层。
 #  - verify：  每个动作后校验当前环境是否达成条件；连续失败触发升级。
 ESCALATE_TOOL_SCHEMA = {
     "type": "function",
     "function": {
         "name": "escalate",
-        "description": "当你（本地执行器）判断当前子任务自己搞不定时，调用此工具把现场交回在线大脑重新决策。"
+        "description": "当你（子 agent）判断当前子任务自己搞不定时，调用此工具把现场交回主 agent / 编排层重新决策。"
                        "例如：连续校验失败、遇到未知界面、无法匹配目标、上下文将溢出。",
         "parameters": {
             "type": "object",
@@ -57,7 +57,7 @@ VERIFY_TOOL_SCHEMA = {
     "function": {
         "name": "verify",
         "description": "校验当前环境是否已达成某条件（环境自定的命中语义）。需要确认子任务进展时调用；"
-                       "连续失败会触发升级，把子任务交回在线大脑。",
+                       "连续失败会触发升级，把子任务交回主 agent / 编排层。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -70,7 +70,7 @@ VERIFY_TOOL_SCHEMA = {
     },
 }
 
-# 复用的 task_done schema（两层反思阶段让在线大脑也能 task_done 终止）
+# 复用的 task_done schema（收尾反思阶段让主 agent 也能 task_done 终止）
 TASK_DONE_TOOL_SCHEMA = {
     "type": "function",
     "function": {
@@ -86,7 +86,7 @@ TASK_DONE_TOOL_SCHEMA = {
     },
 }
 
-# worker 专属元工具集合（escalate + verify），由 tool_loop 在两层内层循环附加
+# 子 agent 元工具集合（escalate + verify），由 tool_loop 在子任务内层循环附加
 WORKER_EXTRA_SCHEMAS = [ESCALATE_TOOL_SCHEMA, VERIFY_TOOL_SCHEMA]
 
 

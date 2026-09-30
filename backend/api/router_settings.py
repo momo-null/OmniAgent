@@ -10,13 +10,13 @@
 （去明文 key、跨项目共享）。本路由是 UI 设置面板的唯一写入点。
 
 三通道单一真源（方案 A）：
-- brain（顶层）：planner 大脑
-- runtime.executor（嵌套）：执行器 worker
+- brain（顶层）：主 agent 模型
+- runtime.executor（嵌套）：子 agent 模型（worker 等槽位的缺省注入源）
 - runtime.vision（嵌套）：视觉通道
 - llm.local_as_tool（M9）：本地模型以工具形态暴露及其边界声明
 
 M9：取消 runtime.mode 三态——主模型可以在线也可以直接配本地端点，
-是否另起本地模型由 runtime.executor（子 agent 模型）与 llm.local_as_tool 决定。
+是否分层由 runtime.executor（子 agent 模型）与 llm.local_as_tool 决定。
 
 前端按此嵌套结构读写；不再接受顶层 executor/vision 镜像。
 """

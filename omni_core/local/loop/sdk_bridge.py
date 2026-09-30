@@ -156,6 +156,7 @@ class SdkBridgeMixin:
         retain_ratio: float = 0.0,
         history_items: Optional[List[Dict[str, str]]] = None,
         todo_store: Any = None,
+        available_slots: Optional[List[str]] = None,
         skill_catalog: Optional[str] = None,
     ) -> Dict[str, Any]:
         """用 Agents SDK 的 Runner 跑一个子任务（循环/FC/派发/回填全归框架）。
@@ -408,6 +409,7 @@ class SdkBridgeMixin:
             # T3.2：粘性压缩（max_input_tokens>0）同样需要摘要回调，与旧 chunk 压缩共用
             summarize=_summarize if (compress_after or max_input_tokens) else None,
             allow_dispatch=allow_dispatch,
+            available_slots=available_slots,
             budget_hint_ratio=budget_hint_ratio,
             history_keep=history_keep,
             compress_threshold=compress_threshold,
@@ -435,7 +437,7 @@ class SdkBridgeMixin:
 
         # --- L2 统计与终态（不介入框架循环） ---
         # F1.2：指标回填——每次模型调用 +1（on_llm_end 钩子记账，跨块累计）；
-        # 在线大脑（role=brain）才计 brain_calls，子 agent（executor）不计入（参照旧循环语义）。
+        # 主链（role=brain）才计 brain_calls，子 agent（executor）不计入（参照旧循环语义）。
         _llm = int(res.get("llm_calls", 0) or 0)
         self._decision_steps += _llm
         if role == "brain":

@@ -102,8 +102,13 @@ def parse_dispatch_items(raw: Any) -> List[Dict[str, str]]:
             except Exception:
                 item = {"desc": item, "done_when": ""}
         if isinstance(item, dict) and (item.get("desc") or item.get("done_when")):
-            out.append({"desc": str(item.get("desc", "")),
-                        "done_when": str(item.get("done_when", ""))})
+            entry = {"desc": str(item.get("desc", "")),
+                     "done_when": str(item.get("done_when", ""))}
+            # Layer 0（2026-09-30）：透传 agent 逻辑名（非空字符串才保留，缺失=匿名）
+            _agent = str(item.get("agent") or "").strip()
+            if _agent:
+                entry["agent"] = _agent
+            out.append(entry)
     return out
 
 
@@ -724,16 +729,24 @@ def _mk_record(gate: Any) -> FunctionTool:
     return record
 
 
-def _mk_dispatch(state: SubtaskState, gate: Any) -> FunctionTool:
+def _mk_dispatch(state: SubtaskState, gate: Any,
+                 available_slots: Optional[List[str]] = None) -> FunctionTool:
+    _slot_hint = (
+        "可选 agent（执行单元逻辑名）："
+        + ("/".join(available_slots) if available_slots else "（未声明，匿名项由主模型自派发）")
+        + "；不传 agent 则走默认执行单元。"
+    )
     @sdk_function_tool(strict_mode=False, failure_error_function=None)
     def dispatch(items: str = "", need_verify: bool = False) -> dict:
-        """把若干互不依赖的子任务分派给多个子 agent 同时执行。
+        f"""把若干互不依赖的子任务分派给多个子 agent 同时执行。
 
         仅当这些子任务之间互不依赖、且各自耗时较长（大量读取 / 远程调用）时才使用；
         需要严格按顺序做、或你本轮就能直接做完的事，请自己继续做，不要派发。
 
         Args:
-            items: JSON 数组，每项形如 {"desc": "子任务描述", "done_when": "完成条件"}
+            items: JSON 数组，每项形如 {{"desc": "子任务描述", "done_when": "完成条件",
+                "agent": "执行单元名（可选）"}}。
+                {_slot_hint}
             need_verify: 本批次是否需二次复核（默认 false，行为与旧版一致）。
                 开启后，子任务回收完成、下一轮执行前会再校验一次完成条件；
                 校验不通过只追加「复核未通过」标记，保留未完成语义交由模型
@@ -803,6 +816,7 @@ def build_meta_tools(
     on_state: Optional[Callable[[str], None]] = None,
     allow_dispatch: bool = False,
     todo_store: Any = None,
+    available_slots: Optional[List[str]] = None,
 ) -> List[FunctionTool]:
     """构造内核元工具（L2 门控）：task_done / verify / escalate / record（+ dispatch / todo_write）。
 
@@ -823,7 +837,7 @@ def build_meta_tools(
         _mk_record(gate),
     ]
     if allow_dispatch:
-        tools.append(_mk_dispatch(state, gate))
+        tools.append(_mk_dispatch(state, gate, available_slots))
         if todo_store is not None:
             tools.append(_mk_todo_write(todo_store))
     return tools
@@ -1062,6 +1076,7 @@ def _assemble_agent_stack(
     max_steps: Optional[int],
     allow_dispatch: bool,
     todo_store: Any,
+    available_slots: Optional[List[str]] = None,
     tail_inject_block: str,
     tail_inject_layers: Optional[List[str]],
     on_inject: Optional[Callable[[int, List[str]], None]],
@@ -1129,7 +1144,7 @@ def _assemble_agent_stack(
         name=name,
         model=model,
         instructions=instructions,
-        tools=list(tools) + build_meta_tools(state, gate, on_state, allow_dispatch, todo_store),
+        tools=list(tools) + build_meta_tools(state, gate, on_state, allow_dispatch, todo_store, available_slots),
         mcp_servers=_mcp_connected,
         # T4.7：把 request（temperature / max_tokens 等）真正下发给模型；
         # 此前 SDK 主链路未传 model_settings，配置里的 request.max_tokens 形同虚设。
@@ -1185,6 +1200,7 @@ def run_subtask_sdk(
     name: str = "omni_worker",
     allow_dispatch: bool = False,
     todo_store: Any = None,
+    available_slots: Optional[List[str]] = None,
     skill_catalog: Optional[str] = None,
     budget_hint_ratio: float = 0.0,
     on_llm: Optional[Callable[[str, str, List[Any]], None]] = None,
@@ -1218,6 +1234,7 @@ def run_subtask_sdk(
         max_steps=max_steps,
         allow_dispatch=allow_dispatch,
         todo_store=todo_store,
+        available_slots=available_slots,
         tail_inject_block=tail_inject_block,
         tail_inject_layers=tail_inject_layers,
         on_inject=on_inject,

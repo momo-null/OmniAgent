@@ -4,19 +4,19 @@
 
 **中文** | [English](#english)
 
-> **OmniAgent** 是一个「在线大脑（规划 / 反思）+ 本地执行器（高频决策 / 感知）」两层的**通用** Agent 内核。模型通过调用**工具**完成任务，能做什么完全由工具清单决定，内核不绑定任何场景；GUI / 设备操控只是当前用得最多的场景，而非 agent 的预设身份。
+> **OmniAgent** 是一个**通用** Agent 内核：主 agent + graph 自主派发（主 agent 决定派不派、派给哪个执行单元槽位），模型来自多槽模型目录（`~/.omniagent/models.json`）。模型通过调用**工具**完成任务，能做什么完全由工具清单决定，内核不绑定任何场景；GUI / 设备操控只是当前用得最多的场景，而非 agent 的预设身份。
 >
 > **构建方式（诚实说明）**：ReAct 循环与 function-call 协议由 **OpenAI Agents SDK**（`Runner`）承载，多 agent 状态机编排由 **LangGraph** 承载。本项目自研的是 **L2 编排层**（收尾门控 / 升级判定 / 预算与墙钟 / 上下文管理）、**工具运行时与插件层**、**知识层**（世界模型 / 技能 / 全局记忆）与 **执行后端**（设备 / GUI）。因此本项目的贡献是「编排 + 工具 + 知识层」，**不是 agent 循环本身**。
 >
 > **技术底座**：`OpenAI Agents SDK` · `LangGraph` · `MCP` · 本地模型生命周期管理 · 知识级自升级（技能 / 全局记忆提炼）。
 >
-> **版本 X3**：在线强模型做规划与约束，本地快模型做快速执行与视觉感知；任务完成后把成功经验蒸馏成技能与全局记忆（知识级自升级主线）。
+> **版本 X3**：主 agent 规划并执行；可按槽位为子 agent 配置不同模型（含本地快模型做执行与视觉感知）。任务完成后把成功经验蒸馏成技能与全局记忆（知识级自升级主线）。
 > ⚠️ 免责声明：个人学习项目，不保证稳定性与体验，使用产生的一切后果自行承担。
 
 ## 能力与边界（先看这个 · 30 秒了解本项目到哪一步）
 
 **已实现并真机验证**
-- 两层执行循环：在线大脑规划（低频）+ 本地小模型高频执行（工具调用）。
+- 主 agent 执行循环（OpenAI Agents SDK）+ 自主派发：互不依赖的子任务可派给按槽位配置的执行单元。
 - 通用工具运行时：加能力 = 写工具 / Provider，内核零场景硬编码（红线 lint + CI 守护）。
 - 本地模型生命周期管理、MCP 接入、GUI / 设备操控执行后端。
 - 知识级自升级**闭环**（2026-09-28 真机验证）：轨迹落盘 → Curator 蒸馏（rollout）→ 全局记忆合并（MEMORY.md → memory_summary 注入）→ Skill 提取与跨任务 N=3 晋级（active + 全局）→ 新任务消费（零工具凭注入记忆准确复述历史事实）。
@@ -25,6 +25,7 @@
 - 知识级自升级的**有效性对照实验（ablation，K3/V3）尚未完成**——「注入记忆是否真的让任务做得更好」（≥20 次同域开/关对照，判据：步数降 ≥15% 且成功率不降）**目前没有数据结论**。
   故本项目**不声称**自进化已被证明有效；已证实的边界 = 闭环链路真机跑通、注入内容可被模型消费（2026-09-28）。
 - 单域、小样本，非生产级。
+- skill 驱动的角色化团队（team-mode）**规划中**：将复用派发底座的 `agent` 字段与执行单元注册表（见 `doc/plans/`），尚未实现。
 
 ## 文档导航（权威来源）
 
@@ -52,7 +53,7 @@
 2. **知识自学，无插件** — world-model + skill 由运行时观测积累，属运行时知识非硬编码。
 3. **能力 == 工具（红线）** — 内核只负责通用闭环，加能力 = 写工具 / Provider。
 4. **模型无关** — 能力声明来自模型元数据，动态注入提示词，换模型零代码改动。
-5. **大脑低频、本地高频** — 在线大脑仅决策点介入，本地执行器在子目标内自闭环。
+5. **派发可选** — 是否分层、分层用哪些模型，由模型目录配置决定；不配置即单主 agent 形态。
 6. **诚实边界** — 自学习只长「知识 / 策略」，不长「硬件 / 工具精度」；新 skill 须连续成功 N 次才晋升。
 7. **超长任务连续性** — 无状态大脑 + 持久 world-model + 子目标检查点，使小时 / 跨天任务不丢目标、崩溃可续。
 
@@ -65,7 +66,7 @@
 | Agent 循环 | **OpenAI Agents SDK**（`Runner` 驱动 ReAct 循环 + 流式事件） |
 | 状态机编排 | **LangGraph**（`Send` 并发扇出 + `update_state` 软注入） |
 | 后端 | Python + FastAPI / uvicorn（`backend/`） |
-| 本地推理 | llama.cpp（`llama-server`），本地模型当执行器 / VLM |
+| 本地推理 | llama.cpp（`llama-server`），本地模型作子 agent 槽位模型 / VLM |
 | 前端 | TypeScript + React 18 + Vite + MUI + Tailwind（单页 Shell，自研 store） |
 | 视觉 | SoM（Set-of-Marks）+ EasyOCR + YOLO 降级 |
 
@@ -81,7 +82,7 @@
 
 | 路径 | 作用 |
 |------|------|
-| `omni_core/brain/` | 在线大脑客户端 + 工具 schema + providers + SDK 循环（`sdk_loop.py`） |
+| `omni_core/brain/` | 模型客户端 + 工具 schema + providers + SDK 循环（`sdk_loop.py`） |
 | `omni_core/local/` | 世界模型 / 观测 / ToolLoop（`loop/` 五 Mixin）/ skill / curator / trajectory / telemetry / states |
 | `omni_core/tools/` | 四跳隔离工具插件层（device / vision / python / mcp 平级） |
 | `omni_core/orchestration/` | 通用多 agent 编排（LangGraph `Send` 扇出） |
@@ -98,11 +99,12 @@
 python -m venv .venv && .\.venv\Scripts\activate && pip install -r requirements.txt
 cd web && npm install && cd ..    # 前端依赖需手动装一次（脚本只提示不自动装）
 .\start_all.bat        # 后端 :8000 + 前端 :5173 一键起
-# 本地执行器另起：llama-server 加载本地 VLM GGUF（默认 :8085）
+# 可选：为 worker 等槽位配置本地模型——llama-server 加载本地 VLM GGUF（默认 :8085）
 ```
 
 - 真 API key 与三通道配置仅存 `~/.omniagent/config.yaml`，仓库 `config.yaml` 已去明文；**首次启动后请先到 Web「设置」页配置模型端点与 API key**，否则对话无法调用模型（后端日志出现「配置文件未找到」属正常）。
 - 默认 `runtime.backend: host`（宿主机屏幕）；emulator 需自备 `adb_serial`。
+- 派发（dispatch）默认开启，单模型即可用（主 agent 自派发，并发与上下文隔离仍有价值）；要分层就两步：在 `~/.omniagent/models.json` 的 `defaults` 里声明槽位（如 `worker` / `researcher`），再在 `~/.omniagent/config.yaml` 的 `runtime.dispatch.agents` 里显式列出参与派发的槽（首个为默认槽）。
 - 前端访问用 `http://localhost:5173`（dev server 监听 IPv6 `::1`，`127.0.0.1` 可能连不上）；后端无窗口运行是刻意的（日志见 `backend.log` / `backend.err`），且**不要给 uvicorn 加 `--reload`**（Windows 下双进程抢绑端口会随机挂起）。
 
 ## 红线守护
@@ -119,17 +121,17 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
 
 [中文](#top) | **English**
 
-> **OmniAgent** is a two-tier **general-purpose** agent kernel: an online brain (planning / reflection) plus a local executor (high-frequency decision-making / perception). The model completes tasks by calling **tools**; what it can do is fully determined by the tool list, and the kernel binds to no particular scenario. GUI / device control is merely the most-used application today, not the agent's predefined identity.
+> **OmniAgent** is a **general-purpose** agent kernel: a main agent + graph-driven autonomous dispatch (the main agent decides whether and which executor slot to dispatch to), with models drawn from a multi-slot model catalog (`~/.omniagent/models.json`). The model completes tasks by calling **tools**; what it can do is fully determined by the tool list, and the kernel binds to no particular scenario. GUI / device control is merely the most-used application today, not the agent's predefined identity.
 >
 > **How it is built (honest note)**: the ReAct loop and the function-call protocol are delegated to the **OpenAI Agents SDK** (`Runner`), and multi-agent state-machine orchestration to **LangGraph**. What this project builds itself is the **L2 orchestration layer** (termination gating / escalation decisions / budget & wall-clock / context management), the **tool runtime & plugin layer**, the **knowledge layer** (world model / skills / global memory) and the **execution backends** (device / GUI). So the contribution here is "orchestration + tools + knowledge layer", **not the agent loop itself**.
 >
-> **Version X3**: an online strong model plans and constrains; a local fast model executes and perceives. After each task, successful experience is distilled into skills and global memory (the knowledge-level self-upgrade mainline).
+> **Version X3**: the main agent plans and executes; sub-agents can be configured with per-slot models (including a local fast model for execution and visual perception). After each task, successful experience is distilled into skills and global memory (the knowledge-level self-upgrade mainline).
 > ⚠️ Disclaimer: a personal learning project; stability and UX are not guaranteed; use at your own risk.
 
 ## Capability & Boundary (read this first · a 30-second overview of where the project stands)
 
 **Implemented and verified on real hardware**
-- Two-tier execution loop: online brain for planning (low frequency) + local small model for high-frequency execution (tool calling).
+- Main-agent execution loop (OpenAI Agents SDK) + autonomous dispatch: independent subtasks can be delegated to executor units configured per slot.
 - General tool runtime: adding a capability = writing a tool / provider; zero scene-specific logic in the kernel (enforced by a red-line lint + CI).
 - Local model lifecycle management, MCP integration, GUI / device execution backends.
 - Knowledge-level self-upgrade *closed loop* (verified on real machine, 2026-09-28): trajectory → Curator distillation (rollouts) → global-memory merge (MEMORY.md → memory_summary injection) → skill extraction with cross-task N=3 promotion (active + global) → consumption by a new task (zero tool calls, accurately reciting injected history).
@@ -138,6 +140,7 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
 - The **effectiveness ablation of knowledge-level self-upgrade is not done (K3/V3)** — there is **no data-backed conclusion** on whether memory injection actually improves task performance (requires ≥20 same-domain on/off comparison runs; pass = steps down ≥15% with no success-rate regression).
   This project therefore does **not** claim that self-evolution is proven effective; the verified boundary is: the closed loop runs end-to-end on real hardware, and injected memory is demonstrably consumed by the model (2026-09-28).
 - Single domain, small sample size; not production-grade.
+- A skill-driven role-based team (team-mode) is **planned**: it will reuse the dispatch foundation's `agent` field and executor registry (see `doc/plans/`); not yet implemented.
 
 ## Documentation (authoritative sources)
 
@@ -165,7 +168,7 @@ Seven non-negotiable principles — the basis for all technical choices and a "s
 2. **Knowledge self-learned, no plugins** — the world model + skills are accumulated from runtime observation: runtime knowledge, not hard-coding.
 3. **Capability == tool (red line)** — the kernel only handles the general loop; adding a capability = writing a tool / provider.
 4. **Model-agnostic** — capability declarations come from model metadata and are injected into prompts dynamically; swapping models requires zero code changes.
-5. **Brain low-frequency, local high-frequency** — the online brain intervenes only at decision points; the local executor closes its own loop within each sub-goal.
+5. **Dispatch is optional** — whether to tier and which models each tier uses are decided by the model catalog; unconfigured, the runtime is a single main agent.
 6. **Honest boundary** — self-learning only grows "knowledge / strategy", never "hardware / tool precision"; a new skill must succeed N times in a row before being promoted.
 7. **Ultra-long task continuity** — a stateless brain + a persistent world model + sub-goal checkpoints let hour- or day-scale tasks keep their goal and resume after a crash.
 
@@ -178,7 +181,7 @@ Seven non-negotiable principles — the basis for all technical choices and a "s
 | Agent loop | **OpenAI Agents SDK** (`Runner` drives the ReAct loop + streaming events) |
 | State-machine orchestration | **LangGraph** (`Send` fan-out + `update_state` soft injection) |
 | Backend | Python + FastAPI / uvicorn (`backend/`) |
-| Local inference | llama.cpp (`llama-server`); the local model acts as executor / VLM |
+| Local inference | llama.cpp (`llama-server`); the local model serves sub-agent slots / VLM |
 | Frontend | TypeScript + React 18 + Vite + MUI + Tailwind (single-page shell, hand-rolled store) |
 | Vision | SoM (Set-of-Marks) + EasyOCR + YOLO fallback |
 
@@ -194,7 +197,7 @@ A two-tier + Escalation general-purpose agent runtime: `Brain (online planning)`
 
 | Path | Purpose |
 |------|---------|
-| `omni_core/brain/` | Online brain client + tool schema + providers + SDK loop (`sdk_loop.py`) |
+| `omni_core/brain/` | Model clients + tool schema + providers + SDK loop (`sdk_loop.py`) |
 | `omni_core/local/` | World model / observation / ToolLoop (`loop/`, five mixins) / skill / curator / trajectory / telemetry / states |
 | `omni_core/tools/` | Four-hop isolated tool plugin layer (device / vision / python / mcp, all peers) |
 | `omni_core/orchestration/` | General multi-agent orchestration (LangGraph `Send` fan-out) |
@@ -211,11 +214,12 @@ A two-tier + Escalation general-purpose agent runtime: `Brain (online planning)`
 python -m venv .venv && .\.venv\Scripts\activate && pip install -r requirements.txt
 cd web && npm install && cd ..    # frontend deps must be installed once (the script only warns)
 .\start_all.bat        # starts backend :8000 + frontend :5173
-# start the local executor separately: llama-server loading a local VLM GGUF (default :8085)
+# optional: configure a local model for the worker slot — llama-server loading a local VLM GGUF (default :8085)
 ```
 
 - The real API key and three-channel config live only in `~/.omniagent/config.yaml`; the repo's `config.yaml` carries no plaintext secrets. **On first launch, configure your model endpoint and API key in the Web Settings page** before chatting ("config file not found" in backend logs is normal on a fresh setup).
 - Default `runtime.backend: host` (host machine screen); emulator mode requires your own `adb_serial`.
+- Dispatch is enabled by default and works with a single model (the main agent self-dispatches; concurrency and context isolation still add value). To tier it up: declare slots in the `defaults` section of `~/.omniagent/models.json` (e.g. `worker` / `researcher`), then explicitly list the dispatch-enabled slots in `runtime.dispatch.agents` of `~/.omniagent/config.yaml` (the first one is the default slot).
 - Open the frontend at `http://localhost:5173` (the dev server listens on IPv6 `::1`; `127.0.0.1` may not connect). The backend intentionally runs windowless (see `backend.log` / `backend.err`), and **do not add `--reload` to uvicorn** (on Windows the reloader double-binds the port and connections randomly hang).
 
 ## Red-Line Guard

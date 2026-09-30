@@ -118,16 +118,16 @@ class ToolLoop(
         # ExecutionModule 使用契约三成员（kind / text_of / verify_done）。
         self.exec = activate_environment(_cfg)
         self.exec_model = "none"
-        # max_history: 单大脑模式保留最近 N 轮（0=不裁剪，适合云端大脑大上下文）。
-        # 本地小模型（如 4B@8K ctx）设为较小值可防止多步后上下文溢出；
-        # worker（两层内层 loop）改用 escalation.worker_history_keep（按轮裁剪，语义更清晰）。
+        # max_history: 主链保留最近 N 轮（0=不裁剪，适合大上下文云端模型）。
+        # 小上下文本地模型设为较小值可防止多步后上下文溢出；
+        # 子任务内层 loop 改用 escalation.worker_history_keep（按轮裁剪，语义更清晰）。
         self.max_history = max_history
         self.verbose = verbose
         self.brain_capabilities = (brain_cfg or {}).get("capabilities", {}) or {}
         # 思考路由模式（native/think-tag/none）：决定思考如何被采集与展示
         self.reasoning_mode = (brain_cfg or {}).get("reasoning_mode", "native")
         self.executor_reasoning_mode = (executor_cfg or {}).get("reasoning_mode", "native")
-        # 大脑长任务配置（仅单大脑 run_task 模式用；两层模式下大脑无状态，无需压缩）
+        # 主链长任务配置（无状态 run 时大脑侧不承载状态压缩，压缩由编排层管理）
         self.brain_long_task = (brain_cfg or {}).get("long_task", {}) or {}
         # M8 长任务节奏：预算用到该比例时给 agent 一条陈述性提示（0 = 关闭）
         self.budget_hint_ratio = float(
@@ -170,44 +170,73 @@ class ToolLoop(
         self.tool_schemas = self.registry.schemas
         self.env_kind = self.exec.kind
 
-        # 第二路模型：子 agent（worker）用的模型，可配本地高频模型
+        # Layer 0（2026-09-30）：通用派发底座——执行单元注册表 slot→LLMClient。
+        # 把「子 agent 是谁」从写死的 self.executor 升级为按逻辑名寻址的注册表；
+        # 中枢（大脑）自行决定派给谁，匿名项回退默认槽，默认槽缺则主模型自派发。
+        self.executors: Dict[str, LLMClient] = {}      # slot -> 执行单元
+        self.executors_cfg: Dict[str, dict] = {}       # slot -> 端点配置
+        self.exec_capabilities: Dict[str, dict] = {}   # slot -> 能力
+        self.exec_models: Dict[str, str] = {}          # slot -> 模型名
+        # 默认槽恒为 worker：匿名项走它；不在注册表 -> 主模型自派发（合法语义，见 plan §3.5）。
+        self.default_executor_slot = "worker"
+        # 向后兼容别名 / 观测标记（避免一次性改崩其他调用方）
         self.executor = None
         self.executor_capabilities = {}
-        self.executor_is_planner = False  # True 表示子 agent 模型与主模型同源
-        # 子 agent 模型：目录 worker 槽位有选择即启用（无选择 = 主模型兼任）
-        if executor_cfg is None:
-            from omni_core.brain import router as model_router
+        self.executor_is_planner = False  # 退化为纯观测标记（§3.5 门控解绑后不参与决策）
+        self.executor_reasoning_mode = (executor_cfg or {}).get("reasoning_mode", "native")
+
+        from omni_core.brain import router as model_router
+        _dispatch_decl = (_rt.get("dispatch") or {})
+        _declared_slots = list(_dispatch_decl.get("agents") or [])
+        if executor_cfg is not None:
+            # 直注入路径（测试与旧调用方 ToolLoop(executor_cfg=...)）：映射为 worker 槽
+            _declared_slots = ["worker"]
+
+        for _slot in _declared_slots:
+            if _slot == "worker" and executor_cfg is not None:
+                _slot_cfg = executor_cfg
+            else:
+                try:
+                    _slot_cfg = model_router.resolve_slot(_slot)
+                except Exception:  # noqa: BLE001
+                    _slot_cfg = {}
+            if not _slot_cfg:
+                # 该用途未启用（目录无选择）：解析为空 dict 即语义「主模型兼任」
+                continue
             try:
-                exec_cfg = model_router.resolve_slot("worker")
-            except Exception:  # noqa: BLE001
-                exec_cfg = {}
-        else:
-            exec_cfg = executor_cfg
-        if exec_cfg:
-            try:
-                self.executor = LLMClient(exec_cfg, on_debug=self._dbg("executor"))
-                self.executor_capabilities = (exec_cfg or {}).get("capabilities", {}) or {}
-                self.exec_model = exec_cfg.get("model", "none")
-            except Exception as e:
-                self._log(f"executor(本地4B) 初始化跳过: {type(e).__name__}: {e}")
-        # M-fix：executor 启用但本机端点不可达 → 回退主模型，避免子任务静默失败烧步数
-        if self.executor is not None and self.executor is not self.brain:
-            if model_health_ok(exec_cfg.get("base_url")) is False:
-                dbg = self._dbg("executor")
-                if dbg:
-                    dbg("executor_unavailable", {
-                        "title": "executor 本地模型不可用，回退主模型",
-                        "model": self.exec_model,
-                        "base_url": exec_cfg.get("base_url", ""),
-                        "reason": "端点不可达（本地模型未启动？），子任务将由主模型直接执行",
+                _client = LLMClient(_slot_cfg, on_debug=self._dbg("executor"))
+            except Exception as e:  # noqa: BLE001
+                self._log(f"executor({_slot} 槽) 初始化跳过: {type(e).__name__}: {e}")
+                continue
+            # 健康检查按槽接管：不可达槽不入表（替代旧 M-fix 门控预判，见 plan §3.5 历史注记）
+            if model_health_ok(_slot_cfg.get("base_url")) is False:
+                _dbg = self._dbg("executor")
+                if _dbg:
+                    _dbg(f"executor_unavailable:{_slot}", {
+                        "title": f"executor({_slot} 槽) 本地模型不可用，回退主模型",
+                        "model": _slot_cfg.get("model", "none"),
+                        "base_url": _slot_cfg.get("base_url", ""),
+                        "reason": "端点不可达（本地模型未启动？），该槽子任务将由主模型执行",
                     })
-                self.executor = None
-        # 未独立配置子 agent 模型：由主模型兼任（默认单 agent 时本就用不到）。
-        if self.executor is None:
-            self.executor = self.brain
+                continue
+            self.executors[_slot] = _client
+            self.executors_cfg[_slot] = _slot_cfg
+            self.exec_capabilities[_slot] = (_slot_cfg or {}).get("capabilities", {}) or {}
+            self.exec_models[_slot] = _slot_cfg.get("model", "none")
+
+        # 向后兼容别名：worker 槽在注册表 -> 用 worker；否则主模型兼任（自派发）
+        self.executor = self.executors.get(self.default_executor_slot) or self.brain
+        if self.default_executor_slot in self.executors:
+            self.executor_capabilities = self.exec_capabilities.get(self.default_executor_slot) or {}
+            self.executor_is_planner = False
+            self.executor_reasoning_mode = (
+                self.executors_cfg[self.default_executor_slot].get("reasoning_mode", "native")
+            )
+        else:
+            # 默认槽缺 -> 主模型兼任，匿名项回退 brain 自派发（合法语义，非降级）
             self.executor_capabilities = self.brain_capabilities
-            self.exec_model = self.brain_model
             self.executor_is_planner = True
+        self.exec_model = self.exec_models.get(self.default_executor_slot) or self.brain_model
 
         # M3b.4 升级阈值：默认 + config 覆盖
         self.escalation = {**_DEFAULT_ESCALATION, **(escalation_cfg or (_rt.get("escalation") or {}))}
@@ -256,7 +285,7 @@ class ToolLoop(
         self._state_seq: List[str] = []
 
         # M4a.1/2 运行级计数器（供 RunRecord + telemetry；每次 run 重置）
-        self._brain_calls = 0       # 在线大脑被调用次数（worker 本地调用不计入）
+        self._brain_calls = 0       # 主链 brain 客户端被调用次数（子 agent 调用不计入）
         self._decision_steps = 0    # 决策步数（每步向大脑要一次决策）
         self._action_count = 0      # 派发工具次数
         self._retry_count = 0       # 无效动作次数（升级 / verify 失败）
@@ -268,7 +297,7 @@ class ToolLoop(
             print("[loop]", *a, flush=True)
 
     def _set_state(self, s: AgentState) -> None:
-        # 纯追踪层：连续相同状态去重（如 task_done 早退已置 DONE，post-loop / 两层整体 DONE
+        # 纯追踪层：连续相同状态去重（如 task_done 早退已置 DONE，post-loop / 编排收尾 DONE
         # 再置一次——状态未变，记录重复边无信息量且会破坏合法转移断言）。
         if self._state_seq and self._state_seq[-1] == s.value:
             self.state = s

@@ -72,9 +72,17 @@ class EmitterMixin:
         一起流式呈现，不再把结论塞进 system/思考块而丢失。
         """
         dbg = self._dbg(role)
-        model = self.brain_model if role == "brain" else self.exec_model
-        # B3 修复：rm 此前未定义（NameError 被 except 吞掉，终态纠偏从未执行）
-        rm = self.reasoning_mode if role == "brain" else self.executor_reasoning_mode
+        if role == "brain":
+            model = self.brain_model
+            rm = self.reasoning_mode
+        elif role.startswith("executor:"):
+            # 多槽：按 slot 取模型名与 reasoning_mode（Layer 0，2026-09-30）
+            _slot = role.split(":", 1)[1]
+            model = self.exec_models.get(_slot, self.exec_model)
+            rm = (self.executors_cfg.get(_slot) or {}).get("reasoning_mode", self.executor_reasoning_mode)
+        else:  # role == "executor"（默认槽）
+            model = self.exec_model
+            rm = self.executor_reasoning_mode
         # B7：回合序号——每个 LLM 回合独立块（_emit 收尾时递增），同回合的
         # delta 先于 emit 到达、共享同号，跨回合不再串成单一巨型 thinking 块
         seq = 0

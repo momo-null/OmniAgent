@@ -45,14 +45,13 @@ M10 统一入口（run_task，见 doc/plans/multi-agent-redesign-2026-09-13.md�
       └─ dispatch(items) → Send 扇出 N 个子 agent（并发）→ 结果回灌 → 主 agent 继续
 
     for each subtask（示意，已由编排图接管）：
-        本地模型（executor / worker）跑内层 ReAct loop（走同一套 ToolRegistry/Vision/Execution）
-        成功 → 回报大脑；触发升级条件 → 暂停并 escalate 回在线大脑反思
-    在线大脑在边界/失败升级时反思 → 重规划剩余 / 收尾
+        按槽位选定的执行单元跑内层 ReAct loop（走同一套 ToolRegistry/Vision/Execution）
+        成功 → 结果回灌主 agent；触发升级条件 → 暂停并 escalate 回主 agent / 编排层
+    主 agent 在边界/失败升级时反思 → 重规划剩余 / 收尾
 
 设计红线：
 - 内核（ToolLoop + 通用闭环）零场景硬编码；能力==工具。
-- 大脑（manager）只做规划，所有子任务按架构约定一律走本地模型（worker）；模型选择由结构固定，
-  大脑不做「模型路由」实时判断。
+- 主 agent（manager）只做规划决策与派发，子任务由执行单元注册表按槽路由；
 - 升级阈值全部来自 config（runtime.escalation.*），不在内核硬编码。
 """
 VERIFY_TOOL_SCHEMA = brain_tools.VERIFY_TOOL_SCHEMA
@@ -239,7 +238,7 @@ def _safe_str(obj) -> str:
     except Exception:
         return str(obj)
 def _compact_for_brain(result):
-    """压缩工具结果后再喂给在线大脑，省 token。
+    """压缩工具结果后再喂给模型，省 token。
 
     - ui_tree：XML 原文对大脑几乎无用（Unity 等自绘 UI 只有一个 SurfaceView 节点），
       截断到 500 字符保留头部线索。

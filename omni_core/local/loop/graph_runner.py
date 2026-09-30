@@ -237,6 +237,7 @@ class GraphRunnerMixin:
             world, max_steps=budget, allow_escalate=False, traj=store,
             wallclock_sec=main_wallclock_sec,
             allow_dispatch=allow_dispatch, user_input=user,
+            available_slots=list(self.executors.keys()),
             budget_hint_ratio=self.budget_hint_ratio,
             compress_after=compress_after,
             history_keep=0,
@@ -329,9 +330,10 @@ class GraphRunnerMixin:
         _dispatch_cfg = ((self._cfg).get("runtime") or {}).get("dispatch") or {}
         max_rounds = int(_dispatch_cfg.get("max_rounds", 3))
         max_parallel = int(_dispatch_cfg.get("max_parallel", 4))
-        # M-fix：executor 即主模型（未配置/不可达回退）时，无独立 worker 可派发，
-        # 关闭 dispatch 让大脑「知道」并自行完成，避免空派发。
-        allow_dispatch = bool(_dispatch_cfg.get("enabled", True)) and not self.executor_is_planner
+        # Layer 0（2026-09-30）：门控只剩 enabled——中枢自行决定是否派发、派给谁；
+        # 健康检查已按槽接管（model_health_ok 剔除不可达槽），不再用「有无独立 worker」预判。
+        # 匿名项默认槽缺 -> 主模型自派发（合法语义，见 plan §3.5），非降级告警。
+        allow_dispatch = bool(_dispatch_cfg.get("enabled", True))
 
         # 注入执行单元（闭包捕获 self / world / store / spec，复用既有逻辑）
         def _main_fn(state, prev_results, injected=None):
@@ -358,6 +360,7 @@ class GraphRunnerMixin:
                 inner, store, parent_world=world,
                 parent_objective=spec.objective, max_steps=budget,
                 board_source=inner.objective[:40],
+                target_slot=item.get("agent"),
             )
             # 子任务成功即写 checkpoint（失败/升级不写，避免恢复到一个坏状态）
             if res.get("success"):
@@ -369,6 +372,10 @@ class GraphRunnerMixin:
             res["done_when"] = item.get("done_when", "")
             if item.get("need_verify"):
                 res["need_verify"] = True
+            # Layer 0（2026-09-30）：把派发目标（agent 逻辑名）透传回编排层，供排障/摘要
+            _agent = str(item.get("agent") or "").strip()
+            if _agent:
+                res["agent"] = _agent
             return res
 
         def _finalize_fn(state, success, reason, steps, rounds, escalated, escalate_reason,
@@ -381,6 +388,8 @@ class GraphRunnerMixin:
             subtask_results = [
                 {"desc": r.get("desc", ""), "success": bool(r.get("success")),
                  "reason": r.get("reason", "") or "",
+                 # Layer 0（2026-09-30）：派发目标槽名（空 = 默认槽）
+                 "agent": str(r.get("agent") or ""),
                  # T4.3（U5a）：交接面字段透传至任务汇总
                  "done_when_hit": bool(r.get("done_when_hit")),
                  "artifacts": list(r.get("artifacts") or []),
@@ -544,11 +553,26 @@ class GraphRunnerMixin:
                      parent_world: Optional[WorldModel] = None,
                      parent_objective: str = "",
                      max_steps: Optional[int] = None,
-                     board_source: str = "") -> Dict[str, Any]:
-        """起一个本地模型内层 loop（独立消息上下文，走 self.executor）。
+                     board_source: str = "",
+                     target_slot: Optional[str] = None) -> Dict[str, Any]:
+        """起一个子 agent 内层 loop（独立消息上下文，按 target_slot 路由执行单元）。
 
+        target_slot: 来自 dispatch 计划项 agent 字段（逻辑名）。为空 -> 默认槽；
+            默认槽缺 -> 主模型自派发（合法语义，见 plan §3.5）。
         max_steps: 本子任务允许的最大步数（由统一入口 run_task 从总预算分配）。
         """
+        # Layer 0（2026-09-30）：按槽路由执行单元
+        slot = (target_slot or "").strip() or self.default_executor_slot
+        client = self.executors.get(slot)
+        if client is None:
+            if target_slot:
+                # 定向槽不存在 -> 记日志回退默认槽，永不抛错（plan §3.4）
+                self._log(f"[dispatch] agent 槽 '{slot}' 不在注册表，回退默认槽")
+            slot = self.default_executor_slot
+            client = self.executors.get(slot) or self.brain  # 默认槽也缺 -> brain 自派发
+        caps = self.exec_capabilities.get(slot) or self.executor_capabilities
+        exec_model = self.exec_models.get(slot) or self.brain_model
+        is_planner = client is self.brain
         # M6：子 agent 仍用独立实例跑（避免并发下 percept/动作 ring buffer 互串），
         # 结束后统一 flush 到共享黑板，并带来源标记。
         sub_world = WorldModel()
@@ -557,11 +581,13 @@ class GraphRunnerMixin:
             dbg("subtask_start", {
                 "title": "子任务开始",
                 "objective": inner_spec.objective,
-                "executor_model": self.exec_model,
-                "is_planner": self.executor_is_planner,
+                "executor_model": exec_model,
+                "is_planner": is_planner,
+                "slot": slot,
             })
         t0 = time.time()
-        _on_llm, _on_llm_delta, _on_llm_turn_end = self._make_llm_emitter("executor")
+        _role = "executor" if slot == self.default_executor_slot else f"executor:{slot}"
+        _on_llm, _on_llm_delta, _on_llm_turn_end = self._make_llm_emitter(_role)
         from omni_core.local.runtime_paths import task_dir, task_skills, global_skills
         _exec_runtime_ctx = {
             "task_id": inner_spec.task_id,
@@ -572,9 +598,9 @@ class GraphRunnerMixin:
             "global_skills_dir": str(global_skills()),
         }
         res = self._run_via_sdk(
-            inner_spec, self.executor,
+            inner_spec, client,
             build_system_prompt(
-                self.executor_capabilities, self.tool_schemas,
+                caps, self.tool_schemas,
                 runtime_context=_exec_runtime_ctx,
             ),
             sub_world, max_steps=max_steps, allow_escalate=True,

@@ -507,7 +507,7 @@ function AboutTab() {
       <Typography variant="subtitle2" gutterBottom>关于</Typography>
       <Typography variant="body2" color="text.secondary">
         OmniAgent · 通用 agent 编排内核（Plan C：project + task 两实体）。<br />
-        大脑（在线强模型）作规划/反思，本地快模型作执行器，知识库自学（world-model / skill）。<br />
+        主 agent 规划并执行；可在模型页为多个槽位配置模型，主 agent 自主决定派发；知识库自学（world-model / skill）。<br />
         内核零场景硬编码；能力来自工具与运行时自学。
       </Typography>
 
@@ -518,7 +518,7 @@ function AboutTab() {
 
       <Card variant="outlined" sx={{ mb: 2 }}>
         <CardContent>
-          <Typography variant="subtitle2">① 双层路径（模型页给 worker 槽位选了模型）</Typography>
+          <Typography variant="subtitle2">① 分层形态（模型页给 worker 槽位选了模型）</Typography>
           <Typography variant="body2" color="text.secondary" component="div">
             主模型规划 + 子模型执行，支持派发多 agent。<br />
             生效配置：
@@ -535,7 +535,7 @@ function AboutTab() {
 
       <Card variant="outlined">
         <CardContent>
-          <Typography variant="subtitle2">② 单大脑路径（worker 槽位未选模型时）</Typography>
+          <Typography variant="subtitle2">② 单主 agent 形态（worker 槽位未选模型时）</Typography>
           <Typography variant="body2" color="text.secondary" component="div">
             主模型自己跑完整任务，无子 agent。<br />
             生效配置：
@@ -545,7 +545,7 @@ function AboutTab() {
               <li>brain.long_task.max_turns → 每 N 轮压缩一次历史（防上下文溢出，不停任务）</li>
               <li>brain.long_task.compress → 压缩时是否调用主模型生成中文摘要</li>
             </ul>
-            <b>编排 · 派发轮次 / 并发在此路径无意义</b>（没有子 agent 可派）。
+            <b>编排 · 派发轮次 / 并发在此形态仍生效</b>：派发由主模型自派发执行（并发与上下文隔离仍有价值）。
           </Typography>
         </CardContent>
       </Card>

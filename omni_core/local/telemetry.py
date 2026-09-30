@@ -5,7 +5,7 @@
 
 指标语义：
 - success_rate           : 成功 run 占比（跨多次 run 聚合时用）
-- brain_intervention_rate: brain_calls / decision_steps，越低 = 本地执行器越自主（核心）
+- brain_intervention_rate: brain_calls / decision_steps，越低 = 子 agent 越自主（核心）
 - tool_efficiency        : (action_count - retry_count) / action_count，无效动作越少越高
 - recovery_rate          : recoveries / failures，失败后自主恢复能力
 所有除法均做边界保护（0 分母 -> 0.0；success_rate 单 run 时直接用 success 布尔）。

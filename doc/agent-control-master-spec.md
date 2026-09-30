@@ -1,5 +1,10 @@
 # OmniAgent X3 控制层架构总规（Master Spec）
 
+> ⚠️ **过时声明（2026-09-30）**：本文的架构描述停留在「三通道 / mode 三态 / 固定双层」时代；
+> `run_task_two_layer` 与 mode 三态均已删除。现状以 `README.md` 与 `doc/plans/`（含
+> `team-mode-layer0-design.md` 派发底座）为准——主 agent + graph 自主派发 + 多槽执行单元注册表，
+> brain 自派发为合法语义。本文保留为历史决策留档，不逐节重写。
+>
 > **状态**：本文为 OmniAgent **X3** 架构的**权威固化（consolidated single source of truth）**。
 > **范围**：桌面 AI agent 控制层重构——从「程序化固定管线」转向「LLM 大脑 + 本地执行器」两层分级，含模拟器验证轨道、知识自学、权重级自升级、前端重构。
 > **架构要点**：统一 `/chat` 单入口（无 `/run`）；三通道解耦（planner / executor / vision 各自独立可配模型），online_only = executor 由主模型兼任（仍是双 agent 双层，不退化）。多 agent 为**去分层**结构（主 agent 默认自己做；仅互不依赖的并行子任务才由 `dispatch` 扇出），详见 `doc/plans/multi-agent-redesign-2026-09-13.md`。红线扫描目录为 `omni_core/`。

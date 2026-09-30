@@ -44,6 +44,20 @@ runtime:
     dir: ""                   # 留空 → 项目级 .omniagent/<project>/world_model/<task>
   # M4b.3 Curator（任务完成后触发式跑一次，从 rollout 蒸馏长期记忆）
   curator:
+  # Layer 0 派发底座（2026-09-30）：多执行单元注册表。agents 显式声明参与派发的槽名，
+  # 槽 -> 模型的映射在 ~/.omniagent/models.json 的 defaults.<slot>（两层职责分离）。
+  # 不配置 = 只有 worker 一个槽（主模型兼任，行为与旧版完全一致）。
+  # dispatch:
+  #   enabled: true            # false = 关闭派发，主 agent 自行完成
+  #   agents:                  # 参与派发的槽名列表；首个为 default_executor_slot
+  #     - worker
+  #     - researcher
+  #   executor_cfg:            # 可选：不经 models.json，直接为槽注入模型配置
+  #     worker:
+  #       base_url: http://127.0.0.1:8080/v1
+  #       api_key: EMPTY
+  #       model: local-worker
+  #       reasoning_mode: off
   # F2.4 长任务主链墙钟（秒）；0=不检查（默认）。大步数预算下默认不检查，避免被 120s 子任务墙钟腰斩。
   # 与 runtime.escalation.wallclock_sec（缺省 120s，worker 防打转安全网）解耦，二者来源/语义/缺省均不同。
   long_task:
