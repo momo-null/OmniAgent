@@ -731,22 +731,37 @@ def _mk_record(gate: Any) -> FunctionTool:
 
 def _mk_dispatch(state: SubtaskState, gate: Any,
                  available_slots: Optional[List[str]] = None) -> FunctionTool:
+    # 槽名提示动态拼进 description（见下方属性覆盖）。
+    # 注意：docstring 必须保持静态字符串——agents SDK 经 griffe 静态解析源码提取
+    # docstring，f-string（JoinedStr 节点）不被识别为 docstring，会导致整个
+    # description 变空（模型看不到任何工具说明，2026-09-30 踩坑修复）。
     _slot_hint = (
         "可选 agent（执行单元逻辑名）："
         + ("/".join(available_slots) if available_slots else "（未声明，匿名项由主模型自派发）")
         + "；不传 agent 则走默认执行单元。"
     )
+    _dispatch_description = (
+        "把若干互不依赖的子任务分派给多个子 agent 同时执行。\n\n"
+        "仅当这些子任务之间互不依赖、且各自耗时较长（大量读取 / 远程调用）时才使用；\n"
+        "需要严格按顺序做、或你本轮就能直接做完的事，请自己继续做，不要派发。\n\n"
+        "Args:\n"
+        '    items: JSON 数组，每项形如 {"desc": "子任务描述", "done_when": "完成条件",\n'
+        '        "agent": "执行单元名（可选）"}。' + _slot_hint + "\n"
+        "    need_verify: 本批次是否需二次复核（默认 false，行为与旧版一致）。\n"
+        "        开启后，子任务回收完成、下一轮执行前会再校验一次完成条件；\n"
+        "        校验不通过只追加「复核未通过」标记，保留未完成语义交由模型\n"
+        "        决策（不强制拦截、不做惩罚）。"
+    )
     @sdk_function_tool(strict_mode=False, failure_error_function=None)
     def dispatch(items: str = "", need_verify: bool = False) -> dict:
-        f"""把若干互不依赖的子任务分派给多个子 agent 同时执行。
+        """把若干互不依赖的子任务分派给多个子 agent 同时执行。
 
         仅当这些子任务之间互不依赖、且各自耗时较长（大量读取 / 远程调用）时才使用；
         需要严格按顺序做、或你本轮就能直接做完的事，请自己继续做，不要派发。
 
         Args:
-            items: JSON 数组，每项形如 {{"desc": "子任务描述", "done_when": "完成条件",
-                "agent": "执行单元名（可选）"}}。
-                {_slot_hint}
+            items: JSON 数组，每项形如 {"desc": "子任务描述", "done_when": "完成条件",
+                "agent": "执行单元名（可选）"}；不传 agent 则走默认执行单元。
             need_verify: 本批次是否需二次复核（默认 false，行为与旧版一致）。
                 开启后，子任务回收完成、下一轮执行前会再校验一次完成条件；
                 校验不通过只追加「复核未通过」标记，保留未完成语义交由模型
@@ -764,6 +779,12 @@ def _mk_dispatch(state: SubtaskState, gate: Any,
         except Exception:
             pass
         return {"dispatched": len(plan), "items": plan}
+
+    # 装饰后动态覆盖 description：docstring 静态兜底 + 槽名动态注入（§3.2）
+    try:
+        dispatch.description = _dispatch_description
+    except Exception:
+        pass  # SDK 结构变化时退回静态 docstring，工具仍可用
 
     return dispatch
 
