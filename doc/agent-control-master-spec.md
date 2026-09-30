@@ -1,13 +1,13 @@
 # OmniAgent X3 控制层架构总规（Master Spec）
 
-> ⚠️ **过时声明（2026-09-30）**：本文的架构描述停留在「三通道 / mode 三态 / 固定双层」时代；
-> `run_task_two_layer` 与 mode 三态均已删除。现状以 `README.md` 与 `doc/plans/`（含
-> `team-mode-layer0-design.md` 派发底座）为准——主 agent + graph 自主派发 + 多槽执行单元注册表，
-> brain 自派发为合法语义。本文保留为历史决策留档，不逐节重写。
+> 🔄 **同步更新（2026-09-30）**：Layer 0 派发底座已实现（见
+> `doc/plans/implemented/team-mode-layer0-design.md`）——执行单元注册表 + `dispatch`
+> 计划项 `agent` 字段 + 按槽路由 + 门控解绑固定双层。本文相关章节已按现状同步；
+> 更早的历史段落（里程碑表 / 当年风险记录）保留原始表述作为决策留档。
 >
 > **状态**：本文为 OmniAgent **X3** 架构的**权威固化（consolidated single source of truth）**。
-> **范围**：桌面 AI agent 控制层重构——从「程序化固定管线」转向「LLM 大脑 + 本地执行器」两层分级，含模拟器验证轨道、知识自学、权重级自升级、前端重构。
-> **架构要点**：统一 `/chat` 单入口（无 `/run`）；三通道解耦（planner / executor / vision 各自独立可配模型），online_only = executor 由主模型兼任（仍是双 agent 双层，不退化）。多 agent 为**去分层**结构（主 agent 默认自己做；仅互不依赖的并行子任务才由 `dispatch` 扇出），详见 `doc/plans/multi-agent-redesign-2026-09-13.md`。红线扫描目录为 `omni_core/`。
+> **范围**：桌面 AI agent 控制层重构——从「程序化固定管线」转向「模型驱动 + 自主派发」的通用 Agent 内核，含模拟器验证轨道、知识自学、权重级自升级、前端重构。
+> **架构要点**：统一 `/chat` 单入口（无 `/run`）；主 agent + graph 自主派发（主 agent 决定派不派、派给哪个执行单元槽位）；多槽模型目录（`~/.omniagent/models.json` 的 `defaults.<slot>`）+ `runtime.dispatch.agents` 显式声明参与派发的槽；单模型形态下 brain 自派发为合法语义（并发与上下文隔离仍有价值）。多 agent 编排详见 `doc/plans/implemented/multi-agent-redesign-2026-09-13.md` 与 `team-mode-layer0-design.md`。红线扫描目录为 `omni_core/`。
 
 ---
 
@@ -16,7 +16,7 @@
 | 项 | 状态 | 说明 |
 |----|------|------|
 | MVP 闭环（大脑决策 + 工具调用） | ✅ 已验证 | 计算器场景证成 observe→决策→retry 闭环（IME 坑归知识，不硬编码） |
-| 两层分级（本地 qwen3.5-4b 执行器） | ✅ 已接入 | M3b 落地：大脑规划 + 本地 4B 执行 + escalation 升级回流 |
+| 多槽派发底座（Layer 0） | ✅ 已落地 | 执行单元注册表（`runtime.dispatch.agents`）+ dispatch `agent` 字段透传 + 按槽路由 + 门控解绑（`team-mode-layer0-design.md`）；默认 worker 槽 = 主模型兼任 |
 | llama-server 封装 | ✅ 跑通 | M0 修复：llama.cpp 升级 b10107 + Qwen3.5 thinking 关 + ctx 8192 |
 | ModelHub 联通 | ✅ 联通 | M0 完成，warmup≈7.6s |
 | 旧 LoRA 训练链 | ✅ 曾端到端跑通 | minesweeper 合并产物为证；GGUF 当年生成后被删（占空间） |
@@ -35,15 +35,15 @@
 
 ## 1. 核心架构立场（原则层）
 
-- **两层分级 agent**：在线强模型（大脑=规划/约束/自反思）+ 本地 qwen3.5-4b（快执行器 + VLM 跑 tool-loop）。
+- **主 agent + 派发底座**：主 agent 规划并执行；互不依赖的并行子任务经 `dispatch` 扇出给按槽位配置的执行单元（模型来自多槽目录，可为本地快模型 + VLM）。
 - **控制流归大脑**：程序退化为工具运行时；OCR / 视觉 = 感知工具，click/type/template = 执行工具，由模型自主决策调用。感知工具三角：`observe`(u2层级树) / `ocr_screenshot`(EasyOCR GPU) / `vision_describe`(4B-vl)，三件并列工具、大脑自主选择，无程序化优先级。
 - **知识自学、无插件**：world-model + skill 库 = 知识库，agent 运行时自学；游戏专属知识不预置。
-- **功能统一（非前端合并）**：模型服务（llama-server）现在给 agent 本地执行器**供推理**——旧范式里「模型服务」与「agent 推理」是两条无关线，新范式后端统一。
+- **功能统一（非前端合并）**：模型服务（llama-server）现在给子 agent 槽位**供推理**——旧范式里「模型服务」与「agent 推理」是两条无关线，新范式后端统一。
 - **诚实边界**：自学习只长「知识/策略」，不长「硬件/工具精度」（权重级训练除外，见 §6.3）。
 
 ---
 
-## 2. 两层执行架构
+## 2. 执行架构（主 agent + 槽位执行单元）
 
 ### 2.1 大脑层（在线 LLM）
 - **接口**：OpenAI 兼容客户端（httpx）；供应商 **OpenAI 兼容供应商**，`base_url` 与 `model` 见 config 示例（demo-model），api_key 走 env `OMNI_BRAIN_API_KEY`（不落库）。
@@ -54,7 +54,7 @@
 - **部署形态**：`llama-server`（OpenAI 兼容 HTTP，`external/llama/llama-server.exe`）。**分工**：`llm_runtime/server_backend.py` = OpenAI 兼容客户端（消费侧，`base_url` 默认 `:8085` 但被调用处覆盖为实际端口）；**server 进程启停 / 端口分配 / `--mmproj` / 健康轮询 / `validate_model` 全在 `model_hub/manager.py`**。`router_llm.py`（/v1 网关）读 `manager.processes[name]["port"]` 实际端口传给客户端，**不读 `config.llm_runtime.backend`**。本地 executor 复用 `BrainClient` 同款客户端指向 localhost。
 - **tool-loop**：observe→组 payload→brain.chat→dispatch→observe；`task_done` 结束；本地硬校验 `expected` 命中即成功；卡住升级给大脑重规划。
 - **视觉通道（已核实）**：`<models_dir>\qwen3_5_4B\mmproj-BF16.gguf` 存在 → 视觉需要 `--mmproj`（`manager._auto_detect_mmproj` 自动挂同目录 mmproj 文件）。
-- **可升级**：本地执行器可由 **finetuned GGUF 替换**（见 §6.3 权重级自升级）。
+- **可升级**：槽位模型可由 **finetuned GGUF 替换**（见 §6.3 权重级自升级）。
 
 ---
 
@@ -120,7 +120,7 @@
 1. **skill 级**：合成可复用连招。
 2. **world-model 级**：纠正 / 精炼界面理解。
 3. **策略级**：大脑反思自身规划失败。
-4. **权重级（本地执行器 finetune）**：当前**未启用**（仓库内无训练链代码）。知识级三层（①②③）管*行为适配*，权重级管*执行器能力适配*，二者互补非互斥。
+4. **权重级（子 agent 模型 finetune）**：当前**未启用**（仓库内无训练链代码）。知识级三层（①②③）管*行为适配*，权重级管*执行单元能力适配*，二者互补非互斥。
 
 ---
 
@@ -175,7 +175,7 @@
 - **删除 / 弃**：`Training` 前端页（架构升级不适用）、`requirements-train.txt`。
 - **归档不删**：`minesweeper` 3.7GB 合并产物（真实训练成果 + 潜在 Phase-2 离线 SFT/蒸馏基座）。
 - **轨迹采集器保留**（只采不训）：未来离线 SFT 现成语料。
-- **GFW 暴露面在架构升级后大幅缩小**：在线大脑=OpenAI 兼容供应商 API(无 GFW)、demo-model/ADB 控模拟器无需下模型、本地执行器仅一次性拉 base GGUF → 当年卡住的 torch/peft 训练链大头基本消失。当年踩通的镜像/路径经验可沉淀为 skill 备用。
+- **GFW 暴露面在架构升级后大幅缩小**：主模型 = OpenAI 兼容供应商 API(无 GFW)、demo-model/ADB 控模拟器无需下模型、本地槽位模型仅一次性拉 base GGUF → 当年卡住的 torch/peft 训练链大头基本消失。当年踩通的镜像/路径经验可沉淀为 skill 备用。
 
 ---
 
@@ -229,7 +229,7 @@
 
 ## 11. 风险与诚实边界
 
-- 本地模型吞吐/智能不足 → 两层可能退化成「大脑每步兜底」，需真实跑测定阈值。
+- 本地模型吞吐/智能不足 → 分层可能退化成「主模型每步兜底」，需真实跑测定阈值。
 - SoM grounding 精度是 RPG 头号失败点（OSWorld 数据）→ 模板匹配兜底必要。
 - 模拟器截屏延迟 vs 实时性。
 - 自学习幻觉 skill → N=3 门 + 验证必须硬。
@@ -241,12 +241,12 @@
 
 > **设计动机（2026-07-26 补充）**：两份主流评审 + 行业实证（Codex / Claude Code / Hermes）表明，「大上下文窗口」与「该不该塞满上下文」是两件事。X3 的 agent 与 Codex 类一次性 coding session 不同——**它会跑小时级甚至跨天的常驻任务**（挂机刷本、长任务链），因此不能靠「开新 session / /clear」续命，必须把「工作上下文」与「会话连续性」彻底分离。本节固化 X3 的上下文与记忆管理设计，作为 M3b（大脑压缩入口）与 M4b（世界模型落盘）的权威依据。
 
-### 12.1 设计原则：两层上下文目标不同
+### 12.1 设计原则：主链与子 agent 槽位上下文目标不同
 
 | 层 | 上下文目标 | 管理策略 |
 |----|-----------|---------|
-| 本地 4B 执行器（worker） | 单 subtask 内自闭环 | **硬滑动窗口 `history_keep:3`**，不做摘要（4B 无摘要能力、ctx 8192 太小） |
-| 在线大脑（brain / manager） | 长任务规划 + 约束 + 反思 | **质量压缩（handoff 前瞻摘要）+ token 占比主触发 + 硬上限兜底**；绝不 3 轮硬截断 |
+| 子 agent 执行单元（worker 槽位） | 单 subtask 内自闭环 | **硬滑动窗口 `history_keep:3`**，不做摘要（本地小模型无摘要能力、ctx 8192 太小） |
+| 主 agent（brain / manager） | 长任务规划 + 约束 + 反思 | **质量压缩（handoff 前瞻摘要）+ token 占比主触发 + 硬上限兜底**；绝不 3 轮硬截断 |
 
 **关键反直觉点**：**1M 上下文 ≠ 不需要压缩**。Claude 官方称其为 "context rot"；Chroma 2025 实测（18 个前沿模型）显示 200K 窗口自 50K token 起性能明显退化（lost-in-the-middle）。Codex / Claude / Hermes **全都在压**——大窗口只给跑大任务的余量，不是不压的理由。
 
@@ -267,9 +267,9 @@
 > ⚠️ **关键约束**：brain 为**可换模型**（架构模型无关，`BrainClient` 零改动解析标准 `tool_calls`）。当前 `config.brain` 指向 OpenAI 兼容供应商（`base_url=api.example.com/v1`，`model=demo-model`）做模型通用性验证。无论换哪款，**大概率不是 1M 窗口**（前沿 1M 是 GPT-5.4 / Claude Sonnet 5 / Gemini），token 占比必须相对**当前大脑真实窗口**算。落地 `compress_threshold` / `hard_ceiling` 前须先确认其上下文上限（128K / 200K？），否则阈值定错。
 > 当前 config 落点：`brain.long_task: {enabled:true, max_turns:16, compress:true}`（已落地，作用于**单大脑 run_task 模式**）；`compress_threshold` / `hard_ceiling` 待补（token 占比主触发）。
 
-### 12.3 本地执行器层（worker hard-keep-3）
+### 12.3 子 agent 执行单元层（worker hard-keep-3）
 
-`runtime.escalation.worker_history_keep: 3` 已在 config 落地：worker 内层 loop 只保留最近 3 轮历史，按轮硬裁剪防 ctx 溢出；4B 不产出 handoff 摘要（能力所限），故硬滑窗是唯一靠谱选择。与大脑分层机制正确区分（**worker = 存活裁剪，大脑 = 质量压缩**）。
+`runtime.escalation.worker_history_keep: 3` 已在 config 落地：子 agent 内层 loop 只保留最近 3 轮历史，按轮硬裁剪防 ctx 溢出；本地小模型不产出 handoff 摘要（能力所限），故硬滑窗是唯一靠谱选择。与主链分层机制正确区分（**worker = 存活裁剪，主 agent = 质量压缩**）。
 
 ### 12.4 超长任务连续性（无状态大脑 + 持久世界模型 + 检查点）
 
@@ -287,7 +287,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 
 **避免 JPEG 效应**：压缩时不只产窗口内摘要，而是把关键进展**写回持久世界模型**（落盘）；窗口里只留指针。外部记忆才是连续性的真靠山（Zylos 2026 结论：压缩有损，外部记忆才是续跑靠山）。
 
-**与现有架构的关系（已写入 config 注释，M4b.1 已编码 dbe71e8）**：两层模式下大脑本就是「无状态规划者」——`_plan` 一次 + `_reflect` 仅在 escalate 时调用，且 reflect 只收升级上下文（卡在哪、当前状态）+ 持久世界模型，**不是整个长历史**；消息每次重建，天然不累积。故 `max_turns:16` 从「主压缩触发」**降级为罕见兜底**。持久化世界模型 + 检查点已落地（`world_model.py` save/load/checkpoint/merge_progress），`_plan`/`_reflect` 无状态化（只组装 `world.summary()`），`_compress_history` 接受 world 做 `merge_progress` 回写 facts。
+**与现有架构的关系（已写入 config 注释，M4b.1 已编码 dbe71e8）**：分层形态下主 agent 本就是「无状态规划者」——`_plan` 一次 + `_reflect` 仅在 escalate 时调用，且 reflect 只收升级上下文（卡在哪、当前状态）+ 持久世界模型，**不是整个长历史**；消息每次重建，天然不累积。故 `max_turns:16` 从「主压缩触发」**降级为罕见兜底**。持久化世界模型 + 检查点已落地（`world_model.py` save/load/checkpoint/merge_progress），`_plan`/`_reflect` 无状态化（只组装 `world.summary()`），`_compress_history` 接受 world 做 `merge_progress` 回写 facts。
 
 ### 12.5 行业参照与实证
 
@@ -352,7 +352,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 ### 14.3 Config 去 key
 
 - 明文 API key **只存** `~/.omniagent/config.yaml`；仓库 `config.yaml` 去明文，启动时被全局覆盖。
-- **三通道解耦（2026-08-02 取代 mode 三态为主控）**：planner(brain) / executor(runtime.executor) / vision(runtime.vision) 三个通道**各自独立 enable + base_url/model/api_key**，由 Web 设置面板「通道」Tab 经 `PUT /api/settings`（`router_settings.py`，白名单含 `runtime`/`brain`/`executor`/`vision`/`local_model`）写入 `~/.omniagent/config.yaml`。内核 `tool_loop.py` 消费：`executor.enabled` 决定起独立本地 4B 第二路（`tool_loop.py:147`），未启用则 executor 角色由 planner 主模型兼任（`executor_is_planner=True`，仍两层，不退化）。`/chat` 读 `config.load_config()` 合并后的 settings，即时生效（`PUT` 后 `reload_config()` 失效缓存）。
+- **三通道解耦（2026-08-02 取代 mode 三态；2026-09-30 Layer 0 派发底座落地）**：planner(brain) / executor(runtime.executor) / vision(runtime.vision) 三个通道**各自独立 enable + base_url/model/api_key**，由 Web 设置面板「通道」Tab 经 `PUT /api/settings`（`router_settings.py`，白名单含 `runtime`/`brain`/`executor`/`vision`/`local_model`）写入 `~/.omniagent/config.yaml`。**现状（Layer 0）**：执行单元来自注册表（`runtime.dispatch.agents` 显式声明参与派发的槽，首个为默认槽），槽 → 模型映射在 `~/.omniagent/models.json` 的 `defaults.<slot>`；`runtime.executor` 是 worker 槽的缺省注入源；未配置任何槽时主模型兼任默认槽（brain 自派发，合法语义）。`/chat` 读 `config.load_config()` 合并后的 settings，即时生效（`PUT` 后 `reload_config()` 失效缓存）。
 - `runtime.mode`（`dual`/`online_only`/`local_only`）**保留为快捷预设**：选中 online_only 自动把 executor/vision 置 `enabled=false`，dual 置 true。行为由三通道开关决定，`mode` 仅作批量预设。
 - `local_model.auto_start`：是否自动拉起本地 llama-server。
 - `runtime.trajectory.dir` / `runtime.world_model.dir`：留空即走默认项目级 `tasks/<task_id>/` 路径（由 `agents/local/runtime_paths.py` 接管）。
@@ -371,19 +371,19 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 
 1. **M4b.3 Curator 触发式静默维护**（`prune_trajectories` + `refine_world_model` + `review_candidate_skills` + `flag_low_quality`）：任务完成后跑，不挂周期性后台定时器。✅ 已落地（2026-08-22，commit 0d21f47，128 passed）。
 2. **X3 设计符合性优化（P0–P3）**（已落地）：`/stop` 置 `aborted`、agent 回包持久化、前端标题以服务端 `objective` 为主源、非 loopback 绑定无 `auth_token` 拒绝启动、补 API 集成测试。
-3. 可选：跑真在线两层闭环验证，看 skill 库 + world-model 持久化在真机的产出。
+3. 可选：跑真在线分层闭环验证，看 skill 库 + world-model 持久化在真机的产出。
 4. 后续独立项（非阻塞）：管理 / 运行接口的请求级 token 鉴权、模型路径 allow-list。
 5. **画像/角色卡/记忆三位一体 P0 + C₃ 校准**：已落地并真机验证（2026-09-26，见 §0 / §6.5）；后续真实抽检需求出现时用 `PUT /signals/calibration` 填 `c1_calibration_error`。
 
 ### 15.2 风险补充
 
-- 本地模型吞吐 / 智能不足 → 两层可能退化成「大脑每步兜底」，需真实跑测定阈值（同 §11）。
+- 本地模型吞吐 / 智能不足 → 分层可能退化成「主模型每步兜底」，需真实跑测定阈值（同 §11）。
 - SoM grounding 精度是 RPG 头号失败点 → 模板匹配兜底必要（同 §11）。
-- **GFW**：新架构暴露面已大幅缩小（在线大脑 = 国内 API、u2 不下载模型、本地执行器仅一次性拉 base GGUF）；真正碰墙只剩「拉基座 GGUF」一次。
+- **GFW**：新架构暴露面已大幅缩小（主模型 = 国内 API、u2 不下载模型、本地槽位模型仅一次性拉 base GGUF）；真正碰墙只剩「拉基座 GGUF」一次。
 
 ### 15.3 关键决策（固化追踪）
 
-- 模拟器 = Android + uiautomator2/ADB（IME 无关）；本地执行器 = `llama-server`（OpenAI 兼容 `:8085`），复用 `BrainClient`。
+- 模拟器 = Android + uiautomator2/ADB（IME 无关）；本地槽位模型 = `llama-server`（OpenAI 兼容 `:8085`），复用 `BrainClient`。
 - world-model / skill 持久化 = Hermes 风格 Markdown + frontmatter（agentskills.io 同构）；`data/skills/<app>/<skill>.md`。
 - **大脑不做模型路由**（§2.1）：子任务按架构约定一律走本地 4B；升级回流靠可量化条件（verify 连败 3 / 内层 8 步 / 墙钟 120s / no_confidence / ctx 溢出）。
 - **task_done 必须 verify**（§未变）：大脑调 `task_done` 时强制跑 `_verify`，通过才接受；失败→拒绝 + 回 observe 重规划（防幻觉式完成），无条件时信任大脑。

@@ -97,7 +97,7 @@
     <li class="l2"><a href="#s-03-单次任务-ReAct-闭环框架原生-钩子">03 单次任务 ReAct 闭环（框架原生 + 钩子）</a></li>
     <li class="l2"><a href="#s-04-Vision-SoM-通道图MCP-化">04 Vision SoM 通道图（MCP 化）</a></li>
     <li class="l2"><a href="#s-05-自升级-Meta-loop">05 自升级 Meta-loop</a></li>
-    <li class="l2"><a href="#s-06-两层执行编排-EscalationLangGraph-handoff">06 通用多 agent 编排 + Escalation（LangGraph Send 扇出）</a></li>
+    <li class="l2"><a href="#s-06-agent-orchestration-EscalationLangGraph-handoff">06 通用多 agent 编排 + Escalation（LangGraph Send 扇出）</a></li>
     <li class="l2"><a href="#s-07-上下文管理分层模型大模型质量压缩-vs-worker-硬滑窗">07 上下文管理分层模型（大模型质量压缩 vs worker 硬滑窗）</a></li>
     <li class="l2"><a href="#s-08-超长任务持久化与检查点模型">08 超长任务持久化与检查点模型</a></li>
     <li class="l2"><a href="#s-09-全局目录与-Project-Task-模型">09 全局目录与 Project / Task 模型</a></li>
@@ -435,7 +435,7 @@
 
 <!-- ============ N6 ============ -->
 <section id="n6">
-  <h2 id="s-06-两层执行编排-EscalationLangGraph-handoff"><span class="num">06</span> 通用多 agent 编排 + Escalation（LangGraph Send 扇出）</h2>
+  <h2 id="s-06-agent-orchestration-EscalationLangGraph-handoff"><span class="num">06</span> 通用多 agent 编排 + Escalation（LangGraph Send 扇出）</h2>
   <p class="lead">框架态（M10 已落地，<a href="../plans/implemented/multi-agent-redesign-2026-09-13.md">multi-agent-redesign</a >）：<b>去分层</b>——不再有固定的「manager 规划 + worker 执行」两层。主 agent（主模型）默认自己把任务做完；只有互不依赖、可并行的子任务群，主 agent 才调 <code>dispatch</code> 元工具产出计划，编排层（<code>omni_core/orchestration/graph.py</code>，main / sub / finalize 节点）用 LangGraph <code>Send</code> 扇出子 agent（执行模型）<b>并发</b>执行，结果经 add reducer 聚合回灌主 agent。子 agent 干不动时靠可量化升级条件把现场交回主 agent（escalate）。</p >
 
   <div class="diagram">
@@ -516,7 +516,7 @@
 <!-- ============ N7 ============ -->
 <section id="n7">
   <h2 id="s-07-上下文管理分层模型大模型质量压缩-vs-worker-硬滑窗"><span class="num">07</span> 上下文管理分层模型（大模型质量压缩 vs worker 硬滑窗）</h2>
-  <p class="lead">两层架构下，大模型与 worker 的上下文目标不同，管理策略必须分开：worker 是「存活裁剪」（硬滑窗防溢出），大模型是「质量压缩」（handoff 前瞻摘要 + token 占比主触发）。1M 窗口 ≠ 不压。压缩 / 滑窗策略由框架 lifecycle 钩子执行，owner 变框架。</p>
+  <p class="lead">分层形态下，主 agent 与子 agent 执行单元的上下文目标不同，管理策略必须分开：子 agent（本地快模型）是「存活裁剪」（硬滑窗防溢出），主 agent 是「质量压缩」（handoff 前瞻摘要 + token 占比主触发）。1M 窗口 ≠ 不压。压缩 / 滑窗策略由框架 lifecycle 钩子执行，owner 变框架。</p>
 
   <div class="diagram">
     <svg viewBox="0 0 920 470" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
@@ -569,9 +569,9 @@
       <text x="670" y="138" font-size="11" font-weight="700" fill="#15803d" text-anchor="middle">history_keep:3 硬滑窗</text>
       <text x="670" y="156" font-size="10" fill="#64748b" text-anchor="middle">只留最近 3 轮 · 按轮裁剪防溢出</text>
 
-      <!-- 本地执行器无摘要 -->
+      <!-- 本地槽位模型无摘要 -->
       <rect x="510" y="190" width="320" height="40" rx="8" fill="#f1f5f9" stroke="var(--line)"/>
-      <text x="670" y="214" font-size="10.5" fill="#475569" text-anchor="middle">本地执行器无摘要能力 → 不产 handoff，硬裁是唯一选择</text>
+      <text x="670" y="214" font-size="10.5" fill="#475569" text-anchor="middle">本地快模型无摘要能力 → 不产 handoff，硬裁是唯一选择</text>
 
       <!-- overflow -> escalate -->
       <path d="M510,206 C440,206 412,150 405,98" fill="none" stroke="var(--danger)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#ar10r)"/>
@@ -667,7 +667,7 @@
     <tr><td>子目标检查点（checkpoint 落盘）</td><td>子目标边界把 world-model + 当前子目标写盘；崩溃 / 重启从检查点续</td><td>不进窗口</td></tr>
   </table>
 
-  <div class="note"><b>行业对齐：</b>Codex 警告「多次压缩导致模型准确度下降」（JPEG 效应）；Zylos 2026 结论——长任务靠「压缩 + 结构化外部记忆 + 子 agent 委派」三层，且<b>压缩有损，外部记忆才是连续性真靠山</b>。OmniAgent 两层架构骨架已朝此方向，world_model 持久化 + 检查点已落地（M4b.1）：`world_model.py` save/load(current.md) + checkpoint(JSON) + merge_progress(防 JPEG)；`_plan`/`_reflect` 无状态化（只组装 `world.summary()`）。框架态下该机制不变，仅压缩/checkpoint 触发点改由框架 lifecycle 钩子驱动。</div>
+  <div class="note"><b>行业对齐：</b>Codex 警告「多次压缩导致模型准确度下降」（JPEG 效应）；Zylos 2026 结论——长任务靠「压缩 + 结构化外部记忆 + 子 agent 委派」三层，且<b>压缩有损，外部记忆才是连续性真靠山</b>。OmniAgent 现有架构骨架已朝此方向，world_model 持久化 + 检查点已落地（M4b.1）：`world_model.py` save/load(current.md) + checkpoint(JSON) + merge_progress(防 JPEG)；`_plan`/`_reflect` 无状态化（只组装 `world.summary()`）。框架态下该机制不变，仅压缩/checkpoint 触发点改由框架 lifecycle 钩子驱动。</div>
   <div class="note"><b>架构决策（2026-09-17）：不引入持久化 checkpointer（SqliteSaver 等）。</b>推理链：① LLM 上下文有限 → 长任务必然滑动（压缩 / 滑窗，见 §07），「恢复全量执行状态」本就不存在；② 崩溃恢复后模型重建认知靠的仍是 WorldModel 快照 + skill 沉淀，而非逐步执行轨迹；③ 通用 checkpointer 存全量 state 快照，体积大且大部分是模型吃不回的旧上下文——领域定制的 WorldModel（只存认知要点）粒度更对，且 skill 升级沉淀实现跨任务复用。LangGraph checkpointer 维持 <code>MemorySaver</code> 内存版，仅作软注入（<code>update_state</code>）通道使用，不承担持久化职责。HITL 需求为「运行中不中断」（软注入 + /stop），评估后不做 <code>interrupt</code> 审批暂停点。</div>
 </section>
 

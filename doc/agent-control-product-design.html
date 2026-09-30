@@ -138,7 +138,7 @@
     <li><b>知识自学，无插件：</b>world-model + skill 由 agent 运行时观测积累；场景知识（如 IME 处理、开程序原语）属<b>运行时知识</b>而非硬编码。旧插件系统已丢弃，不迁移。</li>
     <li><b>能力 == 插件（红线）：</b>内核只负责通用闭环驱动（框架接管）+ 后处理钩子，不认识具体 X；<b>加能力 = 加一个外层 tool 插件 / 接一个外部 MCP，绝不改内核</b>。自研 tool 与开源 MCP 完全平级，由 LLM 直接调用。</li>
     <li><b>模型无关：</b>能力声明来自模型元数据，<b>动态注入提示词</b>；换 VL / 换执行模型零代码改动。比主流静态工具列表更严谨。</li>
-    <li><b>大模型低频、本地高频：</b>在线大模型仅决策点介入；本地执行器在子目标内自闭环。依据 OSWorld 实测——顶级 agent 75–94% wall time 花在规划 / 反思 LLM 调用，故该延迟设计正确；grounding 是头号失败点 → SoM 必要。</li>
+    <li><b>派发可选（分层与否由目录决定）：</b>主 agent 规划并执行，默认自闭环；互不依赖的并行子任务才扇出给按槽位配置的执行单元（可为本地快模型）。依据 OSWorld 实测——顶级 agent 75–94% wall time 花在规划 / 反思 LLM 调用，故延迟敏感的执行下沉到本地槽位是正确方向；grounding 是头号失败点 → SoM 必要。</li>
     <li><b>诚实边界：</b>自学习只长「知识 / 策略」，不长「硬件 / 工具精度」；新 skill 须连续成功 N 次才晋升，防幻觉 skill 自欺（自学习 ≠ 自欺）。</li>
     <li><b>超长任务连续性：</b>把「工作上下文」（有界、可压）与「会话连续性」（外部、持久）分离——<b>无状态大模型 + 持久 world-model + 子目标检查点</b>，使小时 / 跨天任务不丢目标、崩溃可续。</li>
   </ol>
@@ -210,7 +210,7 @@
     <tr>
       <td><b>上下文管理</b></td>
       <td>worker：<code>history_keep:3</code> 硬滑窗；大模型：<code>long_task</code> 自动压缩（token 占比主触发）；超长任务：无状态大模型 + world-model 落盘 + 子目标 checkpoint</td>
-      <td>1M 窗口 ≠ 不压（context rot）；本地执行器无摘要能力 → 硬裁是唯一选择；大模型不做 3 轮（会丢全局上下文）。压缩 / 滑窗策略由框架 lifecycle 钩子执行，owner 变框架。</td>
+      <td>1M 窗口 ≠ 不压（context rot）；本地快模型无摘要能力 → 硬裁是唯一选择；主 agent 不做 3 轮（会丢全局上下文）。压缩 / 滑窗策略由框架 lifecycle 钩子执行，owner 变框架。</td>
     </tr>
     <tr>
       <td><b>Escalation 阈值</b></td>
@@ -229,7 +229,7 @@
     </tr>
   </table>
 
-  <div class="note"><b>架构红线（零场景特化）：</b>核心执行层不写任何 app / 游戏 / 业务专属策略；所有「怎么做」的任务流程知识由 skill / 知识库提供、由模型决策，不进执行器代码。内核经 <code>review_lint.py</code> 守护 C1–C5 五条契约。<code>collect_list</code> 作为<b>通用工具</b>（批量抓当前列表）保留；枚举类任务在「纯框架 + 无辅助代码」下能否由本地执行器自主完成，是待验证的<b>架构通用性边界</b>。</div><h2 id="s-4-行业对标与参考">4. 行业对标与参考</h2><p class="lead">框架态设计与 2026 主流 agent 范式高度对齐。下列参考是「为什么这么选」的外部佐证。</p>
+  <div class="note"><b>架构红线（零场景特化）：</b>核心执行层不写任何 app / 游戏 / 业务专属策略；所有「怎么做」的任务流程知识由 skill / 知识库提供、由模型决策，不进执行单元代码。内核经 <code>review_lint.py</code> 守护 C1–C5 五条契约。<code>collect_list</code> 作为<b>通用工具</b>（批量抓当前列表）保留；枚举类任务在「纯框架 + 无辅助代码」下能否由子 agent 自主完成，是待验证的<b>架构通用性边界</b>。</div><h2 id="s-4-行业对标与参考">4. 行业对标与参考</h2><p class="lead">框架态设计与 2026 主流 agent 范式高度对齐。下列参考是「为什么这么选」的外部佐证。</p>
 
   <table>
     <tr><th>范式 / 项目</th><th>与 OmniAgent 框架态的对应关系</th></tr>
@@ -238,7 +238,7 @@
     <tr><td><b>Agent Skills</b>（Anthropic 开放标准）</td><td>SKILL.md 文件夹、agent 像装 App 加载技能 = 我们的 skill / world-model 纯文本知识库。</td></tr>
     <tr><td><b>Hermes Agent</b>（NousResearch，MIT）</td><td>自进化技能系统 + Autonomous Background Curator；三层记忆本地 markdown；轨迹导出供微调。直接印证「world-model + skill 自学」范式，skill 格式对齐 agentskills.io。</td></tr>
     <tr><td><b>UI-TARS</b>（ByteDance）</td><td>原生 GUI 模型；System-2 Reasoning + Iterative Training w/ Reflective Online Traces。印证「反思 + 从失败学」须内建。</td></tr>
-    <tr><td><b>MGA</b>（Memory-Driven GUI Agent）</td><td>本地快 VLM 感知 + 远程强模型记忆规划 ≈ 两层架构的论文版，强印证。</td></tr>
+    <tr><td><b>MGA</b>（Memory-Driven GUI Agent）</td><td>本地快 VLM 感知 + 远程强模型记忆规划 ≈ 分层派发形态的论文版，强印证。</td></tr>
     <tr><td><b>OSWorld</b> 基准</td><td>真实电脑环境 369 任务；顶级 agent 75–94% wall time 花在规划 / 反思 LLM 调用 → 印证「大模型低频、本地快执行」；grounding 是头号失败点 → SoM 必要。</td></tr>
     <tr><td><b>LangGraph / OpenAI Agents SDK</b></td><td>协同栈：LangGraph 编排多 agent 拓扑 + handoff + interrupt（HITL），Agents SDK 跑单 agent ReAct/FC/流式并从 MCP 加载工具。印证「循环与协议交给框架、领域脑外挂」。</td></tr>
   </table>
