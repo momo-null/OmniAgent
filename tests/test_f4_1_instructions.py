@@ -104,25 +104,22 @@ def test_tail_inject_reports_once():
     assert seen[0][1] == ["memory"]
 
 
-# --- 4. 纪律文件写保护（F4.1b：检查已收编进 S1 policy，经统一出口返回结构化拒绝） ---
-def test_agents_md_write_blocked(tmp_path, fs, approve_all_sink):
+# --- 4. 纪律文件写护已撤销（F4.1b 原 S1 载体规则） -------------------------
+def test_agents_md_write_now_flows_through_s2(tmp_path, fs, approve_all_sink):
+    """纪律文件写护已撤销：AGENTS.md 不再被静默拒，改走 S2（approve_all 批准）。"""
     p = tmp_path / "AGENTS.md"
     r = call_tool("write_file", {"path": str(p), "content": "nope"})
-    assert r["ok"] is False and r["denied"] is True and r["rule"] == "discipline_file"
-    assert not p.exists()
-    # 编辑同样被拒
-    p.write_text("orig", encoding="utf-8")
-    e = call_tool("edit_file", {"path": str(p), "old_string": "orig", "new_string": "changed"})
-    assert e["ok"] is False and e["denied"] is True and e["rule"] == "discipline_file"
-    assert p.read_text(encoding="utf-8") == "orig"
-    # 普通文件不受影响（tmp_path 在允许根外 → 经 approve_all_sink 批准放行）
-    ok = call_tool("write_file", {"path": str(tmp_path / "ok.md"), "content": "yes"})
-    assert ok["ok"] is True
+    assert r["ok"] is True, r
+    assert p.read_text(encoding="utf-8") == "nope"
+    # 编辑同样放行
+    e = call_tool("edit_file", {"path": str(p), "old_string": "nope", "new_string": "changed"})
+    assert e["ok"] is True, e
+    assert p.read_text(encoding="utf-8") == "changed"
 
 
-def test_agents_md_write_guard_covers_nested_name(tmp_path, fs, approve_all_sink):
-    """嵌套同名文件同样受保护（大小写不敏感）。"""
+def test_agents_md_nested_write_allowed(tmp_path, fs, approve_all_sink):
+    """嵌套同名文件同样不再受保护（大小写不敏感的名称规则已撤）。"""
     nested = Path(tmp_path) / "sub" / "agents.md"
     r = call_tool("write_file", {"path": str(nested), "content": "nope"})
-    assert r["ok"] is False and r["denied"] is True and r["rule"] == "discipline_file"
-    assert not nested.exists()
+    assert r["ok"] is True, r
+    assert nested.read_text(encoding="utf-8") == "nope"

@@ -22,9 +22,8 @@ from omni_core.local.world_model import WorldModel
 from omni_core.local.states import AgentState
 from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local import telemetry
-from omni_core.local.curator import Curator
 from omni_core.local.runtime_paths import (
-    task_trajectory, task_collected, auto_project_id,
+    task_trajectory, task_collected,
 )
 from omni_core.local.task_store import TaskStore, ProjectStore
 
@@ -114,43 +113,20 @@ class FinishMixin:
             result["report_file"] = report_file
             result["metrics"] = telemetry.compute(run_meta)
 
-        # M4b.3 Curator：任务完成后触发一次（触发式，不挂定时器）
-        if self.curator_enabled and store is not None and spec is not None:
+        # skill 轴 · 结构化宏提取（skill.auto_distill 默认关；原 Curator 第 9a 步重接，
+        # K 系列退役后拆为 skill_library.maybe_distill_skill 独立挂点）。
+        # 开关关闭 → 零动作；异常静默，绝不影响主流程。
+        if spec is not None and store is not None:
             try:
-                curator = Curator(
-                    task_id=spec.task_id,
-                    config=self._cfg.get("runtime", {}).get("curator"),
-                )
-                run_record_for_curator = dict(run_meta)
-                run_record_for_curator["reason"] = reason
-                run_record_for_curator["run_id"] = run_meta.get("run_id", "")
-                # 自学习修复：补 steps_data（此前仅测试构造，真机缺失导致
-                # from_run_record 恒 None → candidate skill 永不创建 → N=3 晋级死链）。
-                # 从本 run 轨迹 jsonl 提取 action 序列（tool+args），内核通用、零场景假设。
-                _steps_data: List[Dict[str, Any]] = []
-                try:
-                    if store is not None and Path(store.path).exists():
-                        for _line in Path(store.path).read_text(encoding="utf-8").splitlines():
-                            try:
-                                _rec = json.loads(_line)
-                            except Exception:
-                                continue
-                            _act = _rec.get("action")
-                            if isinstance(_act, dict) and _act.get("tool"):
-                                _steps_data.append(
-                                    {"tool": _act.get("tool", ""), "args": _act.get("args") or {}})
-                except Exception:
-                    _steps_data = []
-                run_record_for_curator["steps_data"] = _steps_data
-                curator_report = curator.run_once(run_record_for_curator)
-                result["curator_report"] = curator_report.to_dict()
-                if self.verbose and curator_report.flagged_low_quality:
-                    self._log(f"[Curator] 标记 low_quality: {curator_report.flagged_low_quality}")
-                if self.verbose and curator_report.errors:
-                    self._log(f"[Curator] 维护完成（含 {len(curator_report.errors)} 个错误）")
-            except Exception as e:
-                if self.verbose:
-                    self._log(f"[Curator] 触发失败（不影响主流程）: {type(e).__name__}: {e}")
+                if config.get_config("skill.auto_distill", False):
+                    from omni_core.local import skill_library
+                    skill_library.maybe_distill_skill(
+                        task_id=spec.task_id,
+                        brain_cfg=getattr(self, "brain_cfg", None),
+                        success=bool(success),
+                        objective=run_meta.get("objective") or "")
+            except Exception:
+                pass
 
         return result
 

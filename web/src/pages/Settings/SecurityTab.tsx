@@ -1,7 +1,7 @@
-// S0/S2 设置页「安全」区：权限模式档位 / 允许写入根 / 审批等待 / 审计查看。
+// S0/S2 设置页「安全」区：权限模式档位 / 审批等待 / 审计查看。
 // 语义：
 // - 档位随 run 快照生效——改动不影响进行中的 run，下次 run 生效；
-// - 允许根只决定「写」的放行区（~/.omniagent 自身永远拒绝，任何档位都不例外）；
+// - 写入不设防（S1 路径围栏已整体删除，含允许根）；风险靠档位与危险动作审批把关；
 // - 审计只读（门的干预才记录；agent 不可触达）。
 import { useEffect, useRef, useState } from "react";
 import {
@@ -31,7 +31,6 @@ const DECISION_COLOR: Record<string, "success" | "error" | "warning" | "default"
   user_deny: "error",
   timeout: "warning",
   cancelled: "default",
-  denied_s1: "error",
   mode_read_only: "warning",
   auto_deny: "warning",
 };
@@ -50,8 +49,6 @@ interface AuditEntry {
 
 export default function SecurityTab() {
   const [mode, setMode] = useState<string>("standard");
-  const [roots, setRoots] = useState<string[]>([]);
-  const [newRoot, setNewRoot] = useState("");
   const [waitSeconds, setWaitSeconds] = useState<number>(600);
   const [auditOn, setAuditOn] = useState<boolean>(true);
   const [entries, setEntries] = useState<AuditEntry[]>([]);
@@ -62,7 +59,6 @@ export default function SecurityTab() {
     settingsApi.get().then((r) => {
       const sec = (r.data as any)?.security || {};
       if (typeof sec.mode === "string") setMode(sec.mode);
-      if (Array.isArray(sec.allow_write_roots)) setRoots(sec.allow_write_roots.map(String));
       const w = (sec.approval || {}).wait_seconds;
       if (typeof w === "number") setWaitSeconds(w);
       if (typeof sec.audit === "boolean") setAuditOn(sec.audit);
@@ -76,20 +72,19 @@ export default function SecurityTab() {
     }).catch(() => {});
   };
 
-  // 失焦/勾选即保存（dirty 检查，无变化不提交）；Radio 切换与根增删即时生效
+  // 失焦/勾选即保存（dirty 检查，无变化不提交）；Radio 切换即时生效
   const dirtyRef = useRef(false);
   const save = async (overrides: Record<string, unknown> = {}) => {
     if (!dirtyRef.current) return;
     dirtyRef.current = false;
     setError(""); setSaved("");
-    const s = { mode, roots, waitSeconds, ...overrides } as {
-      mode: string; roots: string[]; waitSeconds: number;
+    const s = { mode, waitSeconds, ...overrides } as {
+      mode: string; waitSeconds: number;
     };
     try {
       await settingsApi.put({
         security: {
           mode: s.mode,
-          allow_write_roots: s.roots,
           approval: { wait_seconds: s.waitSeconds >= 0 ? s.waitSeconds : 600 },
           audit: auditOn,
         },
@@ -98,37 +93,22 @@ export default function SecurityTab() {
     } catch (e) { dirtyRef.current = true; setError((e as Error).message); }
   };
 
-  const addRoot = () => {
-    const v = newRoot.trim();
-    if (!v || roots.includes(v)) return;
-    const next = [...roots, v];
-    dirtyRef.current = true;
-    setRoots(next);
-    setNewRoot("");
-    void save({ roots: next });
-  };
-
-  const removeRoot = (r: string) => {
-    const next = roots.filter((x) => x !== r);
-    dirtyRef.current = true;
-    setRoots(next);
-    void save({ roots: next });
-  };
-
   return (
     <Box>
       <Typography variant="subtitle2" gutterBottom>安全与审批</Typography>
       <Stack spacing={2} sx={{ maxWidth: 560, mb: 3 }}>
         <Alert severity="info">
-          「标准」档：危险动作（命令执行 / 键鼠 / 允许根外写入）逐项弹卡人工批准；
-          「只读」档：危险动作自动拒绝（挂机实验 / 不可信内容用）。
-          每个任务的「完全访问」开关在 Chat 页单独控制，开启后不弹卡——
-          各任务独立记录在 task.json，跟随当前任务切换。
+          「标准」档：危险动作（命令执行 / 键鼠）逐项弹卡人工批准，文件写入不设门；
+          「只读」档：危险动作自动拒绝（挂机实验 / 不可信内容用）；
+          「完全访问」档：所有任务/运行的危险动作直接放行、不弹卡（信任本机环境时用）。
+          每个任务的「完全访问」开关在 Chat 页单独控制，开启后该任务不弹卡——
+          全局档与任务开关任一为真即免审批；各任务独立记录在 task.json，跟随当前任务切换。
         </Alert>
         <FormControl>
           <RadioGroup row value={mode} onChange={(e) => { const v = e.target.value; dirtyRef.current = true; setMode(v); void save({ mode: v }); }}>
             <FormControlLabel value="standard" control={<Radio />} label="标准（弹卡审批）" />
             <FormControlLabel value="read_only" control={<Radio />} label="只读（自动拒绝）" />
+            <FormControlLabel value="full_access" control={<Radio />} label="完全访问（全局免审批）" />
           </RadioGroup>
         </FormControl>
         <TextField
@@ -136,25 +116,6 @@ export default function SecurityTab() {
           value={waitSeconds} inputProps={{ min: 0 }}
           onChange={(e) => { dirtyRef.current = true; setWaitSeconds(Math.max(0, Number(e.target.value) || 0)); }}
           onBlur={() => void save()} />
-        <Box>
-          <Typography variant="body2" gutterBottom>允许写入的根（任务临时目录之外；路径围栏的写入放行区）</Typography>
-          <Stack direction="row" spacing={1}>
-            <TextField size="small" fullWidth placeholder="绝对路径，如 D:\\projects"
-              value={newRoot} onChange={(e) => setNewRoot(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") addRoot(); }} />
-            <Button variant="outlined" onClick={addRoot}>添加</Button>
-          </Stack>
-          <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: "wrap", gap: 0.5 }}>
-            {roots.map((r) => (
-              <Chip key={r} label={r} size="small" onDelete={() => removeRoot(r)} />
-            ))}
-            {roots.length === 0 && (
-              <Typography variant="caption" color="text.secondary">
-                （未配置——写入仅限当前任务目录，其余位置逐项审批）
-              </Typography>
-            )}
-          </Stack>
-        </Box>
         <Typography variant="caption" color="text.secondary">审计：{auditOn ? "开启" : "关闭"} ｜ 本页设置失焦/勾选即保存</Typography>
         {saved && <Alert severity="success" onClose={() => setSaved("")}>{saved}</Alert>}
         {error && <Alert severity="error" onClose={() => setError("")}>{error}</Alert>}

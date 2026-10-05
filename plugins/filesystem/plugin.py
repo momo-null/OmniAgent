@@ -5,8 +5,8 @@
 
 默认启用（`unit="filesystem"`）。安全边界：直接操作宿主机文件系统，路径由调用方
 给定，不做额外沙箱（与 shell 同类风险，需用户知情——本组默认开是因为风险低于 shell，
-且文件读写是通用 agent 的基础能力）。路径围栏由安全线 S1 统一注入
-（`workspace.resolve_path` 漏斗 + `policy.ensure_writable` 写入口），本插件不自行实现权限判断。
+且文件读写是通用 agent 的基础能力）。2026-10-03 用户定案：写入不设防（S1 路径围栏
+整体删除，含允许根），本插件不做任何权限判断。
 
 2026-09-25 归一（用户定：文件操作只留一套，读写不拆）——原独立插件 `fs_pro` 已并入：
 `read_range` → `read_file(offset=, limit=)`；`search_with_context` → `search_content(context=)`；
@@ -57,21 +57,9 @@ def _clip(text: str, limit: int) -> str:
 
 
 def _safe(path: str) -> Path:
-    """相对路径解析到当前任务临时目录（tasks/<task_id>/tmp/）；绝对路径原样。
-
-    S1 路径漏斗在 ``resolve_path`` 内统一生效（绝对拒绝区）。
-    """
+    """相对路径解析到当前任务临时目录（tasks/<task_id>/tmp/）；绝对路径原样。"""
     from omni_core.tools.workspace import resolve_path
     return resolve_path(path)
-
-
-def _ensure_writable(p: Path) -> None:
-    """写入口围栏（S1 允许根 / S2 根外审批；AGENTS.md 等载体拒绝已收编进 policy）。
-
-    必须在**任何副作用之前**调用（阻塞式审批设计，无需重入函数）。
-    """
-    from omni_core.tools.policy import ensure_writable
-    ensure_writable(p)
 
 
 @function_tool(
@@ -125,7 +113,6 @@ def write_file(path: str, content: str) -> Dict[str, Any]:
         content: 文件内容
     """
     p = _safe(path)
-    _ensure_writable(p)
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content, encoding="utf-8")
@@ -147,7 +134,6 @@ def edit_file(path: str, old_string: str, new_string: str) -> Dict[str, Any]:
         new_string: 替换后文本
     """
     p = _safe(path)
-    _ensure_writable(p)
     if not p.is_file():
         return {"ok": False, "error": f"文件不存在: {path}"}
     try:
@@ -277,7 +263,6 @@ def mkdir(path: str) -> Dict[str, Any]:
         path: 目录路径
     """
     p = _safe(path)
-    _ensure_writable(p)
     try:
         p.mkdir(parents=True, exist_ok=True)
     except Exception as e:

@@ -23,8 +23,8 @@
 | EmulatorBackend(u2/ADB) | ✅ 实现 | M1 落地，GUI 设备真机闭环验证通过（首个端到端场景） |
 | Trajectory / Telemetry / Verify / State | ✅ 实现 | M4a 地基全部完成（79 passed），commit fc145fe + 8c6e48e |
 | world-model 持久化 + checkpoint | ✅ 实现 | M4b.1 落地（commit dbe71e8）：save/load + checkpoint JSON + merge_progress |
-| skill 库 + N=3 晋升门 | ✅ 实现 | M4b.2 落地（commit a5fdaa0，107 passed）：SkillLibrary + from_run_record + 连续3次→active |
-| Curator（触发式维护） | ✅ 实现 | M4b.3 落地（commit 0d21f47）：prune + refine_world_model + review_candidate_skills + flag_low_quality，`tool_loop._finish` 末尾触发 |
+| skill 库 + N=3 晋升门 | ✅ 实现 | M4b.2 落地：SkillLibrary + 连续3次→active；宏轴自动蒸馏生产者 2026-10-05 重接至任务收尾（`skill_library.maybe_distill_skill`），见 `doc/plans/tam-porting-map.md`（知识层现行设计） |
+| Curator（触发式维护） | ❌ 已退役（2026-10-05） | K 系列代码整体删除；记忆/知识维护由 TAM 移植重建（§6.4） |
 | M6 子任务状态机（SubtaskStore） | ✅ 已落地 | `task_store.py`：RLock + 原子写 + 白名单 update；`claim`/`claim_next` 原子 CAS（pending→running），落 `tasks/<task_id>/subtasks.json`；WorldModel 管世界认知，TaskStore 管「谁在做什么、做到哪」 |
 | M7 去分层多 agent 编排 | ✅ 已落地 | `graph.py`：通用 agent 注册表 + LangGraph `Send` 并发扇出；主 agent 调 `dispatch` 元工具产出派发计划，框架负责扇出/join；`max_rounds` 防无限派发；删 `orchestration/policy.py`（升级改子 agent 自报 + 主 agent 决断）；`test_m2_orchestration.py` 重写为新图测试 |
 | meta-loop 权重级升级 | 🧊 未启用 | 仓库内无训练链代码；知识级三层已完成，权重级不启用（说明见 §6.3） |
@@ -98,23 +98,32 @@
 |------|------|----------|------|
 | 原始轨迹 `trajectory.jsonl` | 每次运行完整日志 | 滚动窗口 **30 天 / 或 N 次成功运行** 自动 prune（**采集常开**） | 写入零成本；超期 raw 价值衰减 |
 | SFT 快照 `dataset_round_N.jsonl` | 每次训练时过滤后的数据集 | **不可变版本快照，永久保留** | 已按质量信号（verified+retry==0）过滤、体积小、真 SFT 语料 |
-| 失败轨迹 `failures/` | 低质量（task_failed / 高 retry）/ 卡住片段 | 短窗口 **14 天** 后 prune | 只供 Curator 分析卡点，非 SFT 材料 |
+| 失败轨迹 `failures/` | 低质量（task_failed / 高 retry）/ 卡住片段 | 短窗口 **14 天** 后 prune | 非灌注 SFT 材料，仅排障 |
 | 训练产物 `*.gguf` | finetuned 执行器 | 版本化保留 **当前 + 上一版**，更早 prune | 受限硬件下省空间 |
 
-- **采集常开**：agent 本来就在跑任务，仅多写一份 JSONL，近零成本；既是未来 finetune 语料，也是 Curator 失败分析原料。
+- **采集常开**：agent 本来就在跑任务，仅多写一份 JSONL，近零成本；未来 finetune 语料。
 
 ---
 
 ## 6. skill 库 + 自升级 meta-loop（M4 / M5）
 
+> **2026-10-04 状态修订**：A9（2026-10-03）已删除录像式机械转录整链（`from_run_record` /
+> `review_candidate_skills` / `_derive_skill_name`——下文历史描述保留供追溯）。skill 轴以
+> **可重放宏缓存**复活并已实施：`substeps_from_trajectory`（轨迹原始 args 双轨；身份 =
+> 归一哈希）+ LLM 短标签（routine/description，`validate_skill_summary` 防幻觉校验）+
+> N=3 累计晋升 + 缓存淘汰（candidate TTL 14d / active 闲置 30d 且低效用 → `_archive/`，
+> 仿 memory A4 降级不删）+ 消费工具 `search_skill` / `replay_skill`（白名单硬重放，
+> S0/S2 审批照常生效）。开关 `skill.auto_distill` 默认关；有效性 A/B 验证未做。
+> 详见 `doc/plans/tam-porting-map.md`（知识层现行设计）。
+
 ### 6.1 skill 库（✅ M4b.2 已落地，commit a5fdaa0）
 - **格式**：Hermes 风格 `SKILL.md`（Markdown + YAML frontmatter，对齐 agentskills.io 开放标准；与 WorkBuddy 自身 SKILL.md 同构可复用）。
 - **录制与晋升**：从轨迹提炼候选 skill（`from_run_record` 提取 candidate）；**晋升门 N=3**（`_check_promotion` 连续成功 3 次才晋升可信，失败归零）。同名合并累计 `success_count`。
-- **存储（Plan C 生效，2026-08-01）**：通用 skill 存 `~/.omniagent/skills/<skill>.md`（跨 project 共享）；task 私有 skill 存 `~/.omniagent/tasks/<task_id>/skills/<skill>.md`。recall 合并两层、task 优先。Curator（§6.2）提炼的**通用** skill（带 `scope: global` 标签）落全局，实现「技能升级跨项目复利」；原 `data/skills/<app>/` 与 `app` 分区已随 Plan C 废弃。���
+- **存储（Plan C 生效，2026-08-01）**：通用 skill 存 `~/.omniagent/skills/<skill>.md`（跨 project 共享）；task 私有 skill 存 `~/.omniagent/tasks/<task_id>/skills/<skill>.md`。recall 合并两层、task 优先。人工维护的**通用** skill（带 `scope: global` 标签）落全局，实现「技能升级跨项目复利」；原 `data/skills/<app>/` 与 `app` 分区已随 Plan C 废弃。���
 
-### 6.2 Background Curator（✅ M4b.3 已落地，commit 0d21f47）
-- 静默维护进程（**非决策者**，不介入任务执行）：成功动作串→候选 skill（走 N=3 门）；反��卡点→capability_card 补丁。`tool_loop._finish` 末尾自动触发 `Curator.run_once`。
-- **运行形态（已定）**：**触发式**——每次顶层任务完成后跑一次；**Phase1 不挂周期性后台定时器**（避免并发写 world-model/skill 的锁复杂度）。四件维护：`prune_trajectories`（raw 30天/failures 14天）+ `refine_world_model`（去重陈旧 facts）+ `review_candidate_skills`（提取 candidate + N=3 晋升判定）+ `flag_low_quality`（高 retry / 高 intervention / 失败 → 标 `excluded_from_sft`）。
+### 6.2 Background Curator（❌ 已随 K 系列退役，2026-10-05）
+- 原静默维护进程（Curator.run_once：prune / refine_world_model / flag_low_quality / 蒸馏合并）已整体删除。
+- 其历史职责中仍然成立的部分：**触发式、不挂定时器、不介入任务执行**——这三条运行纪律由 TAM 记忆管线（§6.4）继承。
 
 ### 6.3 meta-loop 四层
 1. **skill 级**：合成可复用连招。
@@ -124,38 +133,17 @@
 
 ---
 
-### 6.4 知识层自升级（K 系列）✅ 已落地（2026-09-19）
+### 6.4 记忆轴（TAM 移植重建中）
 
-> 自升级主线为**知识级**。本节为索引，
-> 完整设计权威见 `doc/plans/知识级自升级_完整设计_K系列_定稿.md`。
+> 旧的自升级管线（原 §6.4「知识层自升级（K 系列）」，含 Curator / rollouts / MEMORY.md
+> 常驻注入 / 稳态收敛 / 信号体系）**已于 2026-10-05 整体退役删除**——其判据体系从未完成
+> 验证，历史文档已移除。记忆轴现按开源项目 **TencentDB Agent Memory（TAM）** 直接移植
+> 重建：设计见 `doc/plans/memory-rag-design.md`（SQLite+FTS5 分层存储 / LLM 提炼 atoms /
+> duplicate-merge-independent 三态判重 / 分层检索 + 三预算 + LLM 终审注入）。
+> 重建完成前，本节不描述任何已实现的记忆行为。
 
-**闭环四步**（与 M4 的 Curator 触发式维护同轴，挂载在 `tool_loop._finish`）：
-
-```plain
-任务轨迹落盘 → Curator 蒸馏成 rollout → 合并进全局 MEMORY.md → 下次任务弱注入消费
-```
-
-- **K0 知识层接通**：`memory/` 子系统（`rollouts/<task_id>.md` + `MEMORY.md` +
-  `memory_summary.md` + `merged.json`）+ Curator 第五件维护（蒸馏）+ 弱注入（默认关）。
-- **K1 运行积累与可视化**：真机开启注入；memory REST API + 前端「记忆」Tab + 右栏学习提示。
-- **K2 信号基础设施**：三实体一致率模型 —— **A**（系统 `success`）/ **B**（模型自报结论）/
-  **C**（真值：交互段 C₁ = 用户下一条消息裁决、自主段 C₂ = 终态观测评审）。
-  派生 `tasks/<tid>/<run_id>.signal.json` 与 `memory/signals_aggregate.json`；
-  端点 `GET /signals`、`/signals/summary`、`PUT /signals/calibration`（C₃ 校准写入）。
-  用于量化「假成功」（A 说成功、C 说没有）。
-- **K3 有效性裁决**：`scripts/review_rollouts.py`（蒸馏抽检）+ `scripts/effectiveness.py`
-  （ablation 聚合，判据：步数降 ≥15% 且成功率不降）。
-- **K4（已移除）**：动态纠偏采集——曾用 C₁/关键字判定自动从会话捞纠偏蒸馏，但关键字识别不可靠（子串误伤含"别"字等普通指令），且任务级纠偏本应止于当前任务而非沉淀全局。已整体删除：不再自动采集会话纠偏；画像走显式声明/人工，memory 靠 facts/lessons。
-- **K5 稳态运营**：四信号（蒸馏去重命中率 / skill 晋升率 / 步数方差 / 人工介入频率）+
-  域收敛判据 → 收敛后 Curator 自动降频（跳过蒸馏）；`GET /signals/steady` + 前端「稳态」Tab。
-- **C₃ 人工抽检校准**：`PUT /signals/calibration`（收 `{samples:[{predicted,human}]}` → `calibrate_c1c2` 算不一致率 → 写 `c1_calibration_error`），≤10% 采信分级判定；`/signals/summary` 透传 `calibration_samples`。该字段此前无写入入口、恒为 null，已补齐并真机验证。
-
-**红线**：内核零场景硬编码；能力默认关、需显式开启；`trajectory.jsonl` 只读（信号层不写任务原始数据）；
-`PUT /memory` 不校验内容；对外口径统一。
-
-**诚实边界**：K2 / K5 已真机验证；**C₃ 人工抽检校准已落地**（写入端点 + 真机验证）；
-**memory 闭环已真机验证**（2026-09-28：学习→蒸馏→跨任务 N=3 晋级→合并→注入→消费，三断点修复后逐环验证，见 Backlog K 系列）；
-**K3 的 V3 ablation 尚未跑出结论**（需 ≥20 次同域对照长跑），故不宣称「记忆注入已证明让任务做得更好」，仅宣称「闭环跑通、注入可被消费」。
+**红线（继承不变）**：内核零场景硬编码；任何语义判断不得写成规则+参数（无模型时降级为
+「不判断」，绝不猜）。
 
 ### 6.5 画像·角色卡·记忆三位一体（单角色伙伴，P0 已落地）
 

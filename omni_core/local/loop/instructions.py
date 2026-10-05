@@ -22,9 +22,8 @@ from omni_core.local.world_model import WorldModel
 from omni_core.local.states import AgentState
 from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local import telemetry
-from omni_core.local.curator import Curator
 from omni_core.local.runtime_paths import (
-    task_trajectory, task_collected, auto_project_id,
+    task_trajectory, task_collected,
 )
 from omni_core.local.task_store import TaskStore, ProjectStore
 
@@ -67,23 +66,19 @@ class InstructionMixin:
         except Exception:
             pass
 
-    def _memory_in_system(self) -> bool:
-        """F4.2：memory 是否仍走 system prompt（= memory_in_user 关闭时的回退路径）。
-
-        memory_in_user=true（缺省）→ 记忆迁至尾部重插，此处返回 False（system 不再注入）。
-        """
-        try:
-            return not bool(config.get_config("runtime.long_task.memory_in_user", True))
-        except Exception:
-            return False
-
     def _load_instructions_snapshot(self, spec):
         """F4.1b：run 开始时读一次纪律文件（AGENTS.md）并锁定快照。
 
         * 总开关 ``runtime.long_task.inject_instructions``（缺省 true，false = 零注入）；
-        * 两层：``~/.omniagent/AGENTS.md``（global）+ ``tasks/<task_id>/AGENTS.md``（task），
-          task 层在后（更近，语义上优先）；
+        * 三层：``~/.omniagent/AGENTS.md``（global）+ ``projects/<pid>/AGENTS.md``
+          （project，按任务归属解析，知识分层 v2）+ ``tasks/<task_id>/AGENTS.md``
+          （task），越靠后越近、语义上优先；
         * 上限 ``runtime.long_task.instructions_limit``（缺省 8192），超限截断并标注。
+
+        AGENTS.md 纪律文件（B2 澄清，防误判为死平面）：**由用户/团队维护，内核不写入**
+        （也无编辑 UI，只在文件系统里维护）；无文件即零注入（默认行为）。它不是
+        运行时的产物，任何自动写入 AGENTS.md 的行为都违反
+        「用户单写稳定纪律」的放置原则。
 
         返回 ``AgentsSnapshot``（均不存在 → 空块，instructions 逐字节不变）；
         读取/配置异常一律退化为空快照，绝不阻塞任务。
@@ -95,10 +90,15 @@ class InstructionMixin:
         try:
             if not bool(config.get_config("runtime.long_task.inject_instructions", True)):
                 return load_agents_snapshot([])
-            from omni_core.local.runtime_paths import global_agents_file, task_agents_file
+            from omni_core.local.runtime_paths import (
+                global_agents_file, project_agents_file, task_agents_file,
+            )
 
             layers = [("global", global_agents_file())]
             if getattr(spec, "task_id", ""):
+                # 项目层：与 project memory / skills 同一归属解析（无记录回退 default）
+                layers.append(("project", project_agents_file(
+                    TaskStore.project_of(str(spec.task_id)))))
                 layers.append(("task", task_agents_file(spec.task_id)))
             limit = int(config.get_config("runtime.long_task.instructions_limit", 8192) or 8192)
             return load_agents_snapshot(layers, limit=limit)
@@ -140,33 +140,35 @@ class InstructionMixin:
             pass
         return system_prompt or ""
 
-    def _build_memory_injection(self, is_sub: bool):
-        """F4.2：记忆 + 用户画像块——尾部重插的来源（纪律文件已迁 system）。
+    def _build_memory_injection(self, is_sub: bool, task_id: str = "", query: str = "",
+                                budget_chars: int = -1):
+        """F4.2：记忆检索段（TAM 移植）+ 用户画像块——尾部重插的来源（纪律文件已迁 system）。
 
-        * ``runtime.long_task.memory_in_user``（缺省 true）且为**主链**时才并入；
-          false 时记忆仍走 system prompt（一键回退）。
-        * 记忆块 gate：``knowledge.memory.enabled``（默认关）；
-        * **画像块 gate：``knowledge.profile.enabled``（默认开，P0）**——独立注入块，
-          与 memory summary 分开，携带弱注入语义；空文件零注入。
+        * 记忆检索段：gate ``runtime.knowledge.memory.enabled``；池子低于
+          ``memory_tam._INJECT_TRIGGER`` 时零注入（与无记忆行为一致）；
+        * 画像块 gate：``runtime.knowledge.profile.enabled``（默认开，P0）。
 
         返回 ``(block_text, labels)``；无内容 → ``("", [])``（零注入）。
         """
         try:
-            _mem_in_user = bool(config.get_config("runtime.long_task.memory_in_user", True))
-            if (not is_sub) and _mem_in_user:
+            if not is_sub:
                 from omni_core.local.knowledge_inject import (
                     compose_injection_block,
-                    load_memory_text,
                     load_profile_text,
                 )
 
                 _limit = int(config.get_config("runtime.long_task.instructions_limit", 8192) or 8192)
                 parts: List[Tuple[str, str]] = []
-                # 记忆：knowledge.memory.enabled 开启才注入
+                # 记忆检索段（TAM 移植）：按任务目标从项目记忆库检索相关 atoms
                 if self.knowledge_cfg.get("memory"):
-                    _mt = load_memory_text()
-                    if _mt.strip():
-                        parts.append(("memory", _mt))
+                    try:
+                        from omni_core import memory_tam
+                        _pid = TaskStore.project_of(str(task_id)) if task_id else ""
+                        _mt = memory_tam.inject_text(_pid, query or "")
+                        if _mt.strip():
+                            parts.append(("memory", _mt))
+                    except Exception:
+                        pass
                 # 画像（P0）：knowledge.profile.enabled 开启才注入（默认开）
                 if self.knowledge_cfg.get("profile"):
                     _pt = load_profile_text()

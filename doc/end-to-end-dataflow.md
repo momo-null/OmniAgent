@@ -87,11 +87,11 @@
 
 - **派发权限控制**：仅主模型可开启 dispatch 能力，executor 模式下自动关闭派发，防止无效空派发。
 
-- **收尾全流程能力**：完成轨迹记录、遥测上报、Curator 知识蒸馏、任务状态更新；新增 B2 版本 run 登记能力，通过 `TaskStore.add_run` 追加记录，保证 run\_id 在 run\.json、task\.json、world\_model 三处唯一一致，替代原有整体覆盖逻辑。
+- **收尾全流程能力**：完成轨迹记录、遥测上报、任务状态更新；新增 B2 版本 run 登记能力，通过 `TaskStore.add_run` 追加记录，保证 run\_id 在 run\.json、task\.json、world\_model 三处唯一一致，替代原有整体覆盖逻辑。
 
 ## 3\.4 知识层回流机制（K0/K1/K2/K5）
 
-- **知识蒸馏（K0/K1）**：任务结束后触发 Curator `distill_task_memory`，生成 `memory/rollouts/<task_id>.md` 任务复盘文件，记录事实、经验、用户修正内容；未合并复盘文件数达到阈值（默认5，稳态收敛后10）时，自动合并至 MEMORY\.md 并刷新摘要文件。
+- **知识蒸馏（已退役）**：原 K 系列蒸馏合并链（rollouts → MEMORY.md）已于 2026-10-05 整体删除；记忆轴按 TencentDB Agent Memory 移植重建中（`doc/plans/memory-rag-design.md`），完成前本节不描述记忆生成行为。
 
 - **信号采集（K2）**：任务运行结束后自动采集三类核心信号：任务成功状态、模型最终结论、轮次裁决与终态评审数据，落地为 `.signal.json` 文件并聚合至全局信号统计，全程前向采集、无人工干预、无历史回溯。
 

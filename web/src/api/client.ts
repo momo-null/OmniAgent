@@ -5,9 +5,6 @@ import type {
   CharacterData,
   RolloutsResponse,
   RolloutDetail,
-  SignalResponse,
-  SignalsSummary,
-  SteadyState,
   ModelsIndex,
 } from "../types";
 
@@ -70,13 +67,19 @@ export const taskApi = {
   history: (taskId: string) => http.get(`/api/runtime/tasks/${taskId}/history`),
 };
 
-// ── Project（会话历史） ─────────────────────────────────
+// ── Project（会话历史 + project 级知识资产；知识分层 C2/C3/C5） ──────────
 export const projectApi = {
   meta: () => http.get("/api/runtime/projects/meta"),
   sessions: (projectId: string) =>
     http.get(`/api/runtime/projects/${projectId}/sessions`),
   session: (projectId: string, sessionId: string, limit = 0) =>
     http.get(`/api/runtime/projects/${projectId}/sessions/${sessionId}`, { params: limit ? { limit } : {} }),
+  create: (body: { project_id: string; display_name?: string }) =>
+    http.post("/api/runtime/projects", body),
+  setAlias: (projectId: string, display_name: string) =>
+    http.put(`/api/runtime/projects/${projectId}/alias`, { display_name }),
+  remove: (projectId: string) =>
+    http.delete(`/api/runtime/projects/${projectId}`),
 };
 
 // ── Skill（独立 REST，按 task 维度） ───────────────────
@@ -85,6 +88,8 @@ export const skillApi = {
     http.post("/api/runtime/skill/run", payload),
   delete: (payload: { task_id?: string; skill_name: string }) =>
     http.post("/api/runtime/skill/delete", payload),
+  promote: (payload: { task_id?: string; skill_name: string }) =>
+    http.post("/api/runtime/skill/promote", payload),
 };
 
 // ── OpenAI 兼容推理 ─────────────────────────────────────
@@ -135,17 +140,6 @@ export const characterApi = {
   get: () => http.get<CharacterData>("/api/runtime/character"),
   // 人工写角色卡（覆盖 character.md，下次运行生效）
   update: (character: string) => http.put("/api/runtime/character", { character }),
-};
-
-// ── K2/K5 信号（/api/runtime/signals*） ─────────────
-export const signalsApi = {
-  // 某任务各 run 三实体一致率 + 标签
-  byTask: (taskId: string) =>
-    http.get<SignalResponse>(`/api/runtime/signals`, { params: { task_id: taskId } }),
-  // 聚合：假成功率（分模式）/ 漏报率 / 分歧率 / 不可判占比 / C₁·C₂ 分布 / 校准误差
-  summary: () => http.get<SignalsSummary>("/api/runtime/signals/summary"),
-  // K5 四信号 + 域收敛状态
-  steady: () => http.get<SteadyState>("/api/runtime/signals/steady"),
 };
 
 // ── S2 审批（/api/runtime/approvals + /audit） ─────────

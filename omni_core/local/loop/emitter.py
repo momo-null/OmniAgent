@@ -22,9 +22,8 @@ from omni_core.local.world_model import WorldModel
 from omni_core.local.states import AgentState
 from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local import telemetry
-from omni_core.local.curator import Curator
 from omni_core.local.runtime_paths import (
-    task_trajectory, task_collected, auto_project_id,
+    task_trajectory, task_collected,
 )
 from omni_core.local.task_store import TaskStore, ProjectStore
 
@@ -161,8 +160,10 @@ class EmitterMixin:
             seq += 1
             rbuf = []
             mbuf = []
-            # 缓存本轮回话的工具调用参数：等 on_step 实际执行时按名称匹配上结果
-            if self.on_tool_call and tool_calls:
+            # 缓存本轮回话的工具调用参数：等 on_step 实际执行时按名称匹配上结果。
+            # 无条件缓存（不再仅在有 UI 钩子时）：args 是轨迹落盘 / skill 提取的输入，
+            # on_step 的 FIFO 匹配每步都会消费掉对应条目，不会积压。
+            if tool_calls:
                 for c in tool_calls:
                     c = c or {}
                     self._pending_calls.append((role, c.get("name", ""), c.get("arguments", "")))

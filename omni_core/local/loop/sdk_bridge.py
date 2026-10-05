@@ -22,9 +22,8 @@ from omni_core.local.world_model import WorldModel
 from omni_core.local.states import AgentState
 from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local import telemetry
-from omni_core.local.curator import Curator
 from omni_core.local.runtime_paths import (
-    task_trajectory, task_collected, auto_project_id,
+    task_trajectory, task_collected,
 )
 from omni_core.local.task_store import TaskStore, ProjectStore
 
@@ -51,6 +50,26 @@ from omni_core.local.loop.parts import (
     _compact_for_brain,
     _TodoStore,
 )
+
+
+def _args_payload_to_dict(raw: Any) -> Dict[str, Any]:
+    """把模型 tool_call 的 arguments 载荷归一为 dict（轨迹 / 世界模型落盘用）。
+
+    dict 原样；JSON 字符串解析；解析不出 → ``{"_raw": 原文}``（不丢证据）。
+    宏提取器以 trajectory.jsonl 的 args 为输入，此处是全链路唯一 args 落盘点，
+    保真优先。
+    """
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+        return {"_raw": raw}
+    return {}
 
 
 class SdkBridgeMixin:
@@ -189,6 +208,7 @@ class SdkBridgeMixin:
         except Exception:
             pass
         # F1.1：先取结构化 catalog（供埋点统计条数/来源），再格式化为 User 消息。
+        # §8.2-1：选档交模型（brain_cfg 传入；无模型/失败 → 效用兜底序）。
         catalog: Optional[List[Dict[str, Any]]] = None
         if skill_catalog is None:
             try:
@@ -197,7 +217,9 @@ class SdkBridgeMixin:
                     format_skill_catalog_message,
                 )
 
-                catalog = build_skill_catalog(spec.task_id)
+                catalog = build_skill_catalog(
+                    spec.task_id, query=getattr(spec, "objective", ""),
+                    brain_cfg=getattr(self, "brain_cfg", None))
                 skill_catalog = format_skill_catalog_message(catalog)
             except Exception:
                 skill_catalog = None
@@ -251,7 +273,7 @@ class SdkBridgeMixin:
                     "skills": len(_cat),
                     "names": [s.get("name") for s in _cat],
                     "sources": {
-                        "task": sum(1 for s in _cat if s.get("source") == "task"),
+                        "project": sum(1 for s in _cat if s.get("source") == "project"),
                         "global": sum(1 for s in _cat if s.get("source") == "global"),
                     },
                 })
@@ -272,20 +294,23 @@ class SdkBridgeMixin:
                 if len(_s) > 400:
                     _s = _s[:400] + "...(截断)"
                 _dbg("tool_result", {"tool": tool_name, "result": _s})
-            # 对话区实时工具调用（左栏卡片）：关联本轮回话参数（按工具名 FIFO 匹配）
+            # 对话区实时工具调用（左栏卡片）：关联本轮回话参数（按工具名 FIFO 匹配）。
+            # FIFO 匹配无条件执行：args 是轨迹 / 世界模型的落盘输入（提取器前置依赖），
+            # 不再仅在有 UI 钩子时才关联。同轮同名多次调用可能错位——展示级启发式，接受。
+            role_model = ""
+            args_raw: Any = None
+            for i, (r, n, a) in enumerate(self._pending_calls):
+                if n == tool_name:
+                    args_raw = a
+                    role_model = self.brain_model if role == "brain" else self.exec_model
+                    del self._pending_calls[i]
+                    break
+            else:
+                # 没匹配到（如元工具 task_done 未进缓存）：清掉积压最旧项，防止越积越多
+                if self._pending_calls:
+                    self._pending_calls.pop(0)
             if self.on_tool_call:
-                role_model = self.brain_model if role == "brain" else self.exec_model
-                args = ""
-                for i, (r, n, a) in enumerate(self._pending_calls):
-                    if n == tool_name:
-                        args = a
-                        del self._pending_calls[i]
-                        break
-                else:
-                    # 没匹配到（如元工具 task_done 未进缓存）：清掉积压最旧项，防止越积越多
-                    if self._pending_calls:
-                        self._pending_calls.pop(0)
-                _args = args if isinstance(args, str) else str(args)
+                _args = args_raw if isinstance(args_raw, str) else str(args_raw or "")
                 if len(_args) > 600:
                     _args = _args[:600] + "...(截断)"
                 _res = result if isinstance(result, str) else str(result)
@@ -299,7 +324,7 @@ class SdkBridgeMixin:
                     traj.log_step(
                         state=self.state.value,
                         observation=world.snapshot(),
-                        action={"tool": tool_name, "args": {}},
+                        action={"tool": tool_name, "args": _args_payload_to_dict(args_raw)},
                         result=result,
                         metrics={"latency_ms": round(latency, 1)},
                         # T4.6（O5+）：校验状态真值化——读取网关最近一次校验结果，
@@ -310,7 +335,7 @@ class SdkBridgeMixin:
                     pass
             if not isinstance(result, dict):
                 return
-            world.log_action({"tool": tool_name, "args": {}}, result)
+            world.log_action({"tool": tool_name, "args": _args_payload_to_dict(args_raw)}, result)
             # 世界模型分发：按工具**自声明的 percept 元数据**，内核零工具名字面量。
             from omni_core.tools.base import TOOL_REGISTRY
             _percept = getattr(TOOL_REGISTRY.get(tool_name), "meta", {}).get("percept")
@@ -377,9 +402,11 @@ class SdkBridgeMixin:
                 except Exception:
                     pass
 
-        # F4.1b/F4.2：尾部注入块——**仅记忆**（纪律文件已迁 system prompt）。
+        # F4.1b/F4.2：尾部注入块——画像等辅助知识（纪律文件已迁 system prompt）。
         # 构建一次，每请求由 Model 包装追加到压缩后的请求尾部（不落会话历史）。
-        _tail_block, _tail_layers = self._build_memory_injection(is_sub)
+        _tail_block, _tail_layers = self._build_memory_injection(
+            is_sub, task_id=getattr(spec, "task_id", ""),
+            query=getattr(spec, "objective", ""))
         _on_inject = None
         if _tail_block:
             def _on_inject(chars, layers, _traj=traj):

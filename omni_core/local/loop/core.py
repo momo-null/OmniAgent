@@ -25,7 +25,6 @@ from omni_core.local.world_model import WorldModel
 from omni_core.local.states import AgentState
 from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local import telemetry
-from omni_core.local.curator import Curator
 from omni_core.tools import (
     build_plugin_registry,
     configure_shell,
@@ -33,7 +32,7 @@ from omni_core.tools import (
     build_mcp_servers,
 )
 from omni_core.local.runtime_paths import (
-    task_trajectory, task_collected, auto_project_id,
+    task_trajectory, task_collected,
 )
 from omni_core.local.task_store import TaskStore, ProjectStore
 
@@ -259,9 +258,6 @@ class ToolLoop(
         self._injections_lock = threading.Lock()
         self.traj_cfg = _traj_cfg
 
-        # M4b.3 Curator 配置（runtime.curator.*；触发式，任务完成后跑一次）
-        _cur_cfg = (_rt.get("curator") or {})
-        self.curator_enabled = bool(_cur_cfg.get("enabled", True))
 
         # §3.4 知识层弱注入配置（runtime.knowledge.memory.enabled，默认关闭）
         # 严格遵守诚实基线：验证期不默认生效，开启后才在系统提示尾部追加知识块。

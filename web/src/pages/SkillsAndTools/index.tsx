@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Box,
   Tabs,
@@ -19,16 +19,15 @@ import {
   Paper,
   Tooltip,
 } from "@mui/material";
-import { useTheme } from "@mui/material/styles";
 import BoltIcon from "@mui/icons-material/Bolt";
 import DeleteIcon from "@mui/icons-material/Delete";
 import AddIcon from "@mui/icons-material/Add";
-import { skillApi, runtimeApi, settingsApi, signalsApi } from "../../api/client";
+import PublicIcon from "@mui/icons-material/Public";
+import { skillApi, runtimeApi, settingsApi } from "../../api/client";
 import { useTaskStore } from "../../store/taskStore.tsx";
 import type {
   SkillInfo,
   ToolsResponse,
-  SteadyState,
 } from "../../types";
 
 function SkillsTab() {
@@ -50,6 +49,15 @@ function SkillsTab() {
       setError((e as Error).message);
     }
   };
+  // A7 手动提升：唯一到 global 的路径（用户显式「设为全局」）
+  const handlePromote = async (name: string) => {
+    try {
+      await skillApi.promote({ task_id: currentTaskId || undefined, skill_name: name });
+      refreshTasks();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
 
   const skills = snapshot.skills || [];
   return (
@@ -65,6 +73,9 @@ function SkillsTab() {
               secondaryAction={
                 <Stack direction="row" spacing={0.5}>
                   <IconButton size="small" onClick={() => handleRun(s.name)} title="调用"><BoltIcon fontSize="small" /></IconButton>
+                  {s.scope === "project" && (
+                    <IconButton size="small" onClick={() => handlePromote(s.name)} title="设为全局"><PublicIcon fontSize="small" /></IconButton>
+                  )}
                   <IconButton size="small" onClick={() => handleDelete(s.name)} title="删除"><DeleteIcon fontSize="small" /></IconButton>
                 </Stack>
               }
@@ -74,6 +85,7 @@ function SkillsTab() {
                   <Stack direction="row" spacing={1} alignItems="center">
                     <Typography variant="body2" component="span">{s.name}</Typography>
                     <Chip size="small" label={s.status} />
+                    {s.scope && <Chip size="small" label={s.scope === "global" ? "全局" : "项目"} variant="outlined" />}
                     <Typography variant="caption" color="text.secondary">{s.success_count}/{s.total_uses}</Typography>
                   </Stack>
                 }
@@ -368,122 +380,10 @@ export default function SkillsAndTools() {
         <Tab label="Skills" />
         <Tab label="Tools" />
         <Tab label="MCP" />
-        <Tab label="稳态" />
       </Tabs>
       {tab === 0 && <SkillsTab />}
       {tab === 1 && <ToolsTab />}
       {tab === 2 && <McpTab />}
-      {tab === 3 && <SteadyTab />}
     </Box>
   );
-
-// ── K5 稳态 Tab（域健康度面板） ───────────────────────────────
-function fmtPct(v?: number | null) {
-  return v == null ? "-" : `${(v * 100).toFixed(1)}%`;
-}
-
-// 轻量 SVG 衰减曲线（无第三方图表依赖）
-// 配色全部取自主题 token：阈值线=error（负状态语义）、曲线=primary（与全站强调同源）、坐标轴=divider（无色相宣言）
-function DecayCurve({ data, threshold }: { data: number[]; threshold: number }) {
-  const theme = useTheme();
-  const W = 460, H = 160, pad = 24;
-  const n = data.length;
-  const x = (i: number) => pad + (n <= 1 ? 0 : (i / (n - 1)) * (W - 2 * pad));
-  const y = (v: number) => H - pad - Math.max(0, Math.min(1, v)) * (H - 2 * pad);
-  const pts = data.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-  const ty = y(threshold);
-  return (
-    <Box sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, p: 1 }}>
-      <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
-        <line x1={pad} y1={ty} x2={W - pad} y2={ty} stroke={theme.palette.error.main} strokeDasharray="4 4" />
-        <text x={W - pad} y={ty - 4} fontSize="10" fill={theme.palette.error.main} textAnchor="end">
-          阈值 {fmtPct(threshold)}
-        </text>
-        <polyline points={pts} fill="none" stroke={theme.palette.primary.main} strokeWidth="2" />
-        <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke={theme.palette.divider} />
-        <line x1={pad} y1={pad} x2={pad} y2={H - pad} stroke={theme.palette.divider} />
-      </svg>
-    </Box>
-  );
-}
-
-function SteadyTab() {
-  const { memorySignal } = useTaskStore();
-  const [steady, setSteady] = useState<SteadyState | null>(null);
-  const [error, setError] = useState("");
-  // 稳态是低频聚合指标：内容去重（无实质变化不重渲染）+ 防抖（合并连发），消除刷新闪烁
-  const lastKeyRef = useRef<string>("");
-  const debounceRef = useRef<number | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const d = (await signalsApi.steady()).data as SteadyState;
-      const key = JSON.stringify([
-        d?.domain,
-        d?.converged,
-        d?.signals?.distill_dedup_hit_rate,
-        d?.signals?.skill_promotion_rate?.rate,
-        d?.signals?.step_variance?.variance,
-        d?.signals?.human_intervention_rate?.rate,
-        d?.signals?.intervention_timeline,
-      ]);
-      // 内容未变 → 不 setState，避免反复重渲染造成闪烁
-      if (lastKeyRef.current === key) return;
-      lastKeyRef.current = key;
-      setSteady(d);
-      setError("");
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }, []);
-
-  // 挂载即拉一次
-  useEffect(() => { void load(); }, [load]);
-  // 任务结束（memorySignal 自增）→ 防抖后再拉，合并连发/重连，避免高频刷新闪烁
-  useEffect(() => {
-    if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => { void load(); }, 1200);
-    return () => { if (debounceRef.current) window.clearTimeout(debounceRef.current); };
-  }, [memorySignal, load]);
-
-  const s = steady?.signals;
-  const tl = s?.intervention_timeline || [];
-  return (
-    <Box>
-      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
-      <Alert severity="info" sx={{ mb: 2 }}>
-        域健康度面板（K5，v1 单域假设）：四信号量化「人机协同蒸馏至稳态」。
-        介入频率衰减曲线是核心演示面——越低表示你越不需要纠偏。
-      </Alert>
-
-      <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 2 }}>
-        <Chip label={`域: ${steady?.domain ?? "-"}`} variant="outlined" />
-        <Chip
-          label={steady?.converged ? "已收敛 ✓" : "收敛中…"}
-          color={steady?.converged ? "success" : "default"}
-        />
-        <Chip label={`蒸馏去重命中率: ${fmtPct(s?.distill_dedup_hit_rate)}`} variant="outlined" />
-        <Chip label={`skill 晋升率: ${fmtPct(s?.skill_promotion_rate.rate)}`} variant="outlined" />
-        <Chip label={`步数方差: ${s?.step_variance.variance ?? "-"}`} variant="outlined" />
-        <Chip label={`介入频率: ${fmtPct(s?.human_intervention_rate.rate)}`} variant="outlined" />
-      </Stack>
-
-      <Typography variant="subtitle2" gutterBottom>
-        人工介入频率衰减曲线（滚动窗口 refuted 占比，目标 ≤5%）
-      </Typography>
-      {tl.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">
-          暂无交互信号。任务跑出若干轮含纠偏/认可的对话后，曲线会自动绘制。
-        </Typography>
-      ) : (
-        <DecayCurve data={tl} threshold={0.05} />
-      )}
-
-      <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
-        判据初值：去重命中率 ≥80% 且介入频率 ≤5% → 收敛（Curator 自动降频，跳过蒸馏）。
-        阈值标注「初值，实测校准」；校准误差需 C₃ 人工抽检填写（见 GET /signals/summary）。
-      </Typography>
-    </Box>
-  );
-}
 }

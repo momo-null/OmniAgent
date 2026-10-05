@@ -246,9 +246,9 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
         # 插件自有配置（filesystem / web / vision …）一律不进本文件，见 ~/.omniagent/plugins/<name>.yaml
         "shell_exec": {"timeout_sec": 30.0, "max_output": 8000},
         # S0 权限模式与 S2 审批（随 run 快照进入 run，改后下次 run 生效）
+        # （2026-10-03：S1 路径围栏整体删除，写入不设防——无 allow_write_roots）
         "security": {
-            "mode": "standard",        # standard | read_only（read_only=危险动作自动拒绝）
-            "allow_write_roots": [],   # 额外允许写入的根（绝对路径列表）
+            "mode": "standard",        # standard | read_only | full_access（full_access=全局免审批）
             "approval": {
                 "wait_seconds": 600,   # 审批等待上限（秒）；0 = 无限等；超时按拒绝处理
             },
@@ -262,9 +262,30 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
             "inject_instructions": True,
             # 注入块字符上限（纪律块与记忆块共用），超限截断并标注
             "instructions_limit": 8192,
-            # F4.2 memory 注入位置：true = 请求尾部（会话流）；false = 回退 system prompt
-            "memory_in_user": True,
         },
+    },
+    # 知识层（TAM 移植重建中，memory-rag-design.md / tam-porting-map.md）
+    "knowledge": {
+        # 记忆检索注入 gate（memory_tam；池子 ≥20 条前零注入）
+        "memory": {"enabled": False},
+        # 画像：注入开关（默认开）+ 自动维护（新 atoms 攒够 N 条 → LLM 增量重写画像）
+        "profile": {
+            "enabled": True,
+            "auto_maintain": True,
+            "trigger_every_n": 20,
+        },
+    },
+    # skill 轴 · 结构化宏提取开关（默认关：押的是回放省步价值假设，
+    # 负结果纪律 2 连败停手）
+    "skill": {
+        "auto_distill": False,
+        # 回放硬重放白名单（工具白名单制）：
+        # 确定性工具可重放；GUI 坐标类不在列 → 降「参考建议」
+        "replay_allow_tools": ["shell_exec", "read_file", "write_file",
+                               "list_dir", "search_content"],
+        # 缓存淘汰：candidate 过期 / active 闲置且低效用 → 移入 _archive/
+        "evict_candidate_ttl_days": 14,
+        "evict_active_idle_days": 30,
     },
 }
 

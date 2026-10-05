@@ -34,7 +34,8 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 # UI 可编辑的配置节（白名单，避免前端任意写导致破坏）
 # 三通道单一真源：brain 顶层，executor/vision 嵌套在 runtime 下。
 # S0/S2：security = 权限模式档位 / 允许根 / 审批等待（随 run 快照生效）。
-_EDITABLE_KEYS = ("runtime", "brain", "local_model", "llm", "security")
+# skill：技能层开关（skill.auto_distill 自动蒸馏，默认关——plan §8.3）。
+_EDITABLE_KEYS = ("runtime", "brain", "local_model", "llm", "security", "skill")
 
 # 各通道中需脱敏的密钥字段名
 _API_KEY_FIELDS = ("api_key",)
@@ -118,6 +119,8 @@ async def get_settings() -> Dict[str, Any]:
     out.setdefault("runtime", {})
     out["runtime"].setdefault("vision", {"enabled": False})
     out.setdefault("local_model", {"auto_start": False, "default_model": ""})
+    # 技能层开关骨架（缺省即内核默认：自动蒸馏关）
+    out.setdefault("skill", {"auto_distill": False})
     # 模型目录未配置时给出出厂默认（与管理器生效值一致），供前端输入框初值显示
     try:
         from model_hub.manager import DEFAULT_MODELS_DIR
@@ -184,6 +187,15 @@ async def put_settings(req: Request) -> JSONResponse:
                     status_code=400,
                 )
         config.save_mcp_config(mcp_patch)
+
+    # S0/S2：security.mode 合法值校验（仅白名单节 security 内）
+    sec = patch.get("security")
+    if isinstance(sec, dict):
+        m = sec.get("mode")
+        if m is not None and m not in ("standard", "read_only", "full_access"):
+            return JSONResponse(
+                {"ok": False, "error": f"security.mode 非法值：{m}"}, status_code=400
+            )
 
     # 密钥"保持不变"逻辑：空字符串 api_key → 从现有配置恢复原值。
     # brain 现在只承载引擎参数（无端点键），此处保留以防历史配置回写时丢密钥。

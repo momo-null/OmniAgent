@@ -16,7 +16,8 @@ import pytest
 
 from omni_core.brain import sdk_loop as sl
 from omni_core.local.knowledge_inject import build_skill_catalog
-from omni_core.local.runtime_paths import global_skills, task_skills
+from omni_core.local.runtime_paths import global_skills, project_skills
+from omni_core.local.runtime_paths import DEFAULT_PROJECT_ID
 from omni_core.local.loop import ToolLoop
 
 
@@ -75,24 +76,24 @@ def _spec(task_id):
 def test_catalog_returns_source_tags():
     """build_skill_catalog 每条目带 source 标签，供埋点统计来源。"""
     tid = "f11_src"
-    _write(task_skills(tid), "a.md", "a", "任务A")
-    _write(task_skills(tid), "b.md", "b", "任务B")
+    _write(project_skills(DEFAULT_PROJECT_ID), "a.md", "a", "任务A")
+    _write(project_skills(DEFAULT_PROJECT_ID), "b.md", "b", "任务B")
     _write(global_skills(), "c.md", "c", "全局C")
     cat = build_skill_catalog(tid)
     names = [s["name"] for s in cat]
     assert names == ["a", "b", "c"], names
     sources = {
-        "task": sum(1 for s in cat if s.get("source") == "task"),
+        "project": sum(1 for s in cat if s.get("source") == "project"),
         "global": sum(1 for s in cat if s.get("source") == "global"),
     }
-    assert sources == {"task": 2, "global": 1}, sources
+    assert sources == {"project": 2, "global": 1}, sources
 
 
 def test_skill_probe_logs_names_and_sources(monkeypatch, tmp_path):
     """2 task + 1 global → 埋点 skills=3、chars>0、names/sources 正确。"""
     tid = "f11_probe"
-    _write(task_skills(tid), "a.md", "a", "任务A")
-    _write(task_skills(tid), "b.md", "b", "任务B")
+    _write(project_skills(DEFAULT_PROJECT_ID), "a.md", "a", "任务A")
+    _write(project_skills(DEFAULT_PROJECT_ID), "b.md", "b", "任务B")
     _write(global_skills(), "c.md", "c", "全局C")
 
     captured = {}
@@ -114,7 +115,7 @@ def test_skill_probe_logs_names_and_sources(monkeypatch, tmp_path):
     assert probe["skills"] == 3, probe
     assert probe["chars"] > 0, probe
     assert set(probe["names"]) == {"a", "b", "c"}, probe["names"]
-    assert probe["sources"] == {"task": 2, "global": 1}, probe["sources"]
+    assert probe["sources"] == {"project": 2, "global": 1}, probe["sources"]
 
 
 def test_no_skill_no_injection(monkeypatch):

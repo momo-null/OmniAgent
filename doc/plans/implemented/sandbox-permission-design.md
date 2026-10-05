@@ -1,5 +1,7 @@
 # 沙箱与权限控制 · 设计
 
+> **⚠️ 2026-10-03 作废注**：本文的 S1 路径围栏（允许根 / 绝对拒绝区 / ensure_writable 写门）已**整体删除**——写入不设防（用户定案，见 Backlog 2026-10-03 条）。S0 档位与 S2 审批保留。下文 S1 相关章节仅作历史设计记录。
+
 > **状态**：✅ **S0 / S1 / S2 已实施并合入 main**（2026-09-27，commit `fc2db16` / `f64d5e8`；验收用例 `tests/test_policy_paths.py` / `test_approval_gate.py` / `test_approvals_e2e.py`）。未实现项（S3 / MCP 收口 / `deny_read_roots` / mcp.json 过渡期注释）已收割至 `Backlog.md`。本文归档至 `implemented/`。
 > **适用范围**：agent 获得「操作电脑」能力（命令执行 / 文件读写 / 键鼠 / 进程）之后的能力边界。
 > **本文＝安全与沙箱（S0-S3）唯一来源**。

@@ -42,8 +42,6 @@ runtime:
   # M4b.1 world-model 持久化（无状态大脑注入 + 子目标 checkpoint + 压缩 merge_progress）
   world_model:
     dir: ""                   # 留空 → 项目级 .omniagent/<project>/world_model/<task>
-  # M4b.3 Curator（任务完成后触发式跑一次，从 rollout 蒸馏长期记忆）
-  curator:
   # Layer 0 派发底座（2026-09-30）：多执行单元注册表。agents 显式声明参与派发的槽名，
   # 槽 -> 模型的映射在 ~/.omniagent/models.json 的 defaults.<slot>（两层职责分离）。
   # 不配置 = 只有 worker 一个槽（主模型兼任，行为与旧版完全一致）。

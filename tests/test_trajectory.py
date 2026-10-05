@@ -105,21 +105,7 @@ def test_store_finish_run_writes_record_and_failure(tmp_path, monkeypatch):
     assert (P.task_dir("t_app1") / "failures" / "runXYZ.json").exists()
 
 
-def test_store_prune_removes_old(tmp_path, monkeypatch):
-    import os
-    import time
-    import omni_core.local.runtime_paths as P
-    monkeypatch.setattr(P, "_GLOBAL", tmp_path / ".omniagent")
-    P.ensure_task_dirs("t_app1")
-    store = TrajectoryStore("t_app1")
-    store.log_step(state="EXECUTING", observation={}, action=None, result={}, verified=False)
-    store.close()
-    f = next((P.task_dir("t_app1")).glob("*.jsonl"))
-    old = time.time() - 40 * 86400
-    os.utime(f, (old, old))
-    removed = TrajectoryStore("t_app1").prune(max_age_days=30)
-    assert removed >= 1
-    assert not f.exists()
+# TrajectoryStore.prune 已随 B4 删除（真清理由 Curator._manual_prune 承担）
 
 
 # === ToolLoop 集成落盘 ========================================================

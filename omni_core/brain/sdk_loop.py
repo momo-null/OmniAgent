@@ -244,6 +244,7 @@ class _CompactionModel(Model):
         summarize: Optional[Callable[[List[Any]], Optional[str]]] = None,
         hard_ceiling_tokens: int = 0,
         keep_rounds: int = 8,
+        on_compact: Optional[Callable[[], None]] = None,
     ):
         self._inner = inner
         self._threshold = int(threshold_tokens or 0)
@@ -251,9 +252,20 @@ class _CompactionModel(Model):
         self._summarize = summarize
         self._hard = int(hard_ceiling_tokens or 0)
         self._keep_rounds = int(keep_rounds or 8)
+        # 压缩检查点回调：每当**新摘要**产出（含增量重压，不含粘性复用）触发一次。
+        # 供上层做中途蒸馏等检查点动作；回调异常绝不影响模型请求（见 _safe_on_compact）。
+        self._on_compact = on_compact
         # 粘性状态：上次压缩产物与其覆盖到的位点
         self.summary_msg: Optional[Dict[str, Any]] = None
         self.kept_from: int = 0
+
+    def _safe_on_compact(self) -> None:
+        """触发压缩检查点回调（异常吞掉：检查点动作不得打断运行中的任务）。"""
+        try:
+            if self._on_compact is not None:
+                self._on_compact()
+        except Exception:
+            pass
 
     # --- 请求改写 -------------------------------------------------------------
     @staticmethod
@@ -317,6 +329,7 @@ class _CompactionModel(Model):
             return None
         self.summary_msg = {"role": "user", "content": f"[历史压缩摘要] {str(text).strip()}"}
         self.kept_from = cut
+        self._safe_on_compact()  # 新摘要产出 = 压缩检查点（粘性复用不触发）
         return self.summary_msg
 
     def _call_summarize(self, system_instructions: Any, ctx: List[Any]) -> Optional[str]:
@@ -1112,6 +1125,7 @@ def _assemble_agent_stack(
     on_truncate: Optional[Callable[[int, int], None]],
     model_settings: Any,
     on_state: Optional[Callable[[str], None]],
+    on_compaction: Optional[Callable[[], None]] = None,
 ) -> Tuple[SubtaskState, Any, Any, bool, Optional[_RepeatGuard]]:
     """装配子任务的模型包装链 + `Agent` 实例，并连接 MCP（由 run_subtask_sdk 抽出，零逻辑改动）。
 
@@ -1151,6 +1165,7 @@ def _assemble_agent_stack(
             summarize=summarize,
             hard_ceiling_tokens=_hard,
             keep_rounds=compress_after or 8,
+            on_compact=on_compaction,
         )
     # T4.7：输出截断检测——包在最外层，拿到最终响应的 usage 用量
     if max_output_tokens > 0:
@@ -1236,6 +1251,9 @@ def run_subtask_sdk(
     max_output_tokens: int = 0,
     on_truncate: Optional[Callable[[int, int], None]] = None,
     model_settings: Any = None,
+    # 压缩检查点回调：_CompactionModel 每产出一次新摘要触发（中途蒸馏挂点）；
+    # 回调异常由 _safe_on_compact 吞掉，绝不影响模型请求。
+    on_compaction: Optional[Callable[[], None]] = None,
 ) -> Dict[str, Any]:
     """用 SDK Runner 跑一个子任务，返回与旧 `_run_inner` 相同的结果形状。
 
@@ -1270,6 +1288,7 @@ def run_subtask_sdk(
         on_truncate=on_truncate,
         model_settings=model_settings,
         on_state=on_state,
+        on_compaction=on_compaction,
     )
     # 「方案 B（纯文本收尾）」的例外标记：本块是否调用过 verify 元工具。
     # verify 属于 stop_tools，一调即结束本块。但它的语义是「请核对完成条件」，

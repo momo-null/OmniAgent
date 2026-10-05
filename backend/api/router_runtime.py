@@ -8,7 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from backend.api.routers import (
-    helpers, chat_runtime, tools_api, memory_api, signals_api, tasks_api,
+    helpers, chat_runtime, tools_api, tasks_api, profile_api,
     snapshot_api, approvals_api, diagnostics_api, models_api,
 )
 
@@ -16,8 +16,7 @@ router = APIRouter(prefix="/api/runtime", tags=["runtime"])
 router.include_router(chat_runtime.router)
 router.include_router(models_api.router)
 router.include_router(tools_api.router)
-router.include_router(memory_api.router)
-router.include_router(signals_api.router)
+router.include_router(profile_api.router)
 router.include_router(tasks_api.router)
 router.include_router(snapshot_api.router)
 router.include_router(approvals_api.router)
@@ -28,11 +27,10 @@ from backend.api.routers.helpers import (  # noqa: F401
     ROOT, CONFIG_PATH, manager, AGENT_MAIN, _traj_cursor, _cursor_lock,
     _EXEC_TOOLS, _append_task_name, _call_skill,
     _config, _config_hash, _ensure_outbox, _finish_task,
-    _is_any_running, _is_task_running, _make_brain_cfg, _memory_enabled,
+    _is_any_running, _is_task_running, _make_brain_cfg,
     _merge_message_step, _merge_thinking_step, _paths, _project_store,
-    _read_latest_collected, _read_memory_master, _read_memory_summary_chars,
-    _read_merged_ids, _read_rollout_detail, _read_rollouts_list, _read_skills,
-    _read_trajectory, _read_world, _rollout_header, _running_task_id,
+    _read_latest_collected, _read_skills,
+    _read_trajectory, _read_world, _running_task_id,
     _session_records_to_model_messages, _snapshot, _steps_to_text, _task_store,
     _trajectory_dir, _trim, _try_start_task, _upsert, clear_live_snapshot, config,
     live_snapshot, push_chat,
@@ -45,13 +43,6 @@ from backend.api.routers.chat_runtime import (  # noqa: F401
 )
 from backend.api.routers.tools_api import (  # noqa: F401
     list_tools, set_environment, set_plugin_enabled,
-)
-from backend.api.routers.memory_api import (  # noqa: F401
-    delete_memory_rollout, get_memory, get_memory_rollout, list_memory_rollouts,
-    put_memory, reset_memory,
-)
-from backend.api.routers.signals_api import (  # noqa: F401
-    list_signals, signals_steady, signals_summary,
 )
 from backend.api.routers.tasks_api import (  # noqa: F401
     api_skill_delete, api_skill_run, create_task, delete_task, get_task,

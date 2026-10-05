@@ -1,11 +1,13 @@
 """全局单层 .omniagent/ 目录模型（2026-08-01 引入，替代旧两层 + 按名称分区）。
 
-设计（方案 C，参考 WorkBuddy）：
+设计（方案 C，参考 WorkBuddy；2026-10-02 知识分层 v2 起为 task/project/global 三层）：
 - 唯一持久化根 ``~/.omniagent/``，不按业务名称分区。
-- ``projects/<path-slug>/``：仅装会话历史 jsonl（project = 工作目录的 slug 分组）。
-- ``tasks/<task_id>/``：独立平铺的一等实体，内含自身全部资产
-  （trajectory.jsonl / world_model.md / collected.json / skills/ / task.json）。
-- ``skills/`` ``memory/``：全局能力，跨 task / project 共享。
+- ``projects/<pid>/``：会话历史 jsonl + **project 级知识资产**（skills/、memory/）。
+  ``pid`` = 工作目录 slug 或用户自定义 slug；无归属的 task 缺省落 ``default``
+  项目（``auto_project_id`` 已废除——按会话造项目会让知识碎片化）。
+- ``tasks/<task_id>/``：独立平铺的一等实体，只装**证据与运行态**
+  （trajectory.jsonl / world_model.md / collected.json / task.json / tmp）。
+- ``skills/`` ``memory/``：全局层（跨 project 精选资产）。
 
 本模块是唯一知道目录布局的地方；其它模块从这里取路径，不写死业务语义
 （北极星红线：内核零场景硬编码，路径只接收 project_id(slug) 与 task_id）。
@@ -18,6 +20,9 @@ from pathlib import Path
 
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
+
+#: 无显式归属的 task / 会话缺省落这个项目（逻辑归属恒定存在，目录懒创建）
+DEFAULT_PROJECT_ID = "default"
 
 # 用户全局（跨项目）唯一持久化根
 _GLOBAL = Path(os.path.expanduser("~")) / ".omniagent"
@@ -33,54 +38,24 @@ def global_skills() -> Path:
     return _GLOBAL / "skills"
 
 
-def global_memory() -> Path:
-    return _GLOBAL / "memory"
-
-
 # ---- F4.1 纪律文件（AGENTS.md，尾部重插） -----------------------------------
 def global_agents_file() -> Path:
     """全局纪律文件 ``~/.omniagent/AGENTS.md``（跨 task 共享；不存在则零注入）。"""
     return _GLOBAL / "AGENTS.md"
 
 
-# ---- 全局长期记忆（memory/，跨 task 复用的沉淀资产） -----------------------
-def memory_rollouts() -> Path:
-    """记忆回放文件根目录 ``memory/rollouts/``。
-
-    全局记忆资产（rollout 蒸馏）删除权统一归 Curator prune 策略管控，
-    其它模块（如 delete_task）严禁清理此目录，避免历史经验随任务陪葬。
-    """
-    return global_memory() / "rollouts"
-
-
-def memory_rollout_file(task_id: str) -> Path:
-    """单任务蒸馏记忆 md 路径（``memory/rollouts/<task_id>.md``）。
-
-    内置路径安全校验：task_id 必须经过通用标识符校验，杜绝路径穿越。
-    全局记忆删除权归 Curator prune。
-    """
-    name = validate_identifier(task_id, "task_id")
-    return memory_rollouts() / f"{name}.md"
-
-
-def memory_master() -> Path:
-    """全局长期记忆 ``memory/MEMORY.md``（仅追加、支持人工编辑、带 token 上限管控）。"""
-    return global_memory() / "MEMORY.md"
-
-
-def memory_summary() -> Path:
-    """注入专用视图 ``memory/memory_summary.md``（自动截断、可随时再生）。"""
-    return global_memory() / "memory_summary.md"
-
-
 def user_profile() -> Path:
     """全局用户画像 ``memory/user_profile.md``（跨 task 共享，P0 一等实体）。"""
-    return global_memory() / "user_profile.md"
+    return _GLOBAL / "memory" / "user_profile.md"
 
 
-def profile_candidates() -> Path:
-    """画像候选暂存 ``memory/profile_candidates.md``（候选留存，人工确认后晋升 user_profile.md）。"""
-    return global_memory() / "profile_candidates.md"
+def global_memory_db() -> Path:
+    """全局记忆库 ``memory/index.db``（跨 project 共库；与项目记忆库同 schema）。
+
+    存放跨项目仍然成立的记忆（用户偏好、通用工具规律）；真正的隔离单位是
+    库本身（多 agent/多用户各开一个库），库内不分层。
+    """
+    return _GLOBAL / "memory" / "index.db"
 
 
 def character_card() -> Path:
@@ -131,7 +106,7 @@ def _child(root: Path, identifier: str, label: str) -> Path:
     return candidate
 
 
-# ---- project（工作目录 slug 分组） ----------------------------------------
+# ---- project（slug 分组：会话历史 + project 级知识资产） --------------------
 def slugify_path(path: str) -> str:
     """绝对路径 → slug（盘符小写、分隔符换 '-'）。
 
@@ -146,29 +121,17 @@ def slugify_path(path: str) -> str:
     return slug or "unknown"
 
 
-def auto_project_id() -> str:
-    """无工作目录时自动造 project id：``OmniAgent-<date>-task-N``。
-
-    保证任何 task 都有 project 归属，避免 null 分支。
-    """
-    from datetime import datetime
-    date = datetime.now().strftime("%Y-%m-%d")
-    base = f"OmniAgent-{date}-task"
-    root = projects_root()
-    n = 1
-    while (root / f"{base}-{n}").exists():
-        n += 1
-    pid = f"{base}-{n}"
-    (root / pid).mkdir(parents=True, exist_ok=True)  # 占位，保证唯一
-    return pid
-
-
 def projects_root() -> Path:
     return _GLOBAL / "projects"
 
 
 def project_dir(project_id: str) -> Path:
     return _child(projects_root(), project_id, "project_id")
+
+
+def project_skills(project_id: str) -> Path:
+    """project 级技能 ``projects/<pid>/skills/``（结构层，跨 task 复用）。"""
+    return _child(projects_root(), project_id, "project_id") / "skills"
 
 
 def session_file(project_id: str, session_id: str) -> Path:
@@ -206,10 +169,6 @@ def task_subtasks(task_id: str) -> Path:
     return task_dir(task_id) / "subtasks.json"
 
 
-def task_skills(task_id: str) -> Path:
-    return task_dir(task_id) / "skills"
-
-
 def task_tmp(task_id: str) -> Path:
     """任务临时产物目录 ``tasks/<task_id>/tmp/``（脚本 / 截图等；任务终态由系统清理）。"""
     return task_dir(task_id) / "tmp"
@@ -218,6 +177,15 @@ def task_tmp(task_id: str) -> Path:
 def task_agents_file(task_id: str) -> Path:
     """任务级纪律文件 ``tasks/<task_id>/AGENTS.md``（不存在则零注入）。"""
     return task_dir(task_id) / "AGENTS.md"
+
+
+def project_agents_file(project_id: str) -> Path:
+    """项目级纪律文件 ``projects/<pid>/AGENTS.md``（不存在则零注入）。
+
+    知识分层 v2：与 project memory / skills 同层同语义——用户单写、跨该项目
+    全部任务共享；归属按 ``TaskStore.project_of(task_id)`` 解析。
+    """
+    return project_dir(project_id) / "AGENTS.md"
 
 
 # ---- 插件 / 环境 自持配置（用户全局，按名字一文件） --------------------------
@@ -246,8 +214,6 @@ def ensure_global_dirs() -> None:
     """服务启动时建好全局层所有子目录。幂等。"""
     for d in (
         global_skills(),
-        global_memory(),
-        memory_rollouts(),
         projects_root(),
         tasks_root(),
         plugins_root(),
@@ -257,6 +223,9 @@ def ensure_global_dirs() -> None:
 
 
 def ensure_task_dirs(task_id: str) -> None:
-    """懒创建 task 目录（含 skills / tmp 子目录）。幂等。"""
-    for d in (task_dir(task_id), task_skills(task_id), task_tmp(task_id)):
+    """懒创建 task 目录（含 tmp 子目录）。幂等。
+
+    知识分层 v2：skills 归 project 层（``project_skills``），task 目录只留证据与运行态。
+    """
+    for d in (task_dir(task_id), task_tmp(task_id)):
         d.mkdir(parents=True, exist_ok=True)

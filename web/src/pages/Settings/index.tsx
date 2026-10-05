@@ -47,7 +47,6 @@ import type {
 import { useTaskStore } from "../../store/taskStore.tsx";
 import CharacterTab from "./CharacterTab";
 import ProfileTab from "./ProfileTab";
-import MemoryTab from "./MemoryTab";
 import SecurityTab from "./SecurityTab";
 import ModelProviders from "./ModelProviders";
 
@@ -337,7 +336,7 @@ function LabelWithTip({ text, desc }: { text: string; desc?: string }) {
 function GeneralTab() {
   const { setMaxSteps } = useTaskStore();
   const [draft, setDraft] = useState<number>(40);
-  const [memInject, setMemInject] = useState<boolean>(false);
+  const [autoDistill, setAutoDistill] = useState<boolean>(false);
   const [saved, setSaved] = useState("");
   const [error, setError] = useState("");
   useEffect(() => {
@@ -345,24 +344,24 @@ function GeneralTab() {
       const d = r.data as any;
       const v = d?.runtime?.default_max_steps;
       if (typeof v === "number" && v > 0) { setDraft(v); setMaxSteps(v); }
-      const mem = (d?.runtime?.knowledge?.memory || {}).enabled;
-      if (typeof mem === "boolean") setMemInject(mem);
+      const ad = d?.skill?.auto_distill;
+      if (typeof ad === "boolean") setAutoDistill(ad);
     }).catch(() => {});
   }, [setMaxSteps]);
   // 失焦即保存（dirty 检查，无变化不提交）；Switch 勾选即时生效
   const dirtyRef = useRef(false);
-  const save = async (memOverride?: boolean) => {
+  const save = async (adOverride?: boolean) => {
     if (!dirtyRef.current) return;
     dirtyRef.current = false;
     setError(""); setSaved("");
     try {
       const v = draft > 0 ? Math.min(draft, 2000) : 40;
-      const m = memOverride ?? memInject;
+      const ad = adOverride ?? autoDistill;
       await settingsApi.put({
         runtime: {
           default_max_steps: v,
-          knowledge: { memory: { enabled: m } },
         },
+        skill: { auto_distill: ad },
       });
       setMaxSteps(v);
       setSaved("已保存");
@@ -376,8 +375,8 @@ function GeneralTab() {
           inputProps={{ min: 1, max: 2000 }}
           onChange={(e) => { dirtyRef.current = true; setDraft(Math.min(Number(e.target.value) || 40, 2000)); }}
           onBlur={() => void save()} />
-        <FormControlLabel control={<Switch checked={memInject} onChange={(e) => { const v = e.target.checked; dirtyRef.current = true; setMemInject(v); void save(v); }} />}
-          label={<LabelWithTip text="注入全局记忆摘要 (runtime.knowledge.memory.enabled)" desc="开启后，每轮任务会在系统提示尾部追加全局长期记忆摘要（~/.omniagent/memory 的 memory_summary.md）；关闭则不注入（诚实基线，默认关闭）。" />} />
+        <FormControlLabel control={<Switch checked={autoDistill} onChange={(e) => { const v = e.target.checked; dirtyRef.current = true; setAutoDistill(v); void save(v); }} />}
+          label={<LabelWithTip text="自动蒸馏技能 (skill.auto_distill)" desc="开启后，任务成功时由模型自动提炼技能（LLM 归纳引导型 playbook，含防幻觉校验，观察不到可复用规律就交白卷）。默认关闭：该能力在另一场景上未取得正向证据，保留为可选项。关闭时已有技能仍可检索与加载，人工维护不受影响。" />} />
         {saved && <Alert severity="success" onClose={() => setSaved("")}>{saved}</Alert>}
         {error && <Alert severity="error" onClose={() => setError("")}>{error}</Alert>}
         <Alert severity="info">数据根目录：<code>~/.omniagent/</code>（全局层）。任务资产按 task 平铺存放，不依赖工作目录。本页设置失焦即保存。</Alert>
@@ -577,11 +576,9 @@ function CompanionTab() {
         sx={{ mb: 2, minHeight: 36, "& .MuiTab-root": { minHeight: 36, py: 0.5, fontSize: 13 } }}>
         <Tab label="角色" />
         <Tab label="画像" />
-        <Tab label="记忆" />
       </Tabs>
       {sub === 0 && <CharacterTab />}
       {sub === 1 && <ProfileTab />}
-      {sub === 2 && <MemoryTab />}
     </Box>
   );
 }

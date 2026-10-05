@@ -58,7 +58,9 @@ class TaskStore:
         """
         with TaskStore._lock:
             tid = _new_task_id()
-            pid = P.validate_identifier(project_id, "project_id") if project_id else P.auto_project_id()
+            # 无显式归属 → 缺省 default 项目（知识分层 v2：auto_project_id 已废，
+            # 按会话造项目会让 project 级知识碎片化）
+            pid = P.validate_identifier(project_id, "project_id") if project_id else P.DEFAULT_PROJECT_ID
             sid = P.validate_identifier(session_id, "session_id") if session_id else "s_" + uuid.uuid4().hex[:12]
             P.ensure_task_dirs(tid)
             ProjectStore.ensure(pid)
@@ -123,12 +125,32 @@ class TaskStore:
                 fields["project_id"] = P.validate_identifier(fields["project_id"], "project_id")
             if "session_id" in fields and fields["session_id"]:
                 fields["session_id"] = P.validate_identifier(fields["session_id"], "session_id")
+            old_pid = str(meta.get("project_id") or "")
             meta.update(fields)
             if "state" in fields and fields["state"] in ("done", "failed", "aborted"):
                 if not meta.get("finished_at"):
                     meta["finished_at"] = _now_iso()
             TaskStore._write(task_id, meta)
+            # 会话 jsonl 跟随归属搬迁：「保存到项目」改的不只是归属元数据，
+            # 聊天历史（session jsonl）必须一起搬到新项目目录，否则新项目
+            # session_count 恒 0、刷新后历史读空（read_session 去新目录找文件）。
+            new_pid = str(fields.get("project_id") or "")
+            if new_pid and new_pid != old_pid:
+                try:
+                    ProjectStore.move_session(old_pid, new_pid, str(meta.get("session_id") or ""))
+                except Exception:
+                    pass  # 搬迁失败（如运行中文件被占用）不阻塞归属更新；reconcile 会补搬
             return meta
+
+    @staticmethod
+    def project_of(task_id: str) -> str:
+        """task → project 归属解析（task.json 优先；查不到 / 未落盘 → default）。
+
+        知识资产（skills / project memory）按此归属落地与召回。
+        """
+        meta = TaskStore.get(task_id) if task_id else None
+        pid = (meta or {}).get("project_id")
+        return str(pid) if pid else P.DEFAULT_PROJECT_ID
 
     @staticmethod
     def remove(task_id: str) -> None:
@@ -316,7 +338,11 @@ class SubtaskStore:
 # Project（会话历史）
 # --------------------------------------------------------------------------
 class ProjectStore:
-    """Project 仅承载会话历史 jsonl。slug 即 id，按需建目录。"""
+    """Project 承载会话历史 + **project 级知识资产**（知识分层 v2）。
+
+    slug 即 id（``validate_identifier`` 约束）；显示名（别名）存项目元数据文件
+    ``project.json``（C3：中文/空格别名不进目录名）。
+    """
 
     _lock = threading.RLock()
 
@@ -326,6 +352,53 @@ class ProjectStore:
             d = P.project_dir(project_id)
             d.mkdir(parents=True, exist_ok=True)
             return d
+
+    @staticmethod
+    def _meta_file(project_id: str) -> Path:
+        return P.project_dir(project_id) / "project.json"
+
+    @staticmethod
+    def display_name(project_id: str) -> str:
+        """读项目显示名；无元数据文件 → 空（前端回退显示 slug）。"""
+        try:
+            f = ProjectStore._meta_file(project_id)
+            if not f.is_file():
+                return ""
+            data = json.loads(f.read_text(encoding="utf-8"))
+            return str(data.get("display_name", "") or "")
+        except Exception:
+            return ""
+
+    @staticmethod
+    def set_display_name(project_id: str, display_name: str) -> None:
+        """写显示名（增量更新，保留元数据文件其余字段）。"""
+        with ProjectStore._lock:
+            d = ProjectStore.ensure(project_id)
+            f = ProjectStore._meta_file(project_id)
+            data: Dict[str, Any] = {}
+            if f.is_file():
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8")) or {}
+                except Exception:
+                    data = {}
+            data["display_name"] = str(display_name)[:120]
+            data.setdefault("created_at", _now_iso())
+            data["updated_at"] = _now_iso()
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(f)
+
+    @staticmethod
+    def remove(project_id: str) -> None:
+        """删除整个项目目录（C5：调用方先级联删 task；本方法只删目录）。
+
+        安全约束：必须是 projects_root 的直接子目录。
+        """
+        import shutil
+        with ProjectStore._lock:
+            d = P.project_dir(project_id)
+            if d.exists() and d.resolve().parent == P.projects_root().resolve():
+                shutil.rmtree(d, ignore_errors=True)
 
     @staticmethod
     def list() -> List[Dict[str, Any]]:
@@ -339,6 +412,7 @@ class ProjectStore:
             sessions = sorted(d.glob("*.jsonl"), key=lambda x: x.stat().st_mtime, reverse=True)
             out.append({
                 "id": d.name,
+                "display_name": ProjectStore.display_name(d.name),
                 "session_count": len(sessions),
                 "last_used_at": _iso_from_mtime(sessions[0]) if sessions else None,
             })
@@ -351,6 +425,53 @@ class ProjectStore:
         if not d.exists():
             return []
         return sorted(p.stem for p in d.glob("*.jsonl"))
+
+    @staticmethod
+    def move_session(from_pid: str, to_pid: str, session_id: str) -> bool:
+        """把会话 jsonl 从一个项目目录搬到另一个（归属变更时历史跟随）。
+
+        幂等：源不存在 / 目标同名已存在（不覆盖）时跳过并返回 False。
+        """
+        if not from_pid or not to_pid or from_pid == to_pid or not session_id:
+            return False
+        src = P.session_file(from_pid, session_id)
+        if not src.is_file():
+            return False
+        ProjectStore.ensure(to_pid)
+        dst = P.session_file(to_pid, session_id)
+        if dst.exists():
+            return False
+        src.replace(dst)
+        return True
+
+    @staticmethod
+    def reconcile_sessions() -> int:
+        """自愈历史残留：按 task.json 的归属把散落在其他项目目录的会话搬回。
+
+        早期版本「保存到项目」只改 task.json 不搬 jsonl，导致项目 session_count
+        虚低、历史恢复读空。逐 task 扫描各项目目录，发现 sid 落点与归属不符即搬迁。
+        幂等（move_session 跳过已对齐项）；返回搬迁条数。
+        """
+        try:
+            metas = TaskStore.list()
+            roots = [d.name for d in P.projects_root().iterdir() if d.is_dir()]
+        except Exception:
+            return 0
+        moved = 0
+        for meta in metas:
+            pid = str(meta.get("project_id") or "")
+            sid = str(meta.get("session_id") or "")
+            if not pid or not sid:
+                continue
+            for other in roots:
+                if other == pid:
+                    continue
+                try:
+                    if ProjectStore.move_session(other, pid, sid):
+                        moved += 1
+                except Exception:
+                    continue
+        return moved
 
     @staticmethod
     def append_message(
@@ -373,6 +494,12 @@ class ProjectStore:
                 rec["extra"] = extra
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        # TAM 记忆层:会话消息入 buffer(提炼在任务收尾 flush 时批量做;异常静默)
+        try:
+            from omni_core import memory_tam
+            memory_tam.capture(project_id, role, content)
+        except Exception:
+            pass
 
     @staticmethod
     def read_session(project_id: str, session_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -380,10 +507,67 @@ class ProjectStore:
         if not path.exists():
             return []
         lines = path.read_text(encoding="utf-8").splitlines()
-        msgs = [json.loads(ln) for ln in lines if ln.strip()]
+        msgs: List[Dict[str, Any]] = []
+        for ln in lines:
+            if not ln.strip():
+                continue
+            try:
+                msgs.append(json.loads(ln))
+            except Exception:
+                continue  # 崩溃留下的半截行：跳过坏行，不废整份历史
         if limit:
             msgs = msgs[-limit:]
         return msgs
+
+    @staticmethod
+    def coalesce_records(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """会话重放视图：把增量落库的 partial agent 记录并回单轮。
+
+        背景：超长 run 的过程记录按 ~20 步增量落盘（partial），终态一次收口（final）。
+        逐条原样返回会让前端把一个 run 渲染成 N 个碎轮、终态再整轮重复。按 run_key 分组：
+        - 无 ``extra.run_key`` 的历史记录原样透传（兼容旧数据）；
+        - 组内存在**带完整 steps 的 final** → 只保留该条（终态内容最全）；
+        - 否则（无 final，或 final 因超长省略了 steps）→ 合并组内 partial：
+          steps 按序拼接、content 取组内最后一条非空、meta 取最后一条——
+          崩溃/被杀的 run 也能恢复出完整过程流。
+        """
+        out: List[Dict[str, Any]] = []
+        group: List[Dict[str, Any]] = []
+
+        def _flush_group() -> None:
+            if not group:
+                return
+            finals = [r for r in group
+                      if (r.get("extra") or {}).get("final")
+                      and not (r.get("extra") or {}).get("steps_omitted")]
+            if finals:
+                out.append(finals[-1])
+            else:
+                steps: List[Any] = []
+                content = ""
+                meta: Optional[Dict[str, Any]] = None
+                for r in group:
+                    ex = r.get("extra") or {}
+                    steps.extend(ex.get("steps") or [])
+                    if str(r.get("content") or "").strip():
+                        content = r.get("content") or ""
+                    if ex.get("meta"):
+                        meta = ex["meta"]
+                merged = dict(group[-1])
+                merged["content"] = content
+                merged["extra"] = {"steps": steps, "meta": meta, "partial": True}
+                out.append(merged)
+            group.clear()
+
+        for rec in records or []:
+            ex = rec.get("extra") or {}
+            if ex.get("run_key") and (ex.get("partial") or ex.get("final")):
+                group.append(rec)
+            else:
+                _flush_group()
+                out.append(rec)
+        _flush_group()
+        return out
 
 
 def _iso_from_mtime(p: Path) -> str:

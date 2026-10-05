@@ -77,6 +77,12 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     # 阶段 1：运行体句柄存于 RuntimeManager 复合键 (task_id, agent_id)，不再用全局 _loop
     _last_answer = ""  # 累积大脑最后一段口播，作为结尾「结果框」内容
     turn_steps: List[Dict[str, Any]] = []  # 本轮 agent 的执行轨迹（思考 + 工具调用）
+    # 增量落库（2026-10-04）：过程记录每 ~20 步刷一条 partial 到会话 jsonl，
+    # 崩溃/被杀不再整轮蒸发；终态 final 收口，重放时按 run_key 并回单轮（coalesce）。
+    run_key = f"rk_{int(time.time() * 1000)}"
+    _flushed = 0
+    _PARTIAL_FLUSH_EVERY = 20
+    _MAX_STEPS_IN_RECORD = 300  # 超过则 final 省略 steps（重放走 partial 拼接），防巨型单行
     # 新的一轮：清空实时过程快照，避免 GET /live 把上一轮的残留过程回放给前端
     clear_live_snapshot(task_id)
     try:
@@ -97,6 +103,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             push_thinking(role, content, model, task_id=task_id)
             if content:
                 turn_steps.append({"type": "thinking", "model": model, "content": content})
+            _maybe_flush_partial()
 
         def _on_tool_call(role: str, name: str, arguments: str, result: str, model: str):
             # 后端校验（verify / verify_done）属内核门控，不进用户对话区（理由仍走 debug 面板）
@@ -106,6 +113,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             push_tool_call(role, name, arguments, result, model, task_id=task_id)
             turn_steps.append({"type": "tool_call", "model": model, "name": name,
                                "arguments": arguments or "", "result": result or ""})
+            _maybe_flush_partial()
 
         def _on_llm_delta(role: str, kind: str, block_id: str, text: str, model: str):
             # 真流式增量（问题3-B）：推理链 -> thinking 块，口播 -> message 气泡（问题1）
@@ -123,6 +131,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                 # 修复：流式推理链也累积进 turn_steps，使终态 AgentTurn 能重建「深度思考」卡片
                 # （非流式路径由 _on_thinking 写入，此处补齐流式路径，二者互斥）
                 _merge_thinking_step(turn_steps, block_id, model, text)
+            _maybe_flush_partial()
 
         loop = ToolLoop(brain_cfg, executor_cfg=executor_cfg, verbose=True,
                         full_access=full_access,
@@ -159,7 +168,9 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         _session_records: List[Dict[str, Any]] = []
         if _pid and _sid:
             try:
-                _session_records = ProjectStore.read_session(_pid, _sid)
+                # coalesce：partial 增量记录并回单轮，模型上下文不碎片化、不重复
+                _session_records = ProjectStore.coalesce_records(
+                    ProjectStore.read_session(_pid, _sid))
             except Exception:
                 pass
         if not _session_records:
@@ -174,6 +185,23 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                 except Exception:
                     pass
 
+        def _maybe_flush_partial(force: bool = False):
+            """把新增过程步增量落一条 partial agent 记录（崩溃不丢、终态防巨型单行）。"""
+            nonlocal _flushed
+            if not _pid or not _sid:
+                return
+            if not (force or len(turn_steps) - _flushed >= _PARTIAL_FLUSH_EVERY):
+                return
+            if len(turn_steps) <= _flushed:
+                return
+            try:
+                ProjectStore.append_message(
+                    _pid, _sid, "assistant", "", task_id=task_id,
+                    extra={"steps": turn_steps[_flushed:], "partial": True, "run_key": run_key})
+                _flushed = len(turn_steps)
+            except Exception:
+                pass
+
         def _push(role: str, text: str, extra: Optional[dict] = None, debug: bool = False):
             push_chat(role, text, extra=extra, debug=debug, task_id=task_id)
 
@@ -181,14 +209,6 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         for m in reversed(history):
             if m.get("role") == "user":
                 last_user = m.get("content", "")
-                break
-
-        # K2/K4：从会话记录提取 C₁ 裁决基准（上一轮 assistant 结论）与用户纠偏
-        # （K4 第三蒸馏来源，config 关时返回空）。仅读 session，零写入。
-        _prev_assistant = ""
-        for r in reversed(_session_records):
-            if (r.get("role") == "assistant") and (r.get("content") or "").strip():
-                _prev_assistant = r.get("content", "")
                 break
 
         # ---- 单链路统一（2026-09-17 用户确认）：不再做闲聊 probe 快判 ----
@@ -214,15 +234,12 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         })
         result = loop.run_task(spec)
         _reason = result.get("reason") or ""
-        # K1：Curator 蒸馏/合并完成后，复用 SSE debug 通道推 memory_updated 事件，
-        # 前端右栏轻提示 + Memory Tab 刷新统计。仅在有实际产物时推送，避免噪音。
-        _cr = (result.get("curator_report") or {})
-        _distilled = int(_cr.get("rollouts_distilled", 0) or 0)
-        _merged = int(_cr.get("memory_merged", 0) or 0)
-        if _distilled > 0 or _merged > 0:
-            push_chat("system", "记忆已更新（蒸馏/合并）",
-                      extra={"kind": "memory_updated", "payload": {"distilled": _distilled, "merged": _merged}},
-                      debug=True, task_id=task_id)
+        # TAM 记忆层:任务收尾触发提炼+判重+落库(buffer 里的本会话消息;异常静默)
+        try:
+            from omni_core import memory_tam
+            memory_tam.flush(TaskStore.project_of(task_id), brain_cfg, source_task=task_id)
+        except Exception:
+            pass
         # 把本轮执行轨迹（思考 + 工具调用）连同结论，作为「归属 agent 的一整轮」持久化：
         # 既供前端刷新后恢复完整过程流，也供下一轮模型上下文回填（根治跨轮失忆）。
         meta = {
@@ -244,24 +261,12 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             conclusion = _reason
         else:
             conclusion = f"任务已完成（共执行 {meta.get('steps')} 步）。详细结果见上方执行步骤。"
-        # K2：任务结束内嵌采集信号（A=success / B=assistant 结论 / C1=对话批准 / C2=观测评审）。
-        # 纯前向、零写入任务原始数据；异常静默不影响主流程。
-        try:
-            from omni_core.local import signals as _sig
-            _sig.collect_run_signal(
-                task_id=task_id,
-                run_id=str(result.get("run_id") or f"r_{int(time.time())}"),
-                success=bool(result.get("success")),
-                assistant_text=conclusion,
-                objective=last_user,
-                prev_assistant=_prev_assistant,
-                next_user_msg=last_user,
-                terminal_observation=None,
-            )
-        except Exception:
-            pass
-
-        _extra = {"steps": turn_steps, "meta": meta, "final": True}
+        # 终态记录：步数超上限则省略 steps（重放由 partial 拼接），防巨型单行 jsonl
+        _steps_omitted = len(turn_steps) > _MAX_STEPS_IN_RECORD
+        if _steps_omitted:
+            _maybe_flush_partial(force=True)
+        _extra = {"steps": [] if _steps_omitted else turn_steps, "meta": meta, "final": True,
+                  "run_key": run_key, **({"steps_omitted": True} if _steps_omitted else {})}
         # 校验结论（如「无校验条件，信任大脑」）只进调试面板，不污染用户对话
         if _reason:
             _debug_push("verify", {"title": "完成校验", "reason": _reason})
@@ -539,6 +544,14 @@ async def api_chat(request: Request):
         meta = TaskStore.get(task_id)
         if meta is None:
             return JSONResponse({"ok": False, "error": "task not found"}, status_code=404)
+        # 「新建会话」（POST /tasks 空 objective，挂在某项目下）首条消息自动命名，
+        # 与「首消息建任务」的 objective 来源对齐；已有名字的任务绝不覆盖。
+        if not str(meta.get("objective") or "").strip():
+            try:
+                TaskStore.update(task_id, objective=last_user.strip()[:4000])
+                meta = TaskStore.get(task_id)
+            except Exception:
+                pass
 
     # P2.1: 持久化会话历史——每条 user/assistant 消息写 jsonl
     project_id = meta.get("project_id", "")

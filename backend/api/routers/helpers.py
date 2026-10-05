@@ -377,11 +377,18 @@ def _session_records_to_model_messages(records: List[Dict[str, Any]]) -> List[Di
         role = r.get("role")
         if role == "user":
             out.append({"role": "user", "content": r.get("content", "")})
-        elif role == "agent":
+        elif role in ("agent", "assistant"):
+            # 会话落库写 "assistant"、SSE 写 "agent"——同一发送者，recap 两边都要认
             parts = [r.get("content") or ""]
             steps = (r.get("extra") or {}).get("steps") or []
             if steps:
-                parts.append("（上一轮 agent 的执行记录）\n" + _steps_to_text(steps))
+                # recap 上限：超长 run（压缩检查点增量落库可拼出上千步）只回填最近段，
+                # 防模型上下文被单轮 recap 撑爆；总数说明保留可观测性
+                _RECAP_STEPS = 12
+                shown = steps[-_RECAP_STEPS:]
+                head = f"（上一轮 agent 的执行记录，共 {len(steps)} 步，显示最近 {len(shown)} 步）\n" \
+                    if len(steps) > _RECAP_STEPS else "（上一轮 agent 的执行记录）\n"
+                parts.append(head + _steps_to_text(shown))
             text = "\n\n".join(p for p in parts if p)
             if text:
                 out.append({"role": "assistant", "content": text})
@@ -473,12 +480,14 @@ def _read_skills(task_id: str) -> List[dict]:
         from omni_core.local.skill_library import SkillLibrary
         sl = SkillLibrary(task_id=task_id)
         out = []
-        # 仅展示全局通用 skill；task 私有 skill 不进 Web 列表、不共享
-        for s in sl.list_global():
+        # 知识分层 A6：合并目录（project 优先 + global），条目标注 scope——
+        # 前端据 scope 决定是否显示「设为全局」（A7 手动提升）。
+        for s in sl.list_all():
             out.append({
                 "name": s.name,
                 "objective_pattern": s.objective_pattern,
                 "status": s.metadata.status,
+                "scope": "global" if s.metadata.scope == "global" else "project",
                 "success_count": s.metadata.success_count,
                 "total_uses": s.metadata.total_uses,
                 "substeps": [{"tool": ss.tool, "args": ss.args} for ss in s.substeps],
@@ -550,134 +559,8 @@ def _snapshot(task_id: str) -> dict:
         "context": ctx.export() if ctx else None,
     }
 
-def _memory_enabled() -> bool:
-    """知识层弱注入（memory）是否开启，取自生效配置 runtime.knowledge.memory.enabled。"""
-    cfg = _config()
-    return bool((((cfg.get("runtime") or {}).get("knowledge") or {}).get("memory") or {}).get("enabled", False))
-
-
 def _profile_enabled() -> bool:
     """知识层弱注入（user_profile）是否开启，取自配置 runtime.knowledge.profile.enabled（默认开）。"""
     cfg = _config()
     return bool((((cfg.get("runtime") or {}).get("knowledge") or {}).get("profile") or {}).get("enabled", True))
-
-def _read_merged_ids() -> set:
-    """读取 memory/merged.json 中已合并的 task_id 集合（幂等去重用）。"""
-    try:
-        from omni_core.local import runtime_paths as P
-        p = P.global_memory() / "merged.json"
-        if p.exists():
-            return set((json.loads(p.read_text(encoding="utf-8")) or {}).get("merged_task_ids", []))
-    except Exception:
-        pass
-    return set()
-
-def _read_memory_master() -> str:
-    """读取 MEMORY.md 全文；不存在返回空串。"""
-    try:
-        from omni_core.local import runtime_paths as P
-        p = P.memory_master()
-        return p.read_text(encoding="utf-8") if p.exists() else ""
-    except Exception:
-        return ""
-
-def _read_memory_summary_chars() -> int:
-    """读取注入视图 memory_summary.md 字符数。"""
-    try:
-        from omni_core.local import runtime_paths as P
-        p = P.memory_summary()
-        return len(p.read_text(encoding="utf-8")) if p.exists() else 0
-    except Exception:
-        return 0
-
-def _rollout_header(text: str) -> dict:
-    """解析单条 rollout md 头行：distilled_at 与 success。
-
-    头行形如：
-    ``- task_id: xxx / objective: ... / success: True / steps: n /
-       distilled_at(UTC iso): <iso> / trajectory: tasks/xxx/trajectory.jsonl``
-    """
-    res = {"distilled_at": "", "success": None}
-    try:
-        for ln in text.splitlines():
-            s = ln.strip()
-            if s.startswith("- task_id:"):
-                m = re.search(r"distilled_at\(UTC iso\):\s*(\S+)", s)
-                if m:
-                    res["distilled_at"] = m.group(1).strip()
-                sm = re.search(r"/ success:\s*(true|false)", s, re.IGNORECASE)
-                if sm:
-                    res["success"] = sm.group(1).strip().lower() == "true"
-                break
-    except Exception:
-        pass
-    return res
-
-def _read_rollouts_list(limit: int = 50, offset: int = 0) -> dict:
-    """倒序列出 memory/rollouts/*.md 元信息，支持分页。
-
-    Returns:
-        {"rollouts": [...], "total": int}
-    """
-    try:
-        from omni_core.local import runtime_paths as P
-        from omni_core.local.curator import _parse_rollout_sections
-        d = P.memory_rollouts()
-        if not d.is_dir():
-            return {"rollouts": [], "total": 0}
-        merged = _read_merged_ids()
-        files = sorted(d.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
-        total = len(files)
-        page = files[offset: offset + limit] if limit > 0 else files[offset:]
-        out = []
-        for p in page:
-            try:
-                text = p.read_text(encoding="utf-8")
-            except Exception:
-                continue
-            facts, lessons = _parse_rollout_sections(text)
-            hdr = _rollout_header(text)
-            out.append({
-                "task_id": p.stem,
-                "distilled_at": hdr["distilled_at"],
-                "success": hdr["success"],
-                "facts_n": len(facts),
-                "lessons_n": len(lessons),
-                "merged": p.stem in merged,
-            })
-        return {"rollouts": out, "total": total}
-    except Exception:
-        return {"rollouts": [], "total": 0}
-
-def _read_rollout_detail(task_id: str) -> Optional[dict]:
-    """读取单条 rollout 全文 + 解析段 + trajectory 引用。"""
-    try:
-        from omni_core.local import runtime_paths as P
-        from omni_core.local.curator import _parse_rollout_sections
-        p = P.memory_rollout_file(task_id)
-        if not p.exists():
-            return None
-        text = p.read_text(encoding="utf-8")
-        facts, lessons = _parse_rollout_sections(text)
-        hdr = _rollout_header(text)
-        traj = ""
-        for ln in text.splitlines():
-            s = ln.strip()
-            if s.startswith("- task_id:"):
-                tm = re.search(r"/ trajectory:\s*(\S+)", s)
-                if tm:
-                    traj = tm.group(1).strip()
-                break
-        return {
-            "task_id": task_id,
-            "content": text,
-            "trajectory": traj,
-            "facts_n": len(facts),
-            "lessons_n": len(lessons),
-            "distilled_at": hdr["distilled_at"],
-            "success": hdr["success"],
-        }
-    except Exception:
-        return None
-
 

@@ -33,7 +33,7 @@ import Markdown from "../../components/Markdown.tsx";
 import ModelPicker from "../../components/ModelPicker.tsx";
 import type { ChatMsg, ProcessItem, ApprovalCardInfo, ModelsIndex } from "../../types";
 import type { DebugLog } from "../../store/taskStore";
-import { characterApi, modelCatalogApi } from "../../api/client";
+import { characterApi, modelCatalogApi, settingsApi } from "../../api/client";
 
 // 选中模型的本地兜底：后端目录为准，本地只用于首屏即时显示（切换后由后端 defaults 持久化）
 const MODEL_SEL_KEY = "omni.selected_model";
@@ -460,7 +460,7 @@ function LogRow({ log }: { log: DebugLog }) {
 }
 
 export default function Chat() {
-  const { messages, running, sendMessage, injectMessage, stopTask, debugLogs, clearDebugLogs, processLogs, memoryHint, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval, taskObjectives } = useTaskStore();
+  const { messages, running, sendMessage, injectMessage, stopTask, debugLogs, clearDebugLogs, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval, taskObjectives } = useTaskStore();
   const [draft, setDraft] = useState("");
   const [logOpen, setLogOpen] = useState(false);
   // 助手名：从角色卡 frontmatter 解析（缺省 OmniAgent），用于顶栏与消息标签
@@ -472,6 +472,15 @@ export default function Chat() {
       .catch(() => {});
   }, []);
   const [confirmAnchorEl, setConfirmAnchorEl] = useState<HTMLElement | null>(null);
+  // 全局权限档位（设置›安全与审批）；full_access 档开时所有任务已免审批，per-task 开关冗余
+  const [globalSecurityMode, setGlobalSecurityMode] = useState<string>("standard");
+  useEffect(() => {
+    settingsApi.get().then((r) => {
+      const m = (r.data as any)?.security?.mode;
+      if (typeof m === "string") setGlobalSecurityMode(m);
+    }).catch(() => {});
+  }, []);
+  const globalFullAccess = globalSecurityMode === "full_access";
   // 完全访问按当前 task 读取（跟随当前任务；切换任务由 refreshTasks 从 task.json 回填各自值）
   const fullAccess = fullAccessByTask[currentTaskId] ?? false;
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -601,13 +610,6 @@ export default function Chat() {
           {/* 顶栏右侧：预留模型切换等控制位 */}
         </Stack>
 
-        {/* K1 记忆更新轻提示（Curator 蒸馏/合并后由 SSE 推送，自动淡出） */}
-        {memoryHint && (
-          <Alert severity="success" sx={{ mb: 1, flexShrink: 0 }} onClose={() => { /* 由 SSE 计时自动清除 */ }}>
-            记忆已更新：蒸馏 {memoryHint.distilled} 条 / 合并 {memoryHint.merged} 条（可在「设置 → 伙伴 → 记忆」查看）
-          </Alert>
-        )}
-
         <Paper
           elevation={0}
           sx={{ flexGrow: 1, minHeight: 0, mb: 1, bgcolor: "transparent", borderRadius: 2, overflow: "hidden", display: "flex", flexDirection: "column" }}
@@ -732,8 +734,8 @@ export default function Chat() {
               control={
                 <Switch
                   size="small"
-                  checked={fullAccess}
-                  disabled={running}
+                  checked={fullAccess || globalFullAccess}
+                  disabled={running || globalFullAccess}
                   onChange={(e) => {
                     // 关闭直接生效；开启先在当前位置弹小窗确认风险
                     if (e.target.checked) setConfirmAnchorEl(e.currentTarget);
@@ -741,7 +743,7 @@ export default function Chat() {
                   }}
                 />
               }
-              label="完全访问"
+              label={globalFullAccess ? "完全访问（已被全局档覆盖）" : "完全访问"}
               sx={{ mr: 0 }}
             />
             <Stack direction="row" spacing={0.5} alignItems="center">

@@ -4,7 +4,7 @@
 - Agent 用 SDK 原生 ``Agent`` 表达；工具用 SDK 原生 ``function_tool`` 包装
   ``omni_core.tools`` 里的业务函数（函数体不变，仅换装饰器）。
 - 循环（ReAct / function-call / 回填）由 ``Runner.run`` 接管，内核零手搓。
-- 护城河（WorldModel/Curator/Trajectory）作为 SDK ``RunHooks`` 后处理钩子挂载，
+- 护城河（WorldModel/Trajectory）作为 SDK ``RunHooks`` 后处理钩子挂载，
   与循环解耦（设计 §5.3）。
 
 本模块不写任何场景/业务逻辑，只做「SDK 运行时装配 + 钩子挂载」。
@@ -21,7 +21,7 @@ from omni_core.tools.base import sdk_tools
 
 
 class OmniRunHooks(RunHooks):
-    """护城河后处理钩子：每步工具结果经回调落盘（Trajectory/Curator）。
+    """护城河后处理钩子：每步工具结果经回调落盘（Trajectory）。
 
     挂载点（设计 §5.3）：在 SDK 一步完成（含 tool 执行）后回调，与循环解耦。
     本类不写死护城河内部 schema，只把 (tool_name, result) 交给注入的回调。

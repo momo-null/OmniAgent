@@ -8,9 +8,9 @@
 >
 > **构建方式（诚实说明）**：ReAct 循环与 function-call 协议由 **OpenAI Agents SDK**（`Runner`）承载，多 agent 状态机编排由 **LangGraph** 承载。本项目自研的是 **L2 编排层**（收尾门控 / 升级判定 / 预算与墙钟 / 上下文管理）、**工具运行时与插件层**、**知识层**（世界模型 / 技能 / 全局记忆）与 **执行后端**（设备 / GUI）。因此本项目的贡献是「编排 + 工具 + 知识层」，**不是 agent 循环本身**。
 >
-> **技术底座**：`OpenAI Agents SDK` · `LangGraph` · `MCP` · 本地模型生命周期管理 · 知识级自升级（技能 / 全局记忆提炼）。
+> **技术底座**：`OpenAI Agents SDK` · `LangGraph` · `MCP` · 本地模型生命周期管理 · 知识层（技能库 / 用户画像；记忆轴按 TencentDB Agent Memory 移植重建中）。
 >
-> **版本 X3**：主 agent 规划并执行；可按槽位为子 agent 配置不同模型（含本地快模型做执行与视觉感知）。任务完成后把成功经验蒸馏成技能与全局记忆（知识级自升级主线）。
+> **版本 X3**：主 agent 规划并执行；可按槽位为子 agent 配置不同模型（含本地快模型做执行与视觉感知）。
 > ⚠️ 免责声明：个人学习项目，不保证稳定性与体验，使用产生的一切后果自行承担。
 
 ## 能力与边界（先看这个 · 30 秒了解本项目到哪一步）
@@ -19,11 +19,12 @@
 - 主 agent 执行循环（OpenAI Agents SDK）+ 自主派发：互不依赖的子任务可派给按槽位配置的执行单元。
 - 通用工具运行时：加能力 = 写工具 / Provider，内核零场景硬编码（红线 lint + CI 守护）。
 - 本地模型生命周期管理、MCP 接入、GUI / 设备操控执行后端。
-- 知识级自升级**闭环**（2026-09-28 真机验证）：轨迹落盘 → Curator 蒸馏（rollout）→ 全局记忆合并（MEMORY.md → memory_summary 注入）→ Skill 提取与跨任务 N=3 晋级（active + 全局）→ 新任务消费（零工具凭注入记忆准确复述历史事实）。
+- 会话记录增量落盘 + 重放合并（崩溃不丢过程流）；项目级 AGENTS.md 三层纪律注入（global → project → task）；技能库（人工维护 + 按需加载）。
+  （skill 提取链修订：录像式机械转录整链已于 2026-10-03 A9 删除；2026-10-04 skill 轴以**可重放宏缓存**形态复活——结构化提取 + N=3 晋级 + 回放执行器，`skill.auto_distill` 默认关，有效性验证未做，见下。）
 
 **尚未验证（诚实边界）**
-- 知识级自升级的**有效性对照实验（ablation，K3/V3）尚未完成**——「注入记忆是否真的让任务做得更好」（≥20 次同域开/关对照，判据：步数降 ≥15% 且成功率不降）**目前没有数据结论**。
-  故本项目**不声称**自进化已被证明有效；已证实的边界 = 闭环链路真机跑通、注入内容可被模型消费（2026-09-28）。
+- 记忆轴处于**重构期**：旧的自升级管线（K 系列）已整体退役，新管线按 **TencentDB Agent Memory** 移植重建（设计见 `doc/plans/memory-rag-design.md`），有效性验证未开始。
+- **skill 宏轴（2026-10-04 复活）有效性未验证**：hachimi 真机试点已收口——机制层跑通（蒸馏链 5/5 成功、entry_id 精确分结构、N=3 晋升生效），但**注入技能序列零步数收益**（Δsteps=0，简单 UI 任务）⇒ 价值全系于回放执行器（跳过每步 LLM 决策），收益 A/B 待在 Omni 上以游戏脚本 / 确定性工具链场景补测；`skill.auto_distill` 默认关。
 - 单域、小样本，非生产级。
 - skill 驱动的角色化团队（team-mode）**规划中**：将复用派发底座的 `agent` 字段与执行单元注册表（见 `doc/plans/`），尚未实现。
 
@@ -74,7 +75,7 @@
 
 ## 架构速览
 
-两层 + Escalation 的通用 Agent Runtime：`Brain（在线规划）` → `Tool Runtime（SDK Runner 内层循环 + LangGraph 编排）` → `tool 插件层（device / vision / python / mcp 平级）` → `执行后端（devices/，L1，内核外）` → `Environment`。旁路（知识级自升级主线）：`Trajectory → Curator 蒸馏 → 全局记忆 / Skill / World-Model 合并 → 下次注入消费`。
+两层 + Escalation 的通用 Agent Runtime：`Brain（在线规划）` → `Tool Runtime（SDK Runner 内层循环 + LangGraph 编排）` → `tool 插件层（device / vision / python / mcp 平级）` → `执行后端（devices/，L1，内核外）` → `Environment`。知识层旁路：`技能库 + 用户画像 + AGENTS.md 纪律 → 注入消费`（记忆轴按 TencentDB Agent Memory 移植重建中，见 `doc/plans/memory-rag-design.md`）。
 
 > 全部架构图（分层框架 / MCP 解耦 / ReAct 闭环 / Vision SoM / Meta-loop / 两层执行 Escalation / 上下文管理 / 持久化检查点 / Project-Task 模型 / 前端设计 / 知识层自升级）见 **架构设计 N1–N11**。
 
@@ -125,7 +126,7 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
 >
 > **How it is built (honest note)**: the ReAct loop and the function-call protocol are delegated to the **OpenAI Agents SDK** (`Runner`), and multi-agent state-machine orchestration to **LangGraph**. What this project builds itself is the **L2 orchestration layer** (termination gating / escalation decisions / budget & wall-clock / context management), the **tool runtime & plugin layer**, the **knowledge layer** (world model / skills / global memory) and the **execution backends** (device / GUI). So the contribution here is "orchestration + tools + knowledge layer", **not the agent loop itself**.
 >
-> **Version X3**: the main agent plans and executes; sub-agents can be configured with per-slot models (including a local fast model for execution and visual perception). After each task, successful experience is distilled into skills and global memory (the knowledge-level self-upgrade mainline).
+> **Version X3**: the main agent plans and executes; sub-agents can be configured with per-slot models (including a local fast model for execution and visual perception).
 > ⚠️ Disclaimer: a personal learning project; stability and UX are not guaranteed; use at your own risk.
 
 ## Capability & Boundary (read this first · a 30-second overview of where the project stands)
@@ -134,11 +135,12 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
 - Main-agent execution loop (OpenAI Agents SDK) + autonomous dispatch: independent subtasks can be delegated to executor units configured per slot.
 - General tool runtime: adding a capability = writing a tool / provider; zero scene-specific logic in the kernel (enforced by a red-line lint + CI).
 - Local model lifecycle management, MCP integration, GUI / device execution backends.
-- Knowledge-level self-upgrade *closed loop* (verified on real machine, 2026-09-28): trajectory → Curator distillation (rollouts) → global-memory merge (MEMORY.md → memory_summary injection) → skill extraction with cross-task N=3 promotion (active + global) → consumption by a new task (zero tool calls, accurately reciting injected history).
+- Session records are persisted incrementally with replay coalescing (crash-safe); three-layer AGENTS.md discipline injection (global → project → task); skill library (manually maintained + on-demand loading).
+  (Skill-chain revision: the mechanical-transcription chain was deleted on 2026-10-03 (A9); on 2026-10-04 the skill axis was revived as a **replayable macro cache** — structural extraction + N=3 promotion + replay executor, `skill.auto_distill` off by default, effectiveness unverified, see below.)
 
 **Not yet verified (honest caveat)**
-- The **effectiveness ablation of knowledge-level self-upgrade is not done (K3/V3)** — there is **no data-backed conclusion** on whether memory injection actually improves task performance (requires ≥20 same-domain on/off comparison runs; pass = steps down ≥15% with no success-rate regression).
-  This project therefore does **not** claim that self-evolution is proven effective; the verified boundary is: the closed loop runs end-to-end on real hardware, and injected memory is demonstrably consumed by the model (2026-09-28).
+- The **memory axis is under reconstruction**: the old self-upgrade pipeline (K-series) has been fully retired; the new pipeline is a direct port of **TencentDB Agent Memory** (design in `doc/plans/memory-rag-design.md`). Effectiveness validation has not started.
+- **Skill macro axis (revived 2026-10-04) effectiveness unverified**: the hachimi real-device pilot closed with the mechanism validated end-to-end (distillation chain 5/5 runs, entry_id correctly distinguishing structural variants, N=3 promotion working) but **zero step savings from injecting the skill sequence** (Δsteps=0 on a simple UI task) ⇒ value hinges entirely on the replay executor (skipping per-step LLM decisions); the A/B is still pending on Omni in game-script / deterministic-toolchain scenarios; `skill.auto_distill` is off by default.
 - Single domain, small sample size; not production-grade.
 - A skill-driven role-based team (team-mode) is **planned**: it will reuse the dispatch foundation's `agent` field and executor registry (see `doc/plans/`); not yet implemented.
 
@@ -189,7 +191,7 @@ Seven non-negotiable principles — the basis for all technical choices and a "s
 
 ## Architecture Overview
 
-A two-tier + Escalation general-purpose agent runtime: `Brain (online planning)` → `Tool Runtime (SDK Runner inner loop + LangGraph orchestration)` → `tool plugin layer (device / vision / python / mcp, all peers)` → `execution backend (devices/, L1, outside the kernel)` → `Environment`. Side path (knowledge-level self-upgrade mainline): `Trajectory → Curator distillation → global-memory / skill / world-model merge → re-injection`.
+A two-tier + Escalation general-purpose agent runtime: `Brain (online planning)` → `Tool Runtime (SDK Runner inner loop + LangGraph orchestration)` → `tool plugin layer (device / vision / python / mcp, all peers)` → `execution backend (devices/, L1, outside the kernel)` → `Environment`. Knowledge-layer side path: `skill library + user profile + AGENTS.md discipline → injection` (the memory axis is being re-built as a TencentDB Agent Memory port, see `doc/plans/memory-rag-design.md`).
 
 > All architecture diagrams (layered framework / MCP decoupling / ReAct loop / Vision SoM / Meta-loop / two-tier execution escalation / context management / persistence checkpoints / Project-Task model / frontend design / knowledge-level self-upgrade) are in **Architecture Design N1–N11**.
 

@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 
 import pytest
-
 from omni_core.local import runtime_paths as RP
 from omni_core.tools import policy
 from omni_core.tools.base import call_tool
@@ -20,10 +19,21 @@ _SHELL = "cmd" if os.name == "nt" else "bash"
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _load_fs_plugin():
-    """filesystem 为插件（非 core）：直调用例需先装载注册（生产由 ToolLoop 装载）。"""
+def _load_fs_plugin(tmp_path_factory):
+    """filesystem 为插件（非 core）：直调用例需先装载注册（生产由 ToolLoop 装载）。
+
+    模块级夹具先于用例级 ``_isolated_home`` 执行，若读真实 ``~/.omniagent/plugins/*.yaml``，
+    用户本地停用的插件会让本套件 ``write_file`` 用例全部「unknown tool」（2026-10-02 实测）。
+    故装载时临时重定向全局根（装载幂等，重定向只影响 enabled 判定）。
+    """
+    from omni_core.local import runtime_paths as RP
     from omni_core.tools.loader import load_plugins
-    load_plugins({})
+    real = RP._GLOBAL
+    RP._GLOBAL = tmp_path_factory.mktemp("plugin_load") / ".omniagent"
+    try:
+        load_plugins({})
+    finally:
+        RP._GLOBAL = real
 
 
 class ScriptedSink:
@@ -141,8 +151,8 @@ def test_network_passes_in_standard_mode():
         policy.unbind()
 
 
-def test_full_access_skips_gate_but_not_absolute_deny():
-    """full_access：exec 不弹卡直接执行；~/.omniagent 写仍拒（自提权路径不可用）。"""
+def test_full_access_skips_gate():
+    """full_access：exec 不弹卡直接执行（写入已不设防，S1 围栏整体删除）。"""
     sink = ScriptedSink([])
     policy.set_sink(sink)
     policy.bind(task_id="t_fa", full_access=True)
@@ -150,13 +160,26 @@ def test_full_access_skips_gate_but_not_absolute_deny():
         res = call_tool("shell_exec", {"command": f"echo {123}", "shell": _SHELL})
         assert res.get("ok") is True, res
         assert len(sink.requests) == 0, "full_access 不应产生卡片"
-        set_task("t_fa")
-        RP.ensure_task_dirs("t_fa")
-        res2 = call_tool("write_file", {"path": str(RP.global_omni() / "config.yaml"),
-                                        "content": "evil"})
-        assert res2.get("denied") is True and res2.get("rule") == "self_carrier"
     finally:
-        set_task(None)
+        policy.unbind()
+        policy.set_sink(None)
+
+
+def test_full_access_mode_skips_gate():
+    """全局 full_access 档：即使 per-task full_access=False，危险动作也不弹卡直接放行。
+
+    与 test_full_access_skips_gate（per-task 开关）对照——两种来源取「或」，任一为真即免审。
+    """
+    sink = ScriptedSink([])
+    policy.set_sink(sink)
+    policy.bind(task_id="t_fam", full_access=False, security_cfg={"mode": "full_access"})
+    try:
+        res = call_tool("shell_exec", {"command": f"echo {456}", "shell": _SHELL})
+        assert res.get("ok") is True, res
+        assert len(sink.requests) == 0, "全局 full_access 档不应产生卡片"
+        # network 类同样放行
+        assert policy._pre_gate("network", "web_fetch", "web", {}, policy.current()) is None
+    finally:
         policy.unbind()
         policy.set_sink(None)
 
@@ -164,54 +187,26 @@ def test_full_access_skips_gate_but_not_absolute_deny():
 # --- 审计 --------------------------------------------------------------------
 
 def test_audit_records_gate_interventions():
-    """门的干预落审计（approved / user_deny / denied_s1 / mode_read_only）。"""
+    """门的干预落审计（approved / user_deny / mode_read_only）。
+
+    注：S1 围栏撤销后，读操作不再被网关，故不再产生 denied_s1 类审计。
+    """
     policy.bind(task_id="t_aud", security_cfg={})
     policy.set_sink(ScriptedSink([policy.Decision(approved=True),
                                   policy.Decision(approved=False, rule="user_deny")]))
     try:
         call_tool("shell_exec", {"command": "echo a1", "shell": _SHELL})
         call_tool("shell_exec", {"command": "echo a2", "shell": _SHELL})
-        call_tool("read_file", {"path": str(RP.global_omni() / "config.yaml")})
         d = policy.audit_dir()
         files = sorted(d.glob("*.jsonl"))
         assert files, "审计文件应已生成"
         entries = [json.loads(x) for x in
                    files[-1].read_text(encoding="utf-8").splitlines() if x.strip()]
         decisions = {e["decision"] for e in entries}
-        assert {"approved", "user_deny", "denied_s1"} <= decisions
+        assert {"approved", "user_deny"} <= decisions
         for e in entries:
             assert e["task_id"] == "t_aud"
             assert {"ts", "tool", "risk", "arguments", "rule", "cwd"} <= set(e)
     finally:
         policy.set_sink(None)
-        policy.unbind()
-
-
-def test_write_approval_via_sink_approved(tmp_path):
-    """根外写入经 sink 批准后放行（S1→S2 联动；ensure_writable 阻塞式）。"""
-    policy.bind(task_id="t_wr")
-    policy.set_sink(ScriptedSink([policy.Decision(approved=True)]))
-    set_task("t_wr")
-    RP.ensure_task_dirs("t_wr")
-    try:
-        target = tmp_path / "outside_root.txt"
-        res = call_tool("write_file", {"path": str(target), "content": "granted"})
-        assert res.get("ok") is True, res
-        assert target.read_text(encoding="utf-8") == "granted"
-    finally:
-        set_task(None)
-        policy.set_sink(None)
-        policy.unbind()
-
-
-def test_read_only_blocks_outside_root_write():
-    """read_only：根外写入自动拒绝（不进审批）。"""
-    policy.bind(task_id="t_ro2", security_cfg={"mode": "read_only"})
-    set_task("t_ro2")
-    RP.ensure_task_dirs("t_ro2")
-    try:
-        res = call_tool("write_file", {"path": str(REPO_ROOT / "x_ro.txt"), "content": "x"})
-        assert res.get("denied") is True and res.get("rule") == "mode_read_only"
-    finally:
-        set_task(None)
         policy.unbind()

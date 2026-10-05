@@ -71,11 +71,12 @@ def _cfg(monkeypatch, **over):
     monkeypatch.setattr(config_mod, "get_config", lambda p, d=None: table.get(p, d))
 
 
-def _pin_agents(monkeypatch, global_path, task_path=None):
-    """把两层纪律文件路径钉到 tmp 路径（tool_loop 内是函数级导入，运行期替换生效）。"""
+def _pin_agents(monkeypatch, global_path, task_path=None, project_path=None):
+    """把三层纪律文件路径钉到 tmp 路径（tool_loop 内是函数级导入，运行期替换生效）。"""
     import omni_core.local.runtime_paths as rp
 
     monkeypatch.setattr(rp, "global_agents_file", lambda: global_path)
+    monkeypatch.setattr(rp, "project_agents_file", lambda pid: project_path or (global_path.parent / "nope-p.md"))
     monkeypatch.setattr(
         rp, "task_agents_file", lambda tid: task_path or (global_path.parent / "nope.md"))
 
@@ -124,6 +125,56 @@ def test_run_level_load_upgrades_to_merged_prompt(monkeypatch, tmp_path):
     assert merged.startswith("SYS")
     assert "GLOBAL-RULE" in merged and "TASK-RULE" in merged
     assert snap.labels == ["global", "task"]
+
+
+# --- 项目层（知识分层 v2）：global → project → task --------------------------------
+def test_project_layer_between_global_and_task(monkeypatch, tmp_path):
+    """三层齐备：project 层按任务归属解析，拼接顺序 global → project → task。
+
+    project 文件走真实隔离路径（projects/<pid>/AGENTS.md），验证路径函数接线。
+    """
+    from omni_core.local.runtime_paths import project_agents_file
+    from omni_core.local.task_store import TaskStore
+
+    meta = TaskStore.create(objective="x", project_id="d-disc")
+    pf = project_agents_file("d-disc")
+    pf.parent.mkdir(parents=True, exist_ok=True)
+    pf.write_text("PROJECT-RULE", encoding="utf-8")
+
+    g = tmp_path / "g.md"
+    g.write_text("GLOBAL-RULE", encoding="utf-8")
+    t = tmp_path / "t.md"
+    t.write_text("TASK-RULE", encoding="utf-8")
+
+    loop = _loop()
+    _cfg(monkeypatch)
+    _pin_agents(monkeypatch, g, t, project_path=pf)
+
+    snap = loop._load_instructions_snapshot(_spec(meta["task_id"]))
+    assert snap.labels == ["global", "project", "task"]
+    merged = loop._merge_instructions("SYS", snap)
+    assert "PROJECT-RULE" in merged
+    assert snap.block.index("GLOBAL-RULE") < snap.block.index("PROJECT-RULE") \
+        < snap.block.index("TASK-RULE"), "越近的层排越后（语义优先）"
+
+
+def test_project_layer_absent_changes_nothing(monkeypatch, tmp_path):
+    """无项目纪律文件 → labels 仍为 [global, task]，注入行为与两层时代一致。"""
+    from omni_core.local.task_store import TaskStore
+
+    meta = TaskStore.create(objective="x", project_id="d-norules")
+    g = tmp_path / "g.md"
+    g.write_text("GLOBAL-RULE", encoding="utf-8")
+    t = tmp_path / "t.md"
+    t.write_text("TASK-RULE", encoding="utf-8")
+
+    loop = _loop()
+    _cfg(monkeypatch)
+    _pin_agents(monkeypatch, g, t, project_path=None)  # 钉到不存在的路径
+
+    snap = loop._load_instructions_snapshot(_spec(meta["task_id"]))
+    assert snap.labels == ["global", "task"]
+    assert "GLOBAL-RULE" in snap.block and "TASK-RULE" in snap.block
 
 
 def test_run_level_zero_injection_when_no_files(monkeypatch, tmp_path):
@@ -398,16 +449,17 @@ def test_instructions_injected_and_drift_logged_to_trajectory(monkeypatch, tmp_p
     assert drift is not None and drift["layers"] == ["global"]
 
 
-# --- 6. memory 仍走尾部（F4.2 未被迁移影响） -----------------------------------
-def test_memory_still_in_tail_not_system(monkeypatch, tmp_path):
+# --- 6. 画像仍走尾部（F4.2 尾部重插机制未被 K 系列退役影响） -------------------
+def test_profile_still_in_tail_not_system(monkeypatch, tmp_path):
+    """纪律 → system；画像（非纪律的弱注入内容）→ 尾部重插，不进 system。"""
     g = tmp_path / "g.md"
     g.write_text("DISCIPLINE", encoding="utf-8")
 
     loop = _loop()
-    loop.knowledge_cfg["memory"] = True
+    loop.knowledge_cfg["profile"] = True
     _cfg(monkeypatch)
     _pin_agents(monkeypatch, g)
-    monkeypatch.setattr(ki, "load_memory_text", lambda: "MEM-TEXT")
+    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
 
     captured = {}
 
@@ -421,17 +473,6 @@ def test_memory_still_in_tail_not_system(monkeypatch, tmp_path):
                       traj=None, user_input="hi")
 
     assert "DISCIPLINE" in captured["instructions"]          # 纪律 → system
-    assert "MEM-TEXT" not in captured["instructions"]        # 记忆不进 system
-    assert "MEM-TEXT" in captured["tail_inject_block"]       # 记忆 → 尾部重插
-    assert captured["tail_inject_layers"] == ["memory"]
-
-
-def test_memory_in_system_fallback_when_memory_in_user_false(monkeypatch, tmp_path):
-    """一键回退：memory_in_user=false → 尾部块不含记忆（由 system 路径承载）。"""
-    loop = _loop()
-    loop.knowledge_cfg["memory"] = True
-    _cfg(monkeypatch, **{"runtime.long_task.memory_in_user": False})
-
-    block, layers = loop._build_memory_injection(False)
-    assert block == "" and layers == []
-    assert loop._memory_in_system() is True
+    assert "PROFILE-TEXT" not in captured["instructions"]    # 画像不进 system
+    assert "PROFILE-TEXT" in captured["tail_inject_block"]   # 画像 → 尾部重插
+    assert captured["tail_inject_layers"] == ["user_profile"]

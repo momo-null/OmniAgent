@@ -1,20 +1,21 @@
-"""安全与权限策略层（S0/S1/S2 门本体）。
+"""安全与权限策略层（S0/S2 门本体）。
 
 分层（内核不碰 SSE）：
-- **S0 权限模式**：``standard | read_only``（config ``security.mode``，随 run 快照进入
-  SecurityContext）⊕ per-task ``full_access``。read_only 下危险动作自动拒绝（fail-closed）。
-- **S1 PathPolicy**：绝对拒绝区（``guard_path``，接在 ``workspace.resolve_path`` 路径漏斗）
-  + 允许根（``ensure_writable``，写类工具入口在任何副作用前调用）。
-- **S2 审批**：``ApprovalSink`` 协议由后端注册实现（SSE 推卡 + REST 决议）；未注册
+- **S0 权限模式**：``standard | read_only | full_access``（config ``security.mode``，随
+  run 快照进入 SecurityContext）⊕ per-task ``full_access``。read_only 拒绝
+  exec/network/actuate（危险动作自动拒绝，fail-closed）；``full_access`` 档=全局免审批
+  （所有任务/run 危险动作直接放行，与 per-task ``full_access`` 取「或」，任一为真即免审）。
+- **S2 审批**：standard 档下 exec/actuate 逐卡人工批准（任务级类记忆：一次同意覆盖
+  该类全部工具）；``ApprovalSink`` 协议由后端注册实现（SSE 推卡 + REST 决议）；未注册
   （单测 / 脚本直调）→ ``AutoDenySink`` 立即拒绝，fail-closed 且不挂测试。
-- **审计**：门的干预落 ``~/.omniagent/audit/YYYY-MM.jsonl``（月轮转），根内静默放行不记。
+- **写入不设防**：S1 路径围栏已整体删除（含允许根/绝对拒绝区/按名写拒）——个人助手
+  定位下文件写入不做路径门；可见性靠审计，风险靠 S0 档位与危险动作审批把关。
+- **审计**：门的干预落 ``~/.omniagent/audit/YYYY-MM.jsonl``（月轮转）。
 
 红线：内核零工具名字面量（风险类别由工具经 ``risk=`` 自声明）；纯标准库，可上机复用。
-约定：``ensure_writable`` 必须在工具首个副作用之前调用（阻塞式审批因此无需重入函数）。
 """
 from __future__ import annotations
 
-import fnmatch
 import functools
 import inspect
 import json
@@ -23,16 +24,14 @@ import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
-
-from omni_core.local.runtime_paths import task_tmp
+from typing import Any, Callable, Dict, Optional
 
 
 # ---------------------------------------------------------------------------
 # 拒绝异常（统一出口：base.py 包裹层捕获 → 结构化结果 + 审计）
 # ---------------------------------------------------------------------------
 class PolicyRefusal(Exception):
-    """S1/S2 拒绝。包裹层据此产出 ``{"ok": False, "denied": True, ...}`` 回给模型。"""
+    """S2 拒绝。包裹层据此产出 ``{"ok": False, "denied": True, ...}`` 回给模型。"""
 
     def __init__(self, policy: str, rule: str, error: str, hint: str):
         super().__init__(error)
@@ -46,7 +45,7 @@ _REFUSAL_HINT = "不要重试或绕过；改用任务目录，或向用户说明
 
 
 def refusal_result(r: PolicyRefusal) -> Dict[str, Any]:
-    """PolicyRefusal → 回给模型的结构化拒绝结果（S1/S2 共用契约）。"""
+    """PolicyRefusal → 回给模型的结构化拒绝结果（S2 共用契约）。"""
     return {"ok": False, "denied": True, "policy": r.policy, "rule": r.rule,
             "error": r.error, "hint": r.hint}
 
@@ -61,8 +60,7 @@ class SecurityContext:
     task_id: str
     run_id: str = ""
     full_access: bool = False
-    mode: str = "standard"                       # standard | read_only
-    allow_roots: List[str] = field(default_factory=list)
+    mode: str = "standard"                       # standard | read_only | full_access
     wait_seconds: float = 600.0                  # 0 = 无限等
     audit_enabled: bool = True
     # 审批等待累计（秒）：墙钟结算时扣除（等待是人的延迟，不是 agent 的延迟）
@@ -91,13 +89,14 @@ def bind(task_id: str, full_access: bool = False,
         wait_seconds = float(approval_cfg.get("wait_seconds", 600) or 0)
     except (TypeError, ValueError):
         wait_seconds = 600.0
-    roots = cfg.get("allow_write_roots") or []
+    mode = str(cfg.get("mode") or "standard")
+    # 全局完全访问档：所有任务/run 免审批（与 per-task full_access 取「或」，任一为真即免审）
+    full = bool(full_access) or (mode == "full_access")
     ctx = SecurityContext(
         task_id=task_id or "",
         run_id=run_id or f"r_{int(time.time())}",
-        full_access=bool(full_access),
-        mode=str(cfg.get("mode") or "standard"),
-        allow_roots=[str(r) for r in roots if str(r).strip()],
+        full_access=full,
+        mode=mode,
         wait_seconds=max(0.0, wait_seconds),
         audit_enabled=bool(cfg.get("audit", True)),
     )
@@ -118,153 +117,6 @@ def gate_wait_seconds() -> float:
     """本 run 累计的审批等待秒数（墙钟结算扣除用；未绑定为 0）。"""
     ctx = _run_security.get()
     return ctx.gate_wait_seconds if ctx else 0.0
-
-
-# ---------------------------------------------------------------------------
-# S1：PathPolicy 路径围栏
-# ---------------------------------------------------------------------------
-_HOME = Path.home()
-# 保护根 / 审计目录以 runtime_paths._GLOBAL 为单一事实源（生产 = ~/.omniagent；
-# 测试经 conftest 隔离夹具重定向到 tmp——判定必须随隔离走，不得 import 时固化）。
-# 预解析防 `..`/符号链接词法穿透：判定一律基于 normalize 后的真实路径。
-_CARRIER_GLOBS = ("config*.yaml", "mcp.json")
-_DISCIPLINE_NAME = "agents.md"
-
-
-def _protected_root() -> Optional[Path]:
-    """受保护的全局数据根（normalize 后）；解析失败按拒绝处理。"""
-    from omni_core.local import runtime_paths as RP
-    return _resolve(RP.global_omni())
-
-
-def _is_under(p: Path, root: Path) -> bool:
-    try:
-        p.relative_to(root)
-        return True
-    except ValueError:
-        return False
-
-
-def _resolve(p: Path) -> Optional[Path]:
-    """normalize 真实路径（含 ``..`` / 符号链接）；失败返回 None（调用方按拒绝处理）。"""
-    try:
-        return Path(p).expanduser().resolve()
-    except Exception:
-        return None
-
-
-def _task_tmp() -> Optional[Path]:
-    """当前任务 tmp 目录；未绑定任务时 None（此时无例外区）。
-
-    以 workspace 的 ContextVar 为**单一事实源**（与各工具的路径解析同源，
-    避免双绑定不一致）；``bind`` 存的 task_id 供卡片 / 审计用，不参与围栏例外判定。
-    """
-    from omni_core.tools.workspace import current_task
-    tid = current_task()
-    if tid:
-        return task_tmp(tid)
-    return None
-
-
-def guard_path(p: Path) -> None:
-    """S1 绝对拒绝区（读写都拒）：``~/.omniagent/**``，唯一例外=当前任务 ``tmp/``。
-
-    接在 ``workspace.resolve_path`` 漏斗——一切经它解析路径的工具零改动被覆盖。
-    命中抛 ``PolicyRefusal``（rule=self_carrier），包裹层产出结构化拒绝 + 审计。
-    """
-    rp = _resolve(p)
-    if rp is None:
-        raise PolicyRefusal("S1", "self_carrier",
-                            f"路径无法解析，已拒绝: {p}", _REFUSAL_HINT)
-    root = _protected_root()
-    if root is None or not _is_under(rp, root):
-        return
-    tmp = _task_tmp()
-    if tmp:
-        tmp_r = _resolve(tmp)
-        if tmp_r and _is_under(rp, tmp_r):
-            return
-    raise PolicyRefusal(
-        "S1", "self_carrier",
-        f"路径受保护（OmniAgent 自身配置/记忆），已拒绝: {p}",
-        _REFUSAL_HINT,
-    )
-
-
-def _is_write_carrier(p: Path) -> Optional[str]:
-    """全盘写拒绝的载体（不问地点）。命中返回 rule，否则 None。"""
-    name = p.name.lower()
-    if name == _DISCIPLINE_NAME:
-        return "discipline_file"
-    for g in _CARRIER_GLOBS:
-        if fnmatch.fnmatch(name, g):
-            return "carrier_write"
-    return None
-
-
-def _in_allow_root(p: Path, ctx: Optional[SecurityContext]) -> bool:
-    rp = _resolve(p)
-    if rp is None:
-        return False
-    tmp = _task_tmp()
-    if tmp:
-        tmp_r = _resolve(tmp)
-        if tmp_r and _is_under(rp, tmp_r):
-            return True
-    if ctx:
-        for root in ctx.allow_roots:
-            root_r = _resolve(Path(root))
-            if root_r and _is_under(rp, root_r):
-                return True
-    return False
-
-
-def ensure_writable(p: Path) -> None:
-    """S1 写入口（写类工具在任何副作用前调用）。
-
-    - 绝对拒绝区 → 拒（rule=self_carrier）；
-    - 载体文件（config*.yaml / mcp.json / AGENTS.md，全盘）→ 拒；
-    - 允许根内（当前任务 tmp + ``security.allow_write_roots``）→ 放行；
-    - 根外 → 阻塞走 S2 审批：批准后继续执行，拒绝抛 ``PolicyRefusal``。
-    """
-    p = Path(p)
-    guard_path(p)
-    rule = _is_write_carrier(p)
-    if rule:
-        raise PolicyRefusal(
-            "S1", rule,
-            f"受保护文件，禁止写入: {p}",
-            _REFUSAL_HINT,
-        )
-    ctx = current()
-    if _in_allow_root(p, ctx):
-        return
-    # read_only 档：根外写入自动拒绝（不弹卡，fail-closed；§4）
-    if ctx is not None and ctx.mode == "read_only" and not ctx.full_access:
-        audit("mode_read_only", "mode_read_only", tool=_current_invocation().get("tool", ""),
-              unit=_current_invocation().get("unit", ""), risk="write",
-              arguments={"path": str(p)})
-        raise PolicyRefusal(
-            "S0", "mode_read_only",
-            f"当前为只读模式，拒绝写入允许根之外的路径: {p}",
-            "只读模式仅允许任务目录内的写入；如需写入该路径请用户切换权限模式",
-        )
-    # 根外写入 → S2 审批（人点头即放行；个人助手整理用户文件是正当需求）
-    inv = _current_invocation()
-    card = ApprovalCard(
-        tool=inv.get("tool", ""), unit=inv.get("unit", ""), risk="write",
-        arguments={"path": str(p)},
-    )
-    decision = _request_approval(card)
-    if decision.approved:
-        audit("approved", "allow_root", tool=card.tool, unit=card.unit,
-              risk="write", arguments=card.arguments, wait_ms=decision.wait_ms)
-        return
-    raise PolicyRefusal(
-        "S2", decision.rule or "user_deny",
-        f"用户未允许写入该路径: {p}",
-        _REFUSAL_HINT,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -330,14 +182,6 @@ def set_sink(sink: Optional[ApprovalSink]) -> None:
 def _get_sink() -> Optional[ApprovalSink]:
     with _sink_lock:
         return _sink
-
-
-# 当前工具调用上下文（wrap_tool 设置，供 ensure_writable 组卡 / 审计用）
-_invocation: ContextVar[Dict[str, str]] = ContextVar("omni_invocation", default={})
-
-
-def _current_invocation() -> Dict[str, str]:
-    return _invocation.get() or {}
 
 
 def _request_approval(card: ApprovalCard) -> Decision:
@@ -430,7 +274,7 @@ def wrap_tool(func: Callable, tool_name: str, unit: str,
     """base.py::function_tool 的统一包裹层（插件/环境作者零感知、无法绕过）。
 
     - risk 声明类（exec/actuate/network）：执行前过前置门；
-    - 捕获工具内部抛出的 ``PolicyRefusal``（ensure_writable / guard_path）→ 结构化结果；
+    - 捕获工具内部抛出的 ``PolicyRefusal``（兜底；当前门均在本层前置）→ 结构化结果；
     - ``functools.wraps`` 保全 SDK schema 生成（签名/注解/docstring 原样）。
 
     注意：SDK 对 ``strict_mode=False`` 的工具按**位置参数**传参（kwargs 为空），
@@ -438,36 +282,28 @@ def wrap_tool(func: Callable, tool_name: str, unit: str,
     """
     @functools.wraps(func)
     def guarded(*args: Any, **kwargs: Any) -> Any:
-        token = _invocation.set({"tool": tool_name, "unit": unit, "risk": risk or ""})
         try:
-            try:
-                bound = inspect.signature(func).bind(*args, **kwargs)
-                bound.apply_defaults()
-                call_args: Dict[str, Any] = dict(bound.arguments)
-            except Exception:
-                call_args = dict(kwargs or {})
-            ctx = current()
-            if risk:
-                refusal = _pre_gate(risk, tool_name, unit, call_args, ctx)
-                if refusal is not None:
-                    return refusal_result(refusal)
-            try:
-                return func(*args, **kwargs)
-            except PolicyRefusal as r:
-                decision = {
-                    "self_carrier": "denied_s1", "carrier_write": "denied_s1",
-                    "discipline_file": "denied_s1",
-                }.get(r.rule, r.rule)
-                audit(decision, r.rule, tool=tool_name, unit=unit, risk=risk or "",
-                      arguments=call_args)
-                return refusal_result(r)
-        finally:
-            _invocation.reset(token)
+            bound = inspect.signature(func).bind(*args, **kwargs)
+            bound.apply_defaults()
+            call_args: Dict[str, Any] = dict(bound.arguments)
+        except Exception:
+            call_args = dict(kwargs or {})
+        ctx = current()
+        if risk:
+            refusal = _pre_gate(risk, tool_name, unit, call_args, ctx)
+            if refusal is not None:
+                return refusal_result(refusal)
+        try:
+            return func(*args, **kwargs)
+        except PolicyRefusal as r:
+            audit(r.rule, r.rule, tool=tool_name, unit=unit, risk=risk or "",
+                  arguments=call_args)
+            return refusal_result(r)
     return guarded
 
 
 # ---------------------------------------------------------------------------
-# 审计（门的干预才记；根内静默放行不记）
+# 审计（门的干预才记）
 # ---------------------------------------------------------------------------
 def audit(decision: str, rule: str, tool: str = "", unit: str = "", risk: str = "",
           arguments: Optional[Dict[str, Any]] = None, wait_ms: int = 0) -> None:

@@ -5,20 +5,18 @@
 
 ## 待办
 
-### OmniAgent X3 · M5 meta-loop 规划（自升级闭环）
-- 来源：`doc/plans/implemented/知识级自升级_完整设计_K系列_定稿.md`
-- 状态：🧊 **封存**——知识层稳态优先；只有 K5 判据长期不可达时才重新评估权重级路线。当前仓库没有权重训练链。
-
-### K 系列遗留缺口
-- 来源：`doc/plans/implemented/知识级自升级_完整设计_K系列_定稿.md` §2「已知缺口」+ §5.6.6 / §6.1 / §7.1 / §8.1
-- 状态：🟡 **待办**（不影响现有闭环运行）
-- 明细与**收尾验收用例**：
-    1. 回溯过滤（清除 C 判脏记忆）— §5.6.6。**用例**：构造 C1 标 `refuted` 的任务 → 蒸馏时该任务的 facts/lessons 被排除或打脏标记 → MEMORY.md 无脏条目；判据 = refuted 任务不再产生 rollout。
-    2. 准入升级 → `approved_success` — §5.6.6（当前没有显式准入状态；Curator 只要收到 run record 就进入蒸馏）。**前置**：`GET /signals/summary` C₁ 样本 ≥20。**用例**：置准入为 approved_success → 仅「A.success 且下轮 session 无证伪」任务进蒸馏 → 验证「成功后下一轮失败」的任务其 rollout 被判脏剔除。
-    3. V3 ablation 结论 — §6（脚本就绪：`review_rollouts.py` + `effectiveness.py`，需 ≥20 次同域对照人工长跑）。**用例**：同域同 objective ×20 对照（开/关 memory 注入各 10）→ 判据 = 步数均值降 ≥15% 且成功率不降。
-    4. 多域分区 — §8（v1 为单域常量 `single-domain(v1)`）。**用例**：steady_state 按 domain 分桶出数、各域独立收敛判据 → 单域常量退役。
-    5. K6 LLM 蒸馏增强 — §2（可选远期，M5 语料供给；依赖 K3 通过后决议）。**用例**：LLM 改写后的 rollout 与规则版抽检比对，语义保真率 ≥90%。
-    6. 真实自然收敛验证 — §8（K5 仅模拟法验证过降频触发）。**用例**：`steady_state.json` 的 `converged=true` 由真实信号自然翻转（非注入模拟值）→ 翻转后下一个任务跳过蒸馏（Curator 日志「已收敛：跳过蒸馏」可见）→ 再人为降信号验证可退出收敛态。
+### skill 宏轴 · 有效性验证（tam-porting-map §5）
+- 来源：`doc/plans/tam-porting-map.md` §5（skill 宏轴有效性验证）
+- 状态：🟡 **实现已落地（2026-10-04 生产者于 2026-10-05 重接至任务收尾）；真机试点已收口——机制层跑通
+  （蒸馏链 5/5 成功、entry_id 正确分结构、N=3 晋升生效），但注入技能形态零步数收益
+  （Δsteps=0 负观测）**。⇒ 价值全系于 `replay_skill` 回放执行器（跳过每步 LLM 决策），不在注入参考。
+- 待办：
+    1. **收益验证必须走回放口径**：A/B 对照中 B 组命中技能须实际调用 `replay_skill` 硬重放
+      （execution-verified），不得用"注入技能序列"当治疗臂——hachimi 已证该形态无可测收益。
+    2. **场景锚定确定性工具链 / 游戏脚本类**：shell/file 固定例程（LLM 跑通一次后程序化重放），
+      不要用简单 UI 点屏任务（T2 类已证是收益最难点）。
+    3. 负结果纪律：连续 2 个任务集 B 不优于 A 即停手（沿用 hachimi 口径）；淘汰参数
+      （`skill.evict_*`）待真机数据校准。
 
 ### 团队模式（Team Mode）· 角色型常驻子 agent
 - 来源：`doc/plans/team-mode-design.md`
@@ -40,15 +38,17 @@
 
 ### 沙箱与权限 · 增强遗留项
 - 来源：`doc/plans/implemented/sandbox-permission-design.md`
+- 2026-10-02 设计决策：**S1 路径围栏撤销**（绝对拒绝区 / 按名写拒 / read_only 写禁先删）。
+- 2026-10-03 设计决策（最终态）：**S1 整体删除、写入不设防**——含允许根（`security.allow_write_roots`）与 `ensure_writable` 写门（filesystem 插件调用链一并拆除，设置页「允许写入的根」区块删除）。个人助手定位下写不做路径门；安全面只剩 S0 档位（read_only 拒 exec/network/actuate）+ S2 危险动作审批 + 审计。旧「写经审批卡」口径作废。
 - 待办：
     1. **S3 OS 级硬隔离**：Docker 容器 runner 首选（Windows ACL 备选）。🧊 远期；触发条件是开放外部用户或接入不可信第三方任务。这是同时约束文件工具与 `shell_exec` 的硬边界。
     2. **MCP 执行类工具审批收口**：当前 MCP 工具由 SDK 原生派发，不进入统一审批门。首个有写/执行副作用的第三方 MCP server 接入前，按既定路线将 `list_tools()` 自注册转为带 gate 的 FunctionTool（`source="mcp"`）。
-    3. **`security.deny_read_roots`**：可选的凭证目录读取黑名单 glob，当前配置与策略代码均未实现。
+    3. **`security.deny_read_roots`**：可选的凭证目录读取黑名单 glob。读路径当前完全放开（S1 撤销后无读网关）；若凭证泄漏成为实际风险再立项。
 
 ### 画像/角色卡/记忆 · 遗留项
 - 来源：`doc/plans/implemented/profile-character-memory-design.md`
 - 待办：
-    1. **检索层 / RAG**（§0）：设计已拒，仅在记忆总量突破 `memory_summary` 20K 字符截断预算，或多角色需要按 scope 筛选时再立项。当前 world-model 事实元数据已有 `source` 与 scope 视图，但通用记忆 `tags` 字段尚未实现（`tags` 只存在于 skill）。
+    1. **检索层 / RAG**（§0）：设计已立（2026-10-04，`doc/plans/memory-rag-design.md`——仅 memory 轴，skill 严格排除、两轴正交是硬约束；参照 TencentDB Agent Memory 的本地 SQLite/FTS5 形态与三预算口径）。**触发条件**：project fact_index + 全局 MEMORY.md 合计 > 100 条，或注入预算出现可观截断——满足前不动工（hachimi 实测：池子 1 条时排序无差别）。落地切片：S1 FTS5 → S2 向量臂 → S3 RRF+三预算，每步独立可回退。
     2. **多角色记忆档位 1-3**（§5.3）：档位 1 = per-role 记忆隔离（`memory/roles/<role>/`，
        低复杂度按需启用）；档位 2 = 记忆膨胀后轻量检索（SQLite + sqlite-vec）；档位 3 = 真
        多 agent 运行时。设计先行、均为增量可逆，启用时机 = 需要角色各自持久记忆 / 模型成本显著下降。

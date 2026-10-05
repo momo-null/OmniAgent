@@ -22,9 +22,8 @@ from omni_core.local.world_model import WorldModel
 from omni_core.local.states import AgentState
 from omni_core.local.trajectory import TrajectoryStore
 from omni_core.local import telemetry
-from omni_core.local.curator import Curator
 from omni_core.local.runtime_paths import (
-    task_trajectory, task_collected, auto_project_id,
+    task_trajectory, task_collected,
 )
 from omni_core.local.task_store import TaskStore, ProjectStore
 
@@ -184,13 +183,14 @@ class GraphRunnerMixin:
         max_input_tokens = int(_mit) if _mit is not None else int(_ctx_def.get("maxInputTokens", 0) or 0)
         retain_ratio = float(_lt.get("retain_ratio", 0.0) or 0.0)
         _on_llm, _on_llm_delta, _on_llm_turn_end = self._make_llm_emitter("brain", store)
-        from omni_core.local.runtime_paths import task_dir, task_skills, global_skills
+        from omni_core.local.runtime_paths import task_dir, project_skills, global_skills
+        from omni_core.local.task_store import TaskStore
         _runtime_ctx = {
             "task_id": spec.task_id,
             "env_kind": self.exec.kind,
             "env_platform": getattr(self.exec, "platform", ""),
             "task_dir": str(task_dir(spec.task_id)),
-            "task_skills_dir": str(task_skills(spec.task_id)),
+            "project_skills_dir": str(project_skills(TaskStore.project_of(spec.task_id))),
             "global_skills_dir": str(global_skills()),
         }
         system_prompt = build_system_prompt(
@@ -200,34 +200,9 @@ class GraphRunnerMixin:
         # T2.4（O4'）：技能摘要不再注入 system prompt——改由新机制提供：
         # 技能目录以固定模板 User 消息注入（knowledge_inject.build_skill_catalog），
         # 模型按需调用 load_skill 工具加载完整指令（omni_core.tools.skill_tool.load_skill）。
-        # 历史记忆注入逻辑保留；F4.2（KJ-1）：memory_in_user=true 时迁至尾部重插（见
-        # _build_memory_injection），此处仅作 false 回退（一键回退到 system 注入）。
         # 注：纪律文件（AGENTS.md）**不在此处**——F4.1b 起由 _run_via_sdk 统一在 run 起始
         # 读快照后并入 system 尾部（同样作用于子任务），此处不重复拼接。
-        if self.knowledge_cfg["memory"] and self._memory_in_system():
-            try:
-                from omni_core.local.knowledge_inject import (
-                    build_knowledge_block, load_memory_text,
-                )
-                mem_text = load_memory_text()
-                block = build_knowledge_block(mem_text, [])
-                if block:
-                    system_prompt = system_prompt + "\n\n" + block
-                    # T4.6（O5+）：知识注入落轨迹（字符数 / 技能数）
-                    self._log_knowledge_injection(store, {
-                        "kind": "knowledge_injected",
-                        "chars": len(block),
-                        "skills": 0,
-                        "memory": bool(mem_text),
-                    })
-                    dbg = self._dbg("knowledge")
-                    if dbg:
-                        dbg("knowledge_injected", {
-                            "chars": len(block),
-                            "memory": bool(mem_text),
-                        })
-            except Exception as e:
-                self._log(f"knowledge inject skipped: {type(e).__name__}: {e}")
+        # （K 系列记忆注入已随其代码退役；记忆轴按 TAM 移植重建，见 memory-rag-design。）
         # F2.4：主链墙钟对齐——取自 runtime.long_task.wallclock_sec（缺省 0=不检查）。
         # 与子任务墙钟（runtime.escalation.wallclock_sec，缺省 120s，worker 防打转）解耦。
         main_wallclock_sec = self._resolve_main_wallclock(budget, spec)
@@ -380,7 +355,7 @@ class GraphRunnerMixin:
 
         def _finalize_fn(state, success, reason, steps, rounds, escalated, escalate_reason,
                          provider_error=False):
-            # 仅回填计数 + 返回核心字段；落盘/Curator 由下方 _finish 统一处理
+            # 仅回填计数 + 返回核心字段；落盘由下方 _finish 统一处理
             self.step = steps or self.step
             if escalated:
                 self._failures = max(self._failures, 1)
@@ -588,13 +563,14 @@ class GraphRunnerMixin:
         t0 = time.time()
         _role = "executor" if slot == self.default_executor_slot else f"executor:{slot}"
         _on_llm, _on_llm_delta, _on_llm_turn_end = self._make_llm_emitter(_role)
-        from omni_core.local.runtime_paths import task_dir, task_skills, global_skills
+        from omni_core.local.runtime_paths import task_dir, project_skills, global_skills
+        from omni_core.local.task_store import TaskStore
         _exec_runtime_ctx = {
             "task_id": inner_spec.task_id,
             "env_kind": self.exec.kind,  # 与主链一致：worker 也要知道自己所在环境
             "env_platform": getattr(self.exec, "platform", ""),
             "task_dir": str(task_dir(inner_spec.task_id)),
-            "task_skills_dir": str(task_skills(inner_spec.task_id)),
+            "project_skills_dir": str(project_skills(TaskStore.project_of(inner_spec.task_id))),
             "global_skills_dir": str(global_skills()),
         }
         res = self._run_via_sdk(

@@ -235,29 +235,6 @@ class TrajectoryStore:
                 json.dump(rec.to_dict(), f, ensure_ascii=False, indent=2)
         return rec
 
-    # --- 留存 prune（Master Spec §5 / §12.6：raw 轨迹滚动 30 天） ----------
-    def prune(self, max_age_days: int = 30) -> int:
-        """删除超过 max_age_days 天的 jsonl / run 记录（failures 14 天）。"""
-        import shutil
-
-        cutoff = time.time() - max_age_days * 86400
-        fail_cutoff = time.time() - 14 * 86400
-        removed = 0
-        for p in self.dir.glob("*.jsonl"):
-            if p.stat().st_mtime < cutoff:
-                p.unlink()
-                removed += 1
-        for p in self.dir.glob("*.run.json"):
-            if p.stat().st_mtime < cutoff:
-                p.unlink()
-                removed += 1
-        fdir = self.dir / "failures"
-        if fdir.exists():
-            for p in fdir.glob("*.json"):
-                if p.stat().st_mtime < fail_cutoff:
-                    p.unlink()
-                    removed += 1
-        return removed
 
     def close(self):
         try:

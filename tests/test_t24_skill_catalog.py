@@ -10,7 +10,7 @@ from omni_core.local.knowledge_inject import (
     build_skill_catalog,
     format_skill_catalog_message,
 )
-from omni_core.local.runtime_paths import global_skills, task_skills
+from omni_core.local.runtime_paths import DEFAULT_PROJECT_ID, global_skills, project_skills
 from omni_core.tools.base import TOOL_REGISTRY, build_plugin_registry
 from omni_core.tools.skill_tool import load_skill, set_skill_task_context
 
@@ -47,7 +47,7 @@ def _gate(ok=True):
 # === 1. 目录枚举 / 私有优先 / 描述截断 ========================================
 def test_catalog_private_overrides_global():
     tid = "t24_pri"
-    _write(task_skills(tid), "demo.md", "demo", "私有版本描述")
+    _write(project_skills(DEFAULT_PROJECT_ID), "demo.md", "demo", "私有版本描述")
     _write(global_skills(), "demo.md", "demo", "全局版本描述")
     _write(global_skills(), "only_global.md", "only_global", "仅全局技能")
 
@@ -56,12 +56,12 @@ def test_catalog_private_overrides_global():
     assert "demo" in names
     assert "only_global" in names
     demo = next(s for s in cat if s["name"] == "demo")
-    assert "私有" in demo["description"]  # 同名私有覆盖全局
+    assert "私有" in demo["description"]  # 同名 project 覆盖全局
 
 
 def test_catalog_truncates_description():
     tid = "t24_trunc"
-    _write(task_skills(tid), "t.md", "t", "描" * 500)
+    _write(project_skills(DEFAULT_PROJECT_ID), "t.md", "t", "描" * 500)
     cat = build_skill_catalog(tid, desc_limit=50)
     desc = next(s for s in cat if s["name"] == "t")["description"]
     assert len(desc) == 50
@@ -70,8 +70,8 @@ def test_catalog_truncates_description():
 # === 2. disable_model_invocation ============================================
 def test_disabled_skill_hidden_and_load_rejected():
     tid = "t24_dis"
-    _write(task_skills(tid), "hidden.md", "hidden", "禁用技能", disable="true")
-    _write(task_skills(tid), "ok.md", "ok", "可用技能")
+    _write(project_skills(DEFAULT_PROJECT_ID), "hidden.md", "hidden", "禁用技能", disable="true")
+    _write(project_skills(DEFAULT_PROJECT_ID), "ok.md", "ok", "可用技能")
 
     names = [s["name"] for s in build_skill_catalog(tid)]
     assert "hidden" not in names
@@ -85,7 +85,7 @@ def test_disabled_skill_hidden_and_load_rejected():
 
 def test_malformed_disable_value_treated_as_true():
     tid = "t24_bad"
-    _write(task_skills(tid), "weird.md", "weird", "脏值技能", disable="maybe")
+    _write(project_skills(DEFAULT_PROJECT_ID), "weird.md", "weird", "脏值技能", disable="maybe")
     assert "weird" not in [s["name"] for s in build_skill_catalog(tid)]
 
 
@@ -134,23 +134,56 @@ def test_catalog_message_is_user_role_and_inserted_in_order(monkeypatch):
 # === 4. load_skill 加载完整内容 / 超长截断 ===================================
 def test_load_skill_returns_full_content():
     tid = "t24_load"
-    _write(task_skills(tid), "full.md", "full", "完整技能", body="正文ABC")
+    _write(project_skills(DEFAULT_PROJECT_ID), "full.md", "full", "完整技能", body="正文ABC")
     set_skill_task_context(tid)
     res = load_skill("full")
     assert res["ok"] is True
     assert "正文ABC" in res["content"]
+    assert res["mode"] == "playbook"  # §3.2：正文即 playbook 文字引导
     assert res["truncated"] is False
 
 
 def test_load_skill_truncates_long_content():
     tid = "t24_long"
-    _write(task_skills(tid), "big.md", "big", "超长技能", body="字" * 20000)
+    _write(project_skills(DEFAULT_PROJECT_ID), "big.md", "big", "超长技能", body="字" * 20000)
     set_skill_task_context(tid)
     res = load_skill("big")
     assert res["ok"] is True
     assert res["truncated"] is True
     assert len(res["content"]) <= res["limit"] + 100
     assert "已截断" in res["content"]
+
+
+def test_load_skill_falls_back_to_sanitized_action_sequence():
+    """§3.2：无 playbook（正文）→ 回退脱敏动作序列（A1 归一化，易变值不外显）。"""
+    from omni_core.local.skill_library import Skill, SkillLibrary, SkillSubstep
+
+    tid = "t24_seq"
+    lib = SkillLibrary(task_id=tid)
+    lib.save(Skill(
+        name="skill_seq", objective_pattern="输入并提交",
+        substeps=[SkillSubstep(tool="type_text", args={"text": "机密内容"}),
+                  SkillSubstep(tool="click", args={"x": 3, "y": 4})],
+    ))
+    set_skill_task_context(tid)
+    res = load_skill("skill_seq")
+    assert res["ok"] is True
+    assert res["mode"] == "action_sequence"
+    assert "type_text" in res["content"] and "click" in res["content"]
+    assert "机密内容" not in res["content"]  # 归一化：<text>
+
+
+def test_load_skill_records_total_uses():
+    """§3.2 命中簿记：load_skill 成功即记 total_uses（效用淘汰的输入）。"""
+    from omni_core.local.skill_library import SkillLibrary
+
+    tid = "t24_use"
+    _write(project_skills(DEFAULT_PROJECT_ID), "used.md", "used", "簿记技能")
+    set_skill_task_context(tid)
+    load_skill("used")
+    load_skill("used")
+    s = SkillLibrary(task_id=tid).load("used")
+    assert s.metadata.total_uses == 2
 
 
 # === 5. skill 是 core 能力：常开，不再有分组总开关 ==========================

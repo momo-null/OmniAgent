@@ -15,26 +15,27 @@ html {
   font-size: 14px;
 }
 
-/* 全局细滚动条：克制灰色，默认即悬停灰，轨道淡灰，贴近边框 */
+/* 全局细滚动条：与 Chat 自绘 ScrollArea 同风格——5px 深灰滑块、透明轨道
+   （ScrollArea.tsx 的 THUMB_COLOR/THUMB_WIDTH 是唯一出处，勿在组件内再写局部样式） */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.4) rgba(0, 0, 0, 0.05);
+  scrollbar-color: rgb(60, 60, 60) transparent;
 }
-html ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+*::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
   -webkit-appearance: none;
 }
-html ::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.05);
+*::-webkit-scrollbar-track {
+  background: transparent;
 }
-html ::-webkit-scrollbar-thumb {
+*::-webkit-scrollbar-thumb {
   -webkit-appearance: none;
-  background: rgba(0, 0, 0, 0.4);
-  border-radius: 4px;
+  background: rgb(60, 60, 60);
+  border-radius: 3px;
 }
-html ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.4);
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(90, 90, 90);
 }
 
 /* 自绘滚动条（ScrollArea）内层：彻底隐藏原生滚动条，仅保留原生滚轮/触摸滚动 */

@@ -249,3 +249,40 @@ def test_compaction_enabled_disables_chunk_compression(monkeypatch):
     compaction_calls, maybe_calls = _run_with_spies(monkeypatch, max_input_tokens=8000)
     assert compaction_calls == [1], "maxInputTokens>0 应启用粘性压缩"
     assert maybe_calls == [], "启用粘性压缩后应禁用旧 chunk 边界压缩（新旧互斥）"
+
+
+# --- 6. 压缩检查点回调（中途蒸馏挂点，2026-10-04） ------------------------------
+def test_on_compact_fires_on_new_summary_only():
+    """新摘要产出（含增量重压）触发 on_compact；粘性复用与零干预不触发。"""
+    fired = []
+
+    def summ(items, si=None):
+        return "摘要内容"
+
+    model, inner = _mk_model(summ)
+    model._on_compact = lambda: fired.append(1)
+
+    items = _msgs(10)
+    _invoke(model, items)                      # 首次压缩 → 新摘要 → 触发
+    assert len(fired) == 1
+    _invoke(model, items)                      # 无新增内容 → 粘性复用 → 不触发
+    assert len(fired) == 1
+    items2 = items + _msgs(3)                  # 追加内容 → 增量重压 → 再触发
+    _invoke(model, items2)
+    assert len(fired) == 2
+
+
+def test_on_compact_exception_never_breaks_request():
+    """回调抛异常被吞掉：请求照常完成，压缩结果不受影响。"""
+    def summ(items, si=None):
+        return "摘要内容"
+
+    model, inner = _mk_model(summ)
+
+    def _boom():
+        raise RuntimeError("checkpoint boom")
+
+    model._on_compact = _boom
+    items = _msgs(10)
+    _invoke(model, items)                      # 不抛异常即通过
+    assert inner.calls[0]["input"][0]["content"].startswith("[历史压缩摘要]")

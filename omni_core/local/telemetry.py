@@ -40,7 +40,7 @@ def compute(run: Dict[str, Any]) -> Dict[str, float]:
 
 
 def emit_run_report(run: Dict[str, Any], report_dir: str) -> Optional[str]:
-    """写 ``<report_dir>/<run_id>.json``（人类 + 未来 Curator 可读）。返回路径或 None。"""
+    """写 ``<report_dir>/<run_id>.json``（人类可读的运行报告）。返回路径或 None。"""
     try:
         d = Path(report_dir)
         d.mkdir(parents=True, exist_ok=True)

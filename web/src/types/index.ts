@@ -169,6 +169,7 @@ export interface SkillInfo {
   success_count: number;
   total_uses: number;
   substeps: { tool: string; args: Record<string, unknown> }[];
+  scope?: string; // project | global（知识分层 A6：合并目录标注来源）
 }
 
 export interface WorldInfo {
@@ -304,10 +305,9 @@ export interface RuntimeSnapshot {
   project_id: string;
 }
 
-// ── K1 全局长期记忆（/api/runtime/memory） ─────────────
+// ── 全局长期记忆（/api/runtime/memory） ─────────────
 export interface MemoryIndex {
-  master: string; // MEMORY.md 全文
-  summary_chars: number; // 注入视图 memory_summary.md 字符数
+  master: string; // MEMORY.md 全文（机器归纳 + 人工编辑）
   rollouts_total: number; // rollouts 文件总数
   merged_total: number; // 已合并进 MEMORY.md 的 task 数
   enabled: boolean; // 知识层弱注入（memory）是否开启
@@ -315,8 +315,7 @@ export interface MemoryIndex {
 
 // ── P0 用户画像（/api/runtime/profile） ─────────────
 export interface ProfileIndex {
-  profile: string; // user_profile.md 全文（人工确认后的高置信画像）
-  candidates: string; // profile_candidates.md 全文（纠偏蒸馏，待确认）
+  profile: string; // user_profile.md 全文（用户直接维护；LLM 自动维护待 A8 基建）
   enabled: boolean; // 画像注入是否开启（knowledge.profile.enabled，默认开）
 }
 
@@ -350,11 +349,6 @@ export interface RolloutDetail {
   success: boolean | null;
 }
 
-// SSE debug 通道 memory_updated 事件载荷（Curator 蒸馏/合并后推送）
-export interface MemoryUpdatedPayload {
-  distilled: number;
-  merged: number;
-}
 
 // ── K2 信号（/api/runtime/signals, /signals/summary） ─────────────
 // 三实体一致率 + 聚合基线（设计 §5）
@@ -369,49 +363,3 @@ export interface SignalPoint {
   ts: string;
 }
 
-export interface SignalsSummary {
-  fake_success_rate: {
-    interactive: number | null;
-    autonomous: number | null;
-    overall: number | null;
-    n_interactive: number;
-    n_autonomous: number;
-  } | null;
-  miss_rate: unknown;
-  divergence_rate: unknown;
-  uncertain_rate: unknown;
-  c1_dist: Record<string, number>;
-  c2_dist: Record<string, number>;
-  c1_calibration_error: number | null;
-  total: number;
-  updated_at: string;
-  timeline: Array<{
-    ts: string;
-    c1: string;
-    c2: string;
-    a: boolean;
-    mode: string;
-  }>;
-  note: string;
-}
-
-// ── K5 稳态（/api/runtime/signals/steady） ─────────────
-export interface SteadyState {
-  evaluated_at: string;
-  domain: string;
-  converged: boolean;
-  thresholds: Record<string, unknown>;
-  signals: {
-    distill_dedup_hit_rate: number | null;
-    skill_promotion_rate: { rate: number | null; active: number; total: number; series: number[] };
-    step_variance: { variance: number | null; mean: number | null; n: number };
-    human_intervention_rate: { rate: number | null; refuted: number; judged: number; ambiguous: number; n_interactive: number };
-    intervention_timeline: number[];
-  };
-  checks: Record<string, unknown>;
-}
-
-export interface SignalResponse {
-  task_id: string;
-  signals: SignalPoint[];
-}

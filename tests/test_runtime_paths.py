@@ -15,7 +15,6 @@ from omni_core.local import runtime_paths as P
 def test_paths_are_under_global_root():
     assert P.global_omni().name == ".omniagent"
     assert P.global_skills().parts[-1] == "skills"
-    assert P.global_memory().parts[-1] == "memory"
     assert P.projects_root().parts[-1] == "projects"
     assert P.tasks_root().parts[-1] == "tasks"
 
@@ -32,11 +31,14 @@ def test_slugify_and_task_paths():
 
 
 def test_ensure_task_dirs_idempotent():
+    """知识分层 v2：task 目录只含证据与运行态（tmp），skills 归 project 层。"""
     tid = "t_x"
     P.ensure_task_dirs(tid)
-    assert P.task_skills(tid).exists()
+    assert P.task_dir(tid).exists()
+    assert P.task_tmp(tid).exists()
+    assert not P.task_dir(tid).joinpath("skills").exists()
     P.ensure_task_dirs(tid)  # 再跑不报错
-    assert P.task_skills(tid).exists()
+    assert P.task_dir(tid).exists()
 
 
 def test_redline_no_scenario_words_in_source():
@@ -49,10 +51,15 @@ def test_redline_no_scenario_words_in_source():
 
 
 def test_redline_app_not_used_as_partition_key():
-    """确保没有 project_*(app) / <type>/<app>/ 这类分区用法。"""
+    """分区键只能是 project_id / task_id，禁止具体 app 键控分区（旧架构回潮防护）。
+
+    知识分层 v2 起 ``project_skills(project_id)`` 等 project_* 函数是合法的
+    （slug 分组，非 app 分区）；本测试守的是**意图**——分区键不得是 app/场景词。
+    """
     src = os.path.join(os.path.dirname(__file__), "..", "omni_core", "local", "runtime_paths.py")
     text = open(src, encoding="utf-8").read()
-    assert "project_skills" not in text
+    assert not re.search(r"project_\w+\(\s*app", text), "project_* 不得以 app 为参"
+    # world_model 是任务运行态（plan §1 规则 2：不搬家），不得出现 project 层版本
     assert "project_world_model" not in text
     assert "project_trajectory" not in text
     assert "project_collected" not in text
@@ -61,30 +68,3 @@ def test_redline_app_not_used_as_partition_key():
     assert "resolve_workspace" not in text
 
 
-# ---------------------------------------------------------------------------
-# §3.2 知识层路径（memory/ 子目录 + task_id 安全校验）
-# ---------------------------------------------------------------------------
-def test_memory_paths_under_global_memory():
-    assert P.memory_rollouts().parts[-2:] == ("memory", "rollouts")
-    assert P.memory_master().name == "MEMORY.md"
-    assert P.memory_summary().name == "memory_summary.md"
-
-
-def test_memory_rollout_file_safe_and_resolved():
-    tid = "t_safe-123"
-    p = P.memory_rollout_file(tid)
-    assert p.parts[-2:] == ("rollouts", "t_safe-123.md")
-    # 校验后必须是 memory/rollouts 的直接子文件（杜绝穿越）
-    assert p.parent == P.memory_rollouts()
-
-
-def test_memory_rollout_file_rejects_unsafe_id():
-    for bad in ("", "../escape", "a/b", "CON"):
-        with pytest.raises(ValueError):
-            P.memory_rollout_file(bad)
-
-
-def test_ensure_global_dirs_creates_rollouts():
-    P.ensure_global_dirs()
-    assert P.memory_rollouts().exists()
-    assert P.memory_rollouts().is_dir()

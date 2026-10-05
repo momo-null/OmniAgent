@@ -138,6 +138,27 @@ def test_trajectory_step_uses_gate_verified():
     assert traj.steps[0]["verified"] is True
 
 
+# --- 轨迹 args 保真（宏提取器的前置依赖） --------------------------------------
+def test_args_payload_to_dict_variants():
+    from omni_core.local.loop.sdk_bridge import _args_payload_to_dict
+
+    assert _args_payload_to_dict({"a": 1}) == {"a": 1}
+    assert _args_payload_to_dict('{"cmd": "ls"}') == {"cmd": "ls"}
+    # 解析不出 → 保真兜底（不丢证据），不再静默变空 {}
+    assert _args_payload_to_dict("not-json") == {"_raw": "not-json"}
+    assert _args_payload_to_dict("") == {}
+    assert _args_payload_to_dict(None) == {}
+
+
+def test_emitter_caches_pending_calls_without_ui_hook():
+    """emitter 无条件缓存 tool_call 参数：无 on_tool_call（headless）也有轨迹 args。"""
+    loop = _loop()
+    assert loop.on_tool_call is None
+    emit, _delta, _turn_end = loop._make_llm_emitter("brain")
+    emit("推理", "口播", [{"name": "read_file", "arguments": '{"path": "/tmp/a"}'}])
+    assert loop._pending_calls == [("brain", "read_file", '{"path": "/tmp/a"}')]
+
+
 # --- 3. 请求指纹 & 知识注入轨迹 -----------------------------------------------
 def test_request_fingerprint_shape_and_stability():
     fp1 = _request_fingerprint("SYS", ["a", "b"], 3)

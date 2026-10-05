@@ -4,6 +4,7 @@ __pycache__/
 models/
 # temp artifacts
 temp/
+.pytest_tmp/
 # vision 标注图（默认落 tasks/<id>/tmp/；未绑定任务时会回退 cwd，这里兜底）
 som_*.png
 vsom_*.png
@@ -34,6 +35,12 @@ data/
 .omniagent/
 # 本机 CodeBuddy 本地工具目录（含私人 memory/ 记录，勿提交）
 .codebuddy/
+# 本机其它 AI 工具目录
+.zcode/
+# 前端构建增量产物
+*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts
 
 # 本机配置（含明文 api key，勿提交）
 # 项目根 config.yaml 只保留「Web 无入口」的少量项，需与 config.example.yaml 同步；

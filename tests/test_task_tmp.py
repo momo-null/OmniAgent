@@ -75,7 +75,10 @@ def test_shell_exec_default_cwd_is_task_tmp(approve_all_sink):
 # --- 终态清理 ---------------------------------------------------------------
 
 def test_cleanup_removes_only_tmp_keeps_persistent_assets():
-    """清理只删 `tmp/`；持久资产（task.json / trajectory / world_model / skills）必须完好。"""
+    """清理只删 `tmp/`；持久资产（task.json / trajectory / world_model）必须完好。
+
+    知识分层 v2：skills 归 project 层，task 目录不再有 skills/。
+    """
     from omni_core.local.loop import ToolLoop
 
     tid = "t_tmp_clean"
@@ -91,7 +94,7 @@ def test_cleanup_removes_only_tmp_keeps_persistent_assets():
     assert RP.task_json(tid).is_file()
     assert RP.task_trajectory(tid).is_file()
     assert RP.task_world_model(tid).is_file()
-    assert RP.task_skills(tid).is_dir()
+    assert not RP.task_dir(tid).joinpath("skills").exists()  # skills 已归 project 层
 
 
 def test_cleanup_is_safe_on_missing_task_or_empty_id():

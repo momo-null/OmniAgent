@@ -15,19 +15,14 @@ export interface DebugLog {
 
 export type MainView = "chat" | "skills" | "settings";
 
-// SSE debug 通道 memory_updated 事件载荷（Curator 蒸馏/合并后推送，右栏轻提示用）
-export interface MemoryHint {
-  distilled: number;
-  merged: number;
-  ts: number;
-}
-
 interface TaskStoreValue {
   view: MainView;
   setView: (v: MainView) => void;
 
   tasks: string[];
   projects: string[];
+  // 知识分层 C4：task → project_id 映射（侧栏显示项目名 / 保存到项目 / 删项目计数）
+  taskProjects: Record<string, string>;
   currentTaskId: string;
   setCurrentTaskId: (id: string) => void;
   selectTask: (id: string) => void;
@@ -74,9 +69,6 @@ interface TaskStoreValue {
   pendingApprovals: ApprovalCardInfo[];
   decideApproval: (approvalId: string, action: "approve" | "deny", remember?: boolean) => Promise<void>;
 
-  // K1：记忆更新轻提示（Curator 蒸馏/合并后由 SSE 推送，数秒后自动淡出）
-  memoryHint: MemoryHint | null;
-  memorySignal: number; // 每次记忆更新自增，供 Memory Tab 作为刷新依赖
 }
 
 const EMPTY_SNAPSHOT: RuntimeSnapshot = {
@@ -111,15 +103,12 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   });
   // 服务端主标题源：后端 task.objective（P2.2：标题以服务端为主，localStorage 仅作 rename 覆盖）
   const [taskObjectives, setTaskObjectives] = useState<Record<string, string>>({});
+  const [taskProjects, setTaskProjects] = useState<Record<string, string>>({});
   const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
   // 对话区实时过程流（思考 + 工具调用），与右栏 debug 日志解耦
   const [processLogs, setProcessLogs] = useState<ProcessItem[]>([]);
   // S2 审批：待批卡（SSE approval 事件 / live approvals 通道，按 approval_id upsert）
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalCardInfo[]>([]);
-  // K1：记忆更新轻提示（SSE 推送后短暂显示，自动淡出）
-  const [memoryHint, setMemoryHint] = useState<MemoryHint | null>(null);
-  const [memorySignal, setMemorySignal] = useState<number>(0);
-  const memoryHintTimerRef = useRef<number | null>(null);
 
   // 标题写入时同步持久化到 localStorage（纯前端，不进后端内核）
   const persistTitles = useCallback((next: Record<string, string>) => {
@@ -288,6 +277,15 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         }
         return next;
       });
+      // C4：task → project 归属（侧栏项目名展示 / 删除项目时计数）
+      setTaskProjects((prev) => {
+        const next = { ...prev };
+        for (const t of d.tasks || []) {
+          const pid = (t as { project_id?: string }).project_id;
+          if (pid) next[t.task_id] = pid;
+        }
+        return next;
+      });
       // 按 task 从服务端 task.json 回填完全访问默认值（跟随当前任务，切换任务读取各自值）
       setFullAccessByTask((prev) => {
         const next = { ...prev };
@@ -369,18 +367,6 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         const m = JSON.parse((ev as MessageEvent).data) as {
           ts?: number; text?: string; extra?: { kind?: string; payload?: Record<string, unknown> };
         };
-        // K1：Curator 蒸馏/合并完成后推 memory_updated，触发右栏轻提示 + Memory Tab 统计刷新
-        if (m.extra?.kind === "memory_updated") {
-          const p = (m.extra?.payload as { distilled?: number; merged?: number }) || {};
-          setMemoryHint({
-            distilled: Number(p.distilled) || 0,
-            merged: Number(p.merged) || 0,
-            ts: Date.now(),
-          });
-          setMemorySignal((n) => n + 1);
-          if (memoryHintTimerRef.current) window.clearTimeout(memoryHintTimerRef.current);
-          memoryHintTimerRef.current = window.setTimeout(() => setMemoryHint(null), 5000);
-        }
         pushDebugLog({
           ts: m.ts ? Number(m.ts) * 1000 : Date.now(),
           kind: m.extra?.kind || "debug",
@@ -667,12 +653,12 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       pendingApprovals, decideApproval,
       taskTitles,
       taskObjectives,
+      taskProjects,
       debugLogs, pushDebugLog, clearDebugLogs,
       processLogs, pushProcessLog, clearProcessLogs,
       deleteTask, renameTask,
-      memoryHint, memorySignal,
     }),
-    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval, memoryHint, memorySignal]
+    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, taskProjects, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval]
   );
 
   return <TaskStoreContext.Provider value={value}>{children}</TaskStoreContext.Provider>;

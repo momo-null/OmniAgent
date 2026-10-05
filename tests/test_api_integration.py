@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 
 import backend.server as server_mod
 from backend.api import deps
+from omni_core.local import runtime_paths as runtime_paths_mod
+from omni_core.local.task_store import ProjectStore
 from unittest.mock import MagicMock
 
 
@@ -82,9 +84,15 @@ class TestPydanticValidation:
         })
         assert r.status_code == 422
 
-    def test_create_task_rejects_empty_objective(self, client):
-        r = client.post("/api/runtime/tasks", json={"objective": ""})
-        assert r.status_code == 422
+    def test_create_task_empty_objective_new_session(self, client):
+        """「项目下新建会话」：允许空 objective 落实体（首条消息在 /chat 自动命名）。"""
+        r = client.post("/api/runtime/tasks", json={"objective": "", "project_id": "d-new-sess"})
+        assert r.status_code == 200
+        meta = r.json()["task"]
+        assert meta["objective"] == ""
+        assert meta["project_id"] == "d-new-sess"
+        # 会话文件懒创建（首条消息才落 jsonl），项目计数不受空会话影响
+        assert ProjectStore.list_sessions("d-new-sess") == []
 
 
 # === P0.3 密钥脱敏 ===
@@ -362,3 +370,45 @@ class TestSessionRecovery:
         found = next((t for t in lst.json()["tasks"] if t["task_id"] == tid), None)
         assert found is not None
         assert found["objective"] == "my title"
+
+
+# === C 档：项目归属 REST（knowledge-layering C1/C2/C3/C5/C6） =================
+
+def test_update_task_project_id_not_422(client):
+    """C1：POST /tasks/{id}/state {project_id} 不再 422（schema 补字段）。"""
+    r = client.post("/api/runtime/tasks", json={"objective": "c1"})
+    tid = r.json()["task"]["task_id"]
+    r2 = client.post(f"/api/runtime/tasks/{tid}/state", json={"project_id": "d-C1-X"})
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["task"]["project_id"] == "d-C1-X"
+
+
+def test_project_create_alias_delete_chain(client):
+    """C2/C3/C5：创建 → 别名 → 删除（级联 task 数返回）。"""
+    r = client.post("/api/runtime/projects", json={"project_id": "d-C2-X", "display_name": "项目乙"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    # 别名落元数据
+    r2 = client.get("/api/runtime/projects/meta")
+    ids = {p["id"]: p for p in r2.json()["projects"]}
+    assert ids["d-C2-X"]["display_name"] == "项目乙"
+    # 别名接口
+    r3 = client.put("/api/runtime/projects/d-C2-X/alias", json={"display_name": "改名"})
+    assert r3.status_code == 200
+    # 放一个 task 进去再删项目 → 级联
+    rt = client.post("/api/runtime/tasks", json={"objective": "c5", "project_id": "d-C2-X"})
+    tid = rt.json()["task"]["task_id"]
+    rd = client.delete("/api/runtime/projects/d-C2-X")
+    assert rd.status_code == 200 and rd.json()["deleted_tasks"] == 1
+    assert client.get(f"/api/runtime/tasks/{tid}").status_code == 404
+    assert not runtime_paths_mod.project_dir("d-C2-X").exists()
+
+
+def test_delete_task_removes_project_session(client):
+    """C6：删 task 连带删其在项目下的会话 jsonl。"""
+    rt = client.post("/api/runtime/tasks", json={"objective": "c6", "project_id": "d-C6-X"})
+    tid = rt.json()["task"]["task_id"]
+    from omni_core.local.task_store import ProjectStore
+    ProjectStore.append_message("d-C6-X", rt.json()["task"]["session_id"], "user", "hi")
+    rd = client.delete(f"/api/runtime/tasks/{tid}")
+    assert rd.status_code == 200 and rd.json()["removed_session"] is True
+    assert ProjectStore.list_sessions("d-C6-X") == []

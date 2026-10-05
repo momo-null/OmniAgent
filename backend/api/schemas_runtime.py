@@ -37,11 +37,15 @@ class ChatRequest(BaseModel):
 
 
 class CreateTaskRequest(BaseModel):
-    """创建尚未执行的任务。"""
+    """创建尚未执行的任务。
+
+    ``objective`` 允许为空：项目菜单「新建会话」先落实体（挂到项目下），
+    首条消息在 ``/chat`` 里自动回填命名（与首消息建任务行为对齐）。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    objective: str = Field(min_length=1, max_length=4000)
+    objective: str = Field(default="", max_length=4000)
     done_when: str = Field(default="", max_length=2000)
     project_id: Optional[str] = None
 
@@ -53,7 +57,11 @@ class CreateTaskRequest(BaseModel):
 
 
 class UpdateTaskRequest(BaseModel):
-    """允许用户修改的任务字段。"""
+    """允许用户修改的任务字段。
+
+    C1（knowledge-layering）：补 ``project_id``——内核白名单本就允许，此前 schema
+    缺字段 + ``extra="forbid"`` 把「任务保存到项目」的 REST 通道堵死（422）。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -61,6 +69,36 @@ class UpdateTaskRequest(BaseModel):
     done_when: Optional[str] = Field(default=None, max_length=2000)
     state: Optional[Literal["pending", "running", "done", "failed", "aborted"]] = None
     full_access: Optional[bool] = None
+    project_id: Optional[str] = None
+
+    @field_validator("project_id")
+    @classmethod
+    def validate_update_project_id(cls, value: Optional[str]) -> Optional[str]:
+        """验证可选项目 ID（与创建任务同规则）。"""
+        return paths.validate_identifier(value, "project_id") if value else None
+
+
+class CreateProjectRequest(BaseModel):
+    """创建项目（C2）：slug 即唯一 id；显示名（别名）存项目元数据文件。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(min_length=1, max_length=80)
+    display_name: Optional[str] = Field(default=None, max_length=120)
+
+    @field_validator("project_id")
+    @classmethod
+    def validate_project_id(cls, value: str) -> str:
+        """验证项目 ID。"""
+        return paths.validate_identifier(value, "project_id")
+
+
+class ProjectAliasRequest(BaseModel):
+    """改项目显示名（C3）：别名不进目录名，slug 仍是唯一 id。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str = Field(min_length=1, max_length=120)
 
 
 class SkillRequest(BaseModel):

@@ -47,6 +47,8 @@ RESERVED_TOOL_NAMES = frozenset(
         "escalate",
         "record",
         "plan",
+        "search_skill",
+        "replay_skill",
     }
 )
 
