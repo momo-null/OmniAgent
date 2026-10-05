@@ -12,7 +12,7 @@
 
 ## 1. 背景与痛点
 
-当前 OmniAgent 内核已具备通用化骨架（设备抽象 `ExecutionBackend`、模型无关 `BrainClient`、动态 Prompt、两层编排 `tool_loop`、经验飞轮 `WorldModel`/`Curator`/`Trajectory`/`Skill`）。但存在以下结构性痛点，促使本次大重构：
+当前 OmniAgent 内核已具备通用化骨架（设备抽象 `ExecutionBackend`、模型无关 `BrainClient`、动态 Prompt、两层编排 `tool_loop`、经验飞轮 `WorldModel`/`Trajectory`/`Skill`）。但存在以下结构性痛点，促使本次大重构：
 
 1. **ReAct 单步循环手搓成本高**：`brain/client.py` + `tool_loop._run_inner` 自己实现了 function-call 序列化、工具派发、流式回调、assistant/tool 消息回填。前端「打招呼 + 工具调用 + 流式」折腾很久——这套协议层能力业界框架（OpenAI Agents SDK / LangGraph）已原生提供，重复造轮子。
 2. **纯文本能力缺失**：当前 `brain/tools.py` 全是屏幕操作工具，无 Python 执行 / 文件处理等通用计算能力，agent 不能跑脚本。
@@ -30,14 +30,14 @@
 - 多 agent 拓扑（Manager/Worker）用框架原语表达。
 
 ### 不可动摇的原则（红线）
-- **经验飞轮保留**：`WorldModel` / `Curator` / `Trajectory` / `Skill 晋升` 是核心资产，**不外包给框架**，作为框架 lifecycle 外的后处理钩子挂载。
+- **经验沉淀保留**：`WorldModel` / `Trajectory` 是核心状态，**不外包给框架**，作为框架 lifecycle 外的后处理钩子挂载。
 - **模型无关不退化**：内层 4B（qwen3.5-4b-vl / 本地 llama）仍走 `openai-compatible` provider 抽象；框架只做循环驱动 + 协议，不锁模型厂商。
 - **内核零场景/零字段假设**：延续 B2 成果，`agents/` 不出现具体感知字段名、不出现具体工具名分支（由 `scripts/review_lint.py` 自动卡）。
 - **能力=工具，领域数据走配置/MCP**，不进代码。
 
 ### 总约束（P0 框架优先）
 - **已引入 LangGraph + OpenAI Agents SDK，凡是框架原生能力一律用框架，不自研等价物。** 包括但不限于：ReAct 循环、function-call、流式、handoff、interrupt（中断/恢复）、运行时消息注入、任务状态管理、`/stop` 停止、人工纠偏注入队列等通用机制，直接走 LangGraph / Agents SDK 原语。
-- **自研只保留 SDK 替代不了的两类**：L2 护城河（领域经验飞轮 + 完成判定 + 升级路由）、L1 能力（各 MCP server 的领域实现）。
+- **自研只保留 SDK 替代不了的两类**：L2 框架外挂件（领域状态沉淀 + 完成判定 + 升级路由）、L1 能力（各 MCP server 的领域实现）。
 - 判定标准：某能力若框架已有成熟原语 → 用框架；若需手搓 → 先确认它是否属于 L2/L1，否则违规。
 
 ---
@@ -48,8 +48,8 @@
 ┌─ 框架层（ReAct 循环 + function call + 流式 + 多 agent handoff）──────────┐
 │   OpenAI Agents SDK 或 LangGraph 接管单步循环                            │
 │   前端打招呼 / 工具调用 / 流式 = 框架原生                                  │
-├─ 你的护城河（框架外，lifecycle 钩子挂载，不动）────────────────────────┤
-│   WorldModel / Curator / Trajectory / Skill 晋升                         │
+├─ 你的 L2 框架外挂件（框架外，lifecycle 钩子挂载，不动）──────────────────┤
+│   WorldModel / Trajectory                                    │
 │   Manager↔Worker 升级拓扑 + 阈值（config.runtime.escalation.* 驱动）      │
 ├─ agent 外层 tool 插件层（完全平级，LLM 直接调用，内核零持有）─────────┤
 │   自研工具（function_tool 隔离派发）:                                    │
@@ -73,7 +73,7 @@ L3 框架层    LangGraph(编排) + OpenAI Agents SDK(单 agent 运行时)
                      Manager↔Worker handoff / interrupt(中断恢复) / 运行时消息注入
             不持有任何工具实现，不持有任何领域状态
 
-L2 护城河层  WorldModel / Curator / Trajectory / Skill 晋升 / verify_done / OrchestrationPolicy
+L2 框架外挂件  WorldModel / Trajectory / verify_done / OrchestrationPolicy
             挂载方式: 框架 lifecycle 钩子(每步后处理 / 任务结束)，与 L3 解耦
             自治权:   单步自愈(重试/换工具/回退/跳过) + 自动升级路由
 
@@ -149,11 +149,11 @@ LangGraph(编排: Manager↔Worker handoff / 升级路由)
 | **[1] 定义** | 产出 tool schema | `backend.tool_schemas`（OpenAI function schema 手搓） | 自研 tool 用 SDK `function_tool` 装饰器自动产出；外部 MCP server 自带 schema |
 | **[2] 注册** | 把工具交给 agent | `tool_loop` 拼 `tools=...+schemas` | 框架从 agent 外层 tool 插件层加载（function_tool + MCP），内核不持有 |
 | **[3] 派发** | agent 调 name → 执行 | `ToolRegistry.dispatch(name, args)` + `providers/*` 的 `if name==` 分支 | 框架原生 dispatch 到外层 tool（自研 function_tool / 外部 MCP），内核零分支 |
-| **[4] 回填** | 结果回 agent + 落盘 | `tool_loop` 手搓 assistant/tool 消息回填 | 框架原生回填；落盘由钩子做（护城河） |
+| **[4] 回填** | 结果回 agent + 落盘 | `tool_loop` 手搓 assistant/tool 消息回填 | 框架原生回填；落盘由 L2 钩子做 |
 
 **内核在工具链路里只保留两件，其余全交出去：**
 - **(a) 能力分组配置**：哪些 tool（自研/外部 MCP）在什么模式下启用（config 驱动，不写死）。
-- **(b) 后处理钩子**：每步结果 → `Trajectory.log`；任务结束 → `Curator` + `Skill` 提炼。
+- **(b) 后处理钩子**：每步结果 → `Trajectory.log`；任务结束 → `Skill` 提炼。
 
 **错误传播**：tool 执行失败 → 框架捕获 → 作为 tool result 回 agent（agent 自主重试）；致命错误（外部 MCP server 挂） → 框架事件 → `OrchestrationPolicy` 升级/中止。内核不在链路中拦截具体错误。
 
@@ -169,9 +169,9 @@ LangGraph(编排: Manager↔Worker handoff / 升级路由)
 - 设备类工具随 Execution Backend 进 `device-mcp`；vision/m3 类进 `vision-mcp`；python 进 `python-exec-mcp`。
 - 内核零工具名分支（review_lint R2 在内核层自然清零）。
 
-### 5.3 护城河（完全保留，挂钩子）
-- `WorldModel` / `Curator` / `Trajectory` / `Skill`：**原文件不动**。
-- 挂载点（在 [4] 回填之后）：框架一步完成 → 回调 `trajectory.log(state, action, result)`；任务结束 → `Curator.run_once()`；成功轨迹 → `SkillLibrary` 提炼晋升。
+### 5.3 L2 框架外挂件（完全保留，挂钩子）
+- `WorldModel` / `Trajectory` / `Skill`：**原文件不动**。
+- 挂载点（在 [4] 回填之后）：框架一步完成 → 回调 `trajectory.log(state, action, result)`；成功轨迹 → `SkillLibrary` 提炼晋升。
 - 钩子在 `OrchestrationPolicy` 注册，与框架循环解耦。
 
 ### 5.4 VisionRuntime（拆分处理，yolo 修正）
@@ -208,7 +208,7 @@ LangGraph(编排: Manager↔Worker handoff / 升级路由)
 > 迁移顺序：M0 作为第一步，五步顺序推进，不做"跳过 M0"取舍。
 
 1. **M0 能力外置 POC**：把 SoM/yolo（自研外层 tool）+ Python 执行（自研外层 tool）从内核剥离，内核经框架 `function_tool` 调通，验证「工具=插件、平级外置」范式（不动框架）。→ 消痛点 #2/#3。
-2. **M1 框架接管单步 ReAct（POC）**：选 (A)/(B) 后，新建适配层用框架跑通「前端打招呼 + function call + 流式 + 一个外层 tool」，护城河钩子挂上。→ 消痛点 #1。
+2. **M1 框架接管单步 ReAct（POC）**：选 (A)/(B) 后，新建适配层用框架跑通「前端打招呼 + function call + 流式 + 一个外层 tool」，L2 钩子挂上。→ 消痛点 #1。
 3. **M2 多 agent 拓扑**：LangGraph 表达 Manager/Worker 图 + handoff，升级策略接 `OrchestrationPolicy`。
 4. **M3 设备能力 tool 化** ✅ **已完成（2026-09-12）**：新增 `omni_core/tools/device_tool.py`（键鼠/感知/设备原语 + template_match/wait_for/drag，group=`device`）、`python_tool.py`（`run_python`，group=`python`）、`mcp_bridge.py`（外部 MCP 接入，group=`mcp`）；删除手搓派发（`brain/providers/*` 整个包 + `build_registry` / `dispatch_tool`），`tool_loop` 改为 `build_plugin_registry()` + `call_tool` 按名派发，并注入 `bind_execution_module`；外部 MCP 纯配置（`runtime.mcp.servers`），与自研工具同表同路径平级。
    - **与原文的偏差（待 M4 收口）**：`execution_host.py` / `execution_emulator.py` 两个后端驱动**未物理搬出 `omni_core/`**——它们现在是「只被插件层调用的 L1 设备驱动」，内核已不持有、不派发；物理迁出与 README/HTML 同步留到 M4，避免一次性打断 `backend/` 服务与真机脚本。
@@ -225,7 +225,7 @@ LangGraph(编排: Manager↔Worker handoff / 升级路由)
 ## 8. 风险与回滚
 
 - **模型 provider 适配风险**：需验证 SDK 的 `Model` 抽象能包住本地 4B（openai-compatible）。不可行则退 LangGraph 原生 model（已协同，影响小）。
-- **护城河耦合风险**：确保 WorldModel/Curator 等**不被改写**，仅加挂载钩子；回滚只需撤销钩子注册。
+- **L2 耦合风险**：确保 WorldModel 等**不被改写**，仅加挂载钩子；回滚只需撤销钩子注册。
 - **外部 MCP 性能**：外部 MCP server 走进程间/网络调用有延迟；自研外层 tool 同进程无此问题。POC 阶段压测外部 MCP，必要时选同进程内嵌式 MCP。
 - **分支策略**：本分支独立，主干 `master` 不受影响；每里程碑单独 commit，便于逐段 review。
 
@@ -242,7 +242,7 @@ LangGraph(编排: Manager↔Worker handoff / 升级路由)
 - [ ] Manager/Worker 多 agent 拓扑可运行（LangGraph），升级策略由 config 驱动。（M2 已建图，端到端待 M4 收口）
 - [x] SoM marks 状态自持于 tool 内（`som://last_result`），内核零感知：`omni_core/tools/vision_tool.py` 持有 `_last_marks`，`VisionRuntime` 不再持有状态（改为 `tap_mark(mark)` 接收具体 mark）；新增 `som_last_result` 工具供 agent 重读。
 - [x] 外部 MCP（开源/第三方）可直接接入，纯配置增量，与自研工具平级（`runtime.mcp.servers`，端到端 stdio 已验证）。
-- [x] WorldModel/Curator/Trajectory/Skill 行为不变（现有相关测试全过；M5 后 289 passed）。
+- [x] WorldModel/Trajectory/Skill 行为不变（现有相关测试全过；M5 后 289 passed）。
 - [x] `review_lint.py` 接 CI（`.github/workflows/redline-lint.yml`，`--strict` 非零即红）。
 - [x] 旧 `tool_loop._run_inner` 标记废弃（`DEPRECATED(M4)` + 运行时 `DeprecationWarning`）。
 
@@ -291,20 +291,19 @@ LangGraph(编排: Manager↔Worker handoff / 升级路由)
 
 > 决策：旧 `doc/agent-control-arch-2026-07-26.html` 保持为「手搓态档案」**暂不改**；
 > 待 M0–M4 落地后重做 HTML。本节约等于重做时的**图集定稿**，遵循「只展现当前态、不保留历史」原则。
-> 核心改动只有一条：**工具脱离内核，成为 agent 外层平级插件（自研 tool 与开源 MCP 同级），由 LLM 直接调用**；护城河（WorldModel/Curator/Trajectory/Skill/verify_done）与全部能力（SoM/Python/device）原样保留，仅搬家到外层 tool 插件层（MCP 专用于外部接入）。
+> 核心改动只有一条：**工具脱离内核，成为 agent 外层平级插件（自研 tool 与开源 MCP 同级），由 LLM 直接调用**；L2 框架外挂件（WorldModel/Trajectory/verify_done）与全部能力（SoM/Python/device）原样保留，仅搬家到外层 tool 插件层（MCP 专用于外部接入）。
 
 ### 11.1 新图集（N1–N10，共 10 张，替代旧 S1–S13）
 
 | 新图 | 主题 | 旧图对应 | 处理 |
 |---|---|---|---|
-| **N1** | 总体分层（L3 框架 / L2 护城河 / L1 能力+MCP） | S1 | **重写**：三层栈替代 Brain→Provider→Backend 纵向链 |
+| **N1** | 总体分层（L3 框架 / L2 框架外挂件 / L1 能力+MCP） | S1 | **重写**：三层栈替代 Brain→Provider→Backend 纵向链 |
 | **N2** | 内核 + MCP 工具调用解耦 | S2 | **重写**：`registry.dispatch` → 框架从 MCP server 加载 tool，内核零持有 |
 | **N3** | 单次任务 ReAct 闭环（框架原生 + Verify 钩子） | S3 | **改写**：循环 owner = SDK；Verify = 后处理钩子挂 L2 |
 | **N4** | Vision SoM 通道（MCP 化） | S5 | 保留（对齐 §5.4：本地 VLM=工具，SoM marks 走 `som://last_result`） |
-| **N5** | 自升级 Meta-loop | S6 | 保留（护城河核心） |
 | **N6** | 两层编排 + Escalation（LangGraph handoff） | S9 | **改写**：handoff 表达为框架原语；阈值仍 config 驱动 |
 | **N7** | 上下文分层管理（大模型上下文压缩 vs worker 硬滑窗） | S10 | 保留（owner 变框架 lifecycle） |
-| **N8** | 超长任务持久化 + checkpoint | S11 | 保留（护城河支点，长任务少干预的落地） |
+| **N8** | 超长任务持久化 + checkpoint | S11 | 保留（长任务少干预的落地点） |
 | **N9** | 全局目录与 Project / Task 模型 | S12 | 保留（资产落盘，与框架无关） |
 | **N10** | 前端设计（SSE / stop / 插话 = HITL 双通道） | S13 | 保留（对接 §3.5 C5；`/stop`+插话已存在，迁框架 interrupt 接管） |
 
@@ -331,12 +330,11 @@ LangGraph(编排: Manager↔Worker handoff / 升级路由)
 | S3 ReAct 闭环 | N3 | 改写 | 循环 owner 改 SDK |
 | S4 经典 Loop 对比 | — | 删除 | 历史 |
 | S5 Vision SoM | N4 | 保留 | 对齐 §5.4 |
-| S6 Meta-loop | N5 | 保留 | 护城河 |
 | S7 状态机 | — | 删除 | 框架驱动 |
 | S8 M4 路线图 | — | 删除 | 历史 |
 | S9 两层编排 | N6 | 改写 | handoff 框架化 |
 | S10 上下文分层 | N7 | 保留 | |
-| S11 持久化 | N8 | 保留 | 护城河支点 |
+| S11 持久化 | N8 | 保留 | 长任务落地点 |
 | S12 目录模型 | N9 | 保留 | |
 | S13 前端 | N10 | 保留 | 对接 C5 |
 

@@ -170,7 +170,7 @@ environments/
    - `filesystem`：相对 `path` → task tmp；绝对路径暂不拦（S1 再上围栏）。
    - `shell_exec`：`cwd` 默认 = task tmp。
    - `screenshot`（device 插件）：默认 `save_path` = task tmp（不再用后端写死的 `repo/temp`）；`template_match` 的兜底截图同源。
-4. **清理**：**任务终态（done / failed / aborted）由系统自动删** `tasks/<task_id>/tmp/`（`shutil.rmtree(..., ignore_errors=True)`），挂点在 `_finish`（Curator 同层）。确定性，不依赖模型自觉；**只删 `tmp/`，绝不碰同目录持久资产**。
+4. **清理**：**任务终态（done / failed / aborted）由系统自动删** `tasks/<task_id>/tmp/`（`shutil.rmtree(..., ignore_errors=True)`），挂点在 `_finish`（任务收尾层）。确定性，不依赖模型自觉；**只删 `tmp/`，绝不碰同目录持久资产**。
 5. **仓库卫生**：清掉现有 `<repo>/temp/` 并加 `.gitignore`。
 
 ## 7. 逐文件改动清单

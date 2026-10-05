@@ -6,7 +6,7 @@
 > 更早的历史段落（里程碑表 / 当年风险记录）保留原始表述作为决策留档。
 >
 > **状态**：本文为 OmniAgent **X3** 架构的**权威固化（consolidated single source of truth）**。
-> **范围**：桌面 AI agent 控制层重构——从「程序化固定管线」转向「模型驱动 + 自主派发」的通用 Agent 内核，含模拟器验证轨道、知识自学、权重级自升级、前端重构。
+> **范围**：桌面 AI agent 控制层重构——从「程序化固定管线」转向「模型驱动 + 自主派发」的通用 Agent 内核，含模拟器验证轨道、记忆层、权重级 finetune（未启用）、前端重构。
 > **架构要点**：统一 `/chat` 单入口（无 `/run`）；主 agent + graph 自主派发（主 agent 决定派不派、派给哪个执行单元槽位）；多槽模型目录（`~/.omniagent/models.json` 的 `defaults.<slot>`）+ `runtime.dispatch.agents` 显式声明参与派发的槽；单模型形态下 brain 自派发为合法语义（并发与上下文隔离仍有价值）。多 agent 编排详见 `doc/plans/implemented/multi-agent-redesign-2026-09-13.md` 与 `team-mode-layer0-design.md`。红线扫描目录为 `omni_core/`。
 
 ---
@@ -23,11 +23,10 @@
 | EmulatorBackend(u2/ADB) | ✅ 实现 | M1 落地，GUI 设备真机闭环验证通过（首个端到端场景） |
 | Trajectory / Telemetry / Verify / State | ✅ 实现 | M4a 地基全部完成（79 passed），commit fc145fe + 8c6e48e |
 | world-model 持久化 + checkpoint | ✅ 实现 | M4b.1 落地（commit dbe71e8）：save/load + checkpoint JSON + merge_progress |
-| skill 库 + N=3 晋升门 | ✅ 实现 | M4b.2 落地：SkillLibrary + 连续3次→active；宏轴自动蒸馏生产者 2026-10-05 重接至任务收尾（`skill_library.maybe_distill_skill`），见 `doc/plans/tam-porting-map.md`（知识层现行设计） |
-| Curator（触发式维护） | ❌ 已退役（2026-10-05） | K 系列代码整体删除；记忆/知识维护由 TAM 移植重建（§6.4） |
+| skill 库（手写维护 + 可选宏缓存，默认关） | ✅ 机制跑通 | M4b.2 链路在：SkillLibrary + `maybe_distill_skill`；hachimi 真机零步数收益，有效性未验证，不作为护城河宣称，见 `doc/plans/tam-porting-map.md` |
 | M6 子任务状态机（SubtaskStore） | ✅ 已落地 | `task_store.py`：RLock + 原子写 + 白名单 update；`claim`/`claim_next` 原子 CAS（pending→running），落 `tasks/<task_id>/subtasks.json`；WorldModel 管世界认知，TaskStore 管「谁在做什么、做到哪」 |
 | M7 去分层多 agent 编排 | ✅ 已落地 | `graph.py`：通用 agent 注册表 + LangGraph `Send` 并发扇出；主 agent 调 `dispatch` 元工具产出派发计划，框架负责扇出/join；`max_rounds` 防无限派发；删 `orchestration/policy.py`（升级改子 agent 自报 + 主 agent 决断）；`test_m2_orchestration.py` 重写为新图测试 |
-| meta-loop 权重级升级 | 🧊 未启用 | 仓库内无训练链代码；知识级三层已完成，权重级不启用（说明见 §6.3） |
+| 权重级 finetune | 🧊 未启用 | 仓库内无训练链代码；知识级两层（world-model / 策略反思）已实现，权重级不启用（说明见 §6.3） |
 | 画像/角色卡/记忆三位一体（P0） | ✅ 已落地+真机验证 | 单角色伙伴：`user_profile.md`（画像，候选→晋升→弱注入）+ `character.md`（角色卡，随 system 注入）+ 前端 Settings→伙伴 Tab；纠偏→候选→晋升→注入闭环真实 apikey 验证通过 |
 | C₃ 人工抽检校准 | ✅ 已落地+验证 | 新增 `PUT /signals/calibration`（收样本→`calibrate_c1c2`→写 `c1_calibration_error`）；该字段由 null 变为可写可读，summary 透传 `calibration_samples`，≤10% 采信 |
 
@@ -54,7 +53,7 @@
 - **部署形态**：`llama-server`（OpenAI 兼容 HTTP，`external/llama/llama-server.exe`）。**分工**：`llm_runtime/server_backend.py` = OpenAI 兼容客户端（消费侧，`base_url` 默认 `:8085` 但被调用处覆盖为实际端口）；**server 进程启停 / 端口分配 / `--mmproj` / 健康轮询 / `validate_model` 全在 `model_hub/manager.py`**。`router_llm.py`（/v1 网关）读 `manager.processes[name]["port"]` 实际端口传给客户端，**不读 `config.llm_runtime.backend`**。本地 executor 复用 `BrainClient` 同款客户端指向 localhost。
 - **tool-loop**：observe→组 payload→brain.chat→dispatch→observe；`task_done` 结束；本地硬校验 `expected` 命中即成功；卡住升级给大脑重规划。
 - **视觉通道（已核实）**：`<models_dir>\qwen3_5_4B\mmproj-BF16.gguf` 存在 → 视觉需要 `--mmproj`（`manager._auto_detect_mmproj` 自动挂同目录 mmproj 文件）。
-- **可升级**：槽位模型可由 **finetuned GGUF 替换**（见 §6.3 权重级自升级）。
+- **可升级**：槽位模型可由 **finetuned GGUF 替换**（见 §6.3 权重级 finetune，当前未启用）。
 
 ---
 
@@ -105,37 +104,32 @@
 
 ---
 
-## 6. skill 库 + 自升级 meta-loop（M4 / M5）
+## 6. skill 库与记忆层（M4 / M5）
 
 > **2026-10-04 状态修订**：A9（2026-10-03）已删除录像式机械转录整链（`from_run_record` /
 > `review_candidate_skills` / `_derive_skill_name`——下文历史描述保留供追溯）。skill 轴以
-> **可重放宏缓存**复活并已实施：`substeps_from_trajectory`（轨迹原始 args 双轨；身份 =
-> 归一哈希）+ LLM 短标签（routine/description，`validate_skill_summary` 防幻觉校验）+
-> N=3 累计晋升 + 缓存淘汰（candidate TTL 14d / active 闲置 30d 且低效用 → `_archive/`，
-> 仿 memory A4 降级不删）+ 消费工具 `search_skill` / `replay_skill`（白名单硬重放，
-> S0/S2 审批照常生效）。开关 `skill.auto_distill` 默认关；有效性 A/B 验证未做。
-> 详见 `doc/plans/tam-porting-map.md`（知识层现行设计）。
+> **可重放宏缓存**形态保留但默认关闭：`substeps_from_trajectory`（轨迹原始 args 双轨；身份 =
+> 归一哈希）+ LLM 短标签（routine/description，`validate_skill_summary` 防幻觉校验）+ 缓存淘汰
+> （candidate TTL 14d / active 闲置 30d 且低效用 → `_archive/`，仿 memory A4 降级不删）+ 消费工具
+> `search_skill` / `replay_skill`（白名单硬重放，S0/S2 审批照常生效）。开关 `skill.auto_distill`
+> 默认关；hachimi 真机试点显示注入 skill 序列**零步数收益**，有效性 A/B 验证未做，因此 skill
+> 自动蒸馏**不作为系统能力对外宣称**。详见 `doc/plans/tam-porting-map.md`（知识层现行设计）。
 
-### 6.1 skill 库（✅ M4b.2 已落地，commit a5fdaa0）
+### 6.1 skill 库（手写维护 + 可选宏缓存，默认关）
 - **格式**：Hermes 风格 `SKILL.md`（Markdown + YAML frontmatter，对齐 agentskills.io 开放标准；与 WorkBuddy 自身 SKILL.md 同构可复用）。
-- **录制与晋升**：从轨迹提炼候选 skill（`from_run_record` 提取 candidate）；**晋升门 N=3**（`_check_promotion` 连续成功 3 次才晋升可信，失败归零）。同名合并累计 `success_count`。
-- **存储（Plan C 生效，2026-08-01）**：通用 skill 存 `~/.omniagent/skills/<skill>.md`（跨 project 共享）；task 私有 skill 存 `~/.omniagent/tasks/<task_id>/skills/<skill>.md`。recall 合并两层、task 优先。人工维护的**通用** skill（带 `scope: global` 标签）落全局，实现「技能升级跨项目复利」；原 `data/skills/<app>/` 与 `app` 分区已随 Plan C 废弃。���
+- **手写维护**：通用 skill 存 `~/.omniagent/skills/<skill>.md`（跨 project 共享）；task 私有 skill 存 `~/.omniagent/tasks/<task_id>/skills/<skill>.md`。recall 合并两层、task 优先。人工维护的通用 skill（带 `scope: global` 标签）落全局；原 `data/skills/<app>/` 与 `app` 分区已随 Plan C 废弃。
+- **可选宏缓存**：`skill.auto_distill` 默认关，任务收尾时可调用 `skill_library.maybe_distill_skill` 从轨迹提取可重放宏，但当前真机零步数收益，未作为系统能力对外宣称。
 
-### 6.2 Background Curator（❌ 已随 K 系列退役，2026-10-05）
-- 原静默维护进程（Curator.run_once：prune / refine_world_model / flag_low_quality / 蒸馏合并）已整体删除。
-- 其历史职责中仍然成立的部分：**触发式、不挂定时器、不介入任务执行**——这三条运行纪律由 TAM 记忆管线（§6.4）继承。
-
-### 6.3 meta-loop 四层
-1. **skill 级**：合成可复用连招。
-2. **world-model 级**：纠正 / 精炼界面理解。
-3. **策略级**：大脑反思自身规划失败。
-4. **权重级（子 agent 模型 finetune）**：当前**未启用**（仓库内无训练链代码）。知识级三层（①②③）管*行为适配*，权重级管*执行单元能力适配*，二者互补非互斥。
+### 6.3 反思与权重级升级
+1. **world-model 级**：纠正 / 精炼界面理解。
+2. **策略级**：大脑反思自身规划失败。
+3. **权重级（子 agent 模型 finetune）**：当前**未启用**（仓库内无训练链代码）。知识级两层（①②）管行为适配，权重级管执行单元能力适配。
 
 ---
 
 ### 6.4 记忆轴（TAM 移植重建中）
 
-> 旧的自升级管线（原 §6.4「知识层自升级（K 系列）」，含 Curator / rollouts / MEMORY.md
+> 旧的记忆维护管线（含 rollouts / MEMORY.md
 > 常驻注入 / 稳态收敛 / 信号体系）**已于 2026-10-05 整体退役删除**——其判据体系从未完成
 > 验证，历史文档已移除。记忆轴现按开源项目 **TencentDB Agent Memory（TAM）** 直接移植
 > 重建：设计见 `doc/plans/memory-rag-design.md`（SQLite+FTS5 分层存储 / LLM 提炼 atoms /
@@ -191,9 +185,9 @@
 | **M3b** | §2.1 两层执行编排（在线 plan + 本地 4B 执行 + escalation 升级） | M3 | ✅ 完成 |
 | **M4a** | Trajectory 轨迹落盘 + Telemetry 四指标 + 显式 Verification/task_done 门控 + Agent 状态机 | M3b | ✅ 完成（79 passed） |
 | **M4b.1** | §5/§12.4 world-model 持久化 + 无状态大脑 + 子目标 checkpoint | M4a | ✅ 完成（commit dbe71e8） |
-| **M4b.2** | §6.1 skill 库 + N=3 晋升门 + from_run_record 提取 candidate | M4b.1 | ✅ 完成（commit a5fdaa0，107 passed） |
-| **M4b.3** | §6.2 Curator 触发式静默维护（prune/refine/review/flag_low_quality） | M4b.2 | ✅ 完成（commit 0d21f47，128 passed） |
-| **M5** | §6.3 meta-loop 四层（权重级） | — | 🧊 未启用（知识级三层已完成，见 §6.3） |
+| **M4b.2** | §6.1 skill 库（手写维护 + 可选宏缓存，默认关） | M4b.1 | ✅ 机制跑通（commit a5fdaa0；真机零步数收益，有效性未验证） |
+| **M4b.3** | §6.4 记忆轴 TAM 移植重建（取代原触发式 prune/refine/review/flag_low_quality 静默维护，2026-10-05 退役） | M4b.2 | ✅ 已落地（由 TAM 取代） |
+| **M5** | §6.3 反思与权重级 finetune | — | 🧊 未启用（知识级两层已完成，见 §6.3） |
 | **M6** | 子任务领取/状态机（SubtaskStore），共享黑板 = WorldModel 改造铺垫 | M5 | ✅ 完成（`task_store.py`） |
 | **M7** | 去分层通用多 agent 编排（LangGraph `Send` 扇出 + `dispatch` 元工具 + 删 `policy.py`） | M6 | ✅ 完成（`graph.py`） |
 | **P0（画像/角色卡/记忆）** | §6.5 三位一体：画像 user_profile + 角色卡 character + 前端伙伴 Tab + C₃ 校准端点 | M7 | ✅ 完成（真实 apikey 全链路验证，2026-09-26） |
@@ -209,9 +203,8 @@
 | 1 | 模拟器选型 | **Android + uiautomator2(ADB)** |
 | 2 | 本地模型部署形态 | **llama-server**（OpenAI 兼容 :8085，未验证跑通） |
 | 3 | world-model / skill 持久化格式 | **Hermes 风格 Markdown + YAML frontmatter**（agentskills.io） |
-| 4 | Curator 频率 | **触发式，不挂周期性定时器**（Phase1） |
-| 5 | 权重级升级触发 | **A：阈值 + 弹提示确认**（硬件受限、训练久） |
-| 6 | 轨迹留存 | **三级：raw 30天 / failures 14天 / GGUF 留 2 版**（采集常开） |
+| 4 | 权重级升级触发 | **A：阈值 + 弹提示确认**（硬件受限、训练久） |
+| 5 | 轨迹留存 | **三级：raw 30天 / failures 14天 / GGUF 留 2 版**（采集常开） |
 
 ---
 
@@ -220,7 +213,7 @@
 - 本地模型吞吐/智能不足 → 分层可能退化成「主模型每步兜底」，需真实跑测定阈值。
 - SoM grounding 精度是 RPG 头号失败点（OSWorld 数据）→ 模板匹配兜底必要。
 - 模拟器截屏延迟 vs 实时性。
-- 自学习幻觉 skill → N=3 门 + 验证必须硬。
+- skill 自动生成幻觉 → 默认关 + 验证必须硬。
 - GFW 仍是训练链（权重级）潜在风险，但暴露面已大幅缩小。
 
 ---
@@ -296,7 +289,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 | `brain.long_task.compress_threshold` | 0.65 | ⏳ 待补（token 占比主触发；落地前需确认 u2 真实窗口） |
 | `brain.long_task.hard_ceiling` | 0.85 | ⏳ 待补（硬上限兜底） |
 | 持�� world-model 落盘 + 子目标 checkpoint | — | ✅ 已落地（M4b.1, dbe71e8：save/load current.md + checkpoint JSON + merge_progress 防 JPEG） |
-| skill 库 + N=3 晋升门 | — | ✅ 已落地（M4b.2, a5fdaa0：SkillLibrary + from_run_record + 连续3次→active） |
+| skill 库（手写维护 + 可选宏缓存，默认关） | — | ✅ 机制跑通（M4b.2, a5fdaa0：SkillLibrary + `maybe_distill_skill`；真机零步数收益，有效性未验证） |
 
 ### 12.7 红线
 
@@ -357,7 +350,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 
 ### 15.1 下一步
 
-1. **M4b.3 Curator 触发式静默维护**（`prune_trajectories` + `refine_world_model` + `review_candidate_skills` + `flag_low_quality`）：任务完成后跑，不挂周期性后台定时器。✅ 已落地（2026-08-22，commit 0d21f47，128 passed）。
+1. 记忆轴 TAM 移植重建（取代已退役的 M4b.3 触发式静默维护：`prune_trajectories` + `refine_world_model` + `review_candidate_skills` + `flag_low_quality` 等价能力在 §6.4 重建）。
 2. **X3 设计符合性优化（P0–P3）**（已落地）：`/stop` 置 `aborted`、agent 回包持久化、前端标题以服务端 `objective` 为主源、非 loopback 绑定无 `auth_token` 拒绝启动、补 API 集成测试。
 3. 可选：跑真在线分层闭环验证，看 skill 库 + world-model 持久化在真机的产出。
 4. 后续独立项（非阻塞）：管理 / 运行接口的请求级 token 鉴权、模型路径 allow-list。

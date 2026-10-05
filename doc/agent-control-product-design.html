@@ -183,29 +183,14 @@
       <td>补齐纯文本能力缺口（手搓态无脚本执行）；沙箱 / 超时 / stdout 捕获。作为外层 tool 接入，与 MCP 平级，无需手搓。</td>
     </tr>
     <tr>
-      <td><b>知识库 / 护城河</b></td>
-      <td>world-model + skill 库（Hermes 风 Markdown + YAML）+ Trajectory + Curator</td>
-      <td><b>框架外保留</b>，作为生命周期钩子挂载：每步后处理 → <code>trajectory.log</code>；任务结束 → <code>Curator.run_once()</code>；成功轨迹 → <code>SkillLibrary</code> 提炼晋升。L2 对循环有单步自治权（C4），但协议层仍归 L3。自学无插件。</td>
-    </tr>
-    <tr>
-      <td><b>自升级 meta-loop</b></td>
-      <td>四层：skill（知识）/ world-model（精炼）/ strategy（反思）/ weight-level（训练链升级路径）</td>
-      <td>知识级管行为适配，权重级管执行器能力适配，互补非互斥；权重级触发策略 A（阈值 + 提示确认，不自动跑）。旧 LoRA 链保留为主动升级路径。</td>
+      <td><b>知识库 / L2 框架外挂件</b></td>
+      <td>world-model + skill 库（Hermes 风 Markdown + YAML，手写维护）+ Trajectory</td>
+      <td><b>框架外保留</b>，作为生命周期钩子挂载：每步后处理 → <code>trajectory.log</code>；任务收尾 → memory/TAM 提炼。L2 对循环有单步自治权（C4），但协议层仍归 L3。</td>
     </tr>
     <tr>
       <td><b>持久化策略</b></td>
       <td>三级留存：raw 轨迹 / failures / gguf 当前 + 上一版</td>
       <td>采集常开（仅多写 jsonl，近零成本）；防低质轨迹稀释 SFT 语料；存储敏感。</td>
-    </tr>
-    <tr>
-      <td><b>验证门</b></td>
-      <td>N = 3（候选 skill 连续成功 3 次晋升）</td>
-      <td>防「乱点 20 次最后成功」被学成策略；幻觉 skill 自欺护栏。</td>
-    </tr>
-    <tr>
-      <td><b>Curator</b></td>
-      <td>触发式（任务完成后跑一次）</td>
-      <td>静默维护技能库锐度（prune + refine + 标 low-quality）。</td>
     </tr>
     <tr>
       <td><b>上下文管理</b></td>
@@ -243,7 +228,7 @@
     <tr><td><b>LangGraph / OpenAI Agents SDK</b></td><td>协同栈：LangGraph 编排多 agent 拓扑 + handoff + interrupt（HITL），Agents SDK 跑单 agent ReAct/FC/流式并从 MCP 加载工具。印证「循环与协议交给框架、领域脑外挂」。</td></tr>
   </table>
 
-  <div class="note"><b>诚实 caveat：</b>纯自主无结构化路由是科研前沿，生产普遍加 guardrail（step limit / tool allowlist / plan-replan / Reflexion 防循环）——OmniAgent 定位研究探索 agent 可接受，但保留 step cap。自动生成 skill 当前仍不可靠（弱模型 skill 会放大 bug），故「人审核接入」是正确保守姿态而非妥协。</div><h2 id="s-5-维护约定">5. 维护约定</h2><div class="note"><b>维护纪律（关键）：</b>本文件描述 <b>当前框架态</b>。设计变更时在此「就地更新当前状态」，<b>不追加演进史段落</b>。模块名锚定实时代码树（<code>omni_core/</code> 内核 · <code>omni_core/tools/</code> 外层插件包 · <code>devices/</code> 设备驱动 · <code>model_hub/</code>），改代码后同步此处。<b>框架态核心转变：</b>ReAct 循环与 function-call 协议交由 LangGraph + OpenAI Agents SDK；工具脱离内核、成为外层平级插件（自研 tool 承载基础能力 + 外部 MCP 承载外部系统，二者平级、由 LLM 直接调用）；护城河（WorldModel/Curator/Trajectory/Skill）外挂为生命周期钩子。</div>
+  <div class="note"><b>诚实 caveat：</b>纯自主无结构化路由是科研前沿，生产普遍加 guardrail（step limit / tool allowlist / plan-replan / Reflexion 防循环）——OmniAgent 定位研究探索 agent 可接受，但保留 step cap。自动生成 skill 当前仍不可靠（弱模型 skill 会放大 bug），故「人审核接入」是正确保守姿态而非妥协。</div><h2 id="s-5-维护约定">5. 维护约定</h2><div class="note"><b>维护纪律（关键）：</b>本文件描述 <b>当前框架态</b>。设计变更时在此「就地更新当前状态」，<b>不追加演进史段落</b>。模块名锚定实时代码树（<code>omni_core/</code> 内核 · <code>omni_core/tools/</code> 外层插件包 · <code>devices/</code> 设备驱动 · <code>model_hub/</code>），改代码后同步此处。<b>框架态核心转变：</b>ReAct 循环与 function-call 协议交由 LangGraph + OpenAI Agents SDK；工具脱离内核、成为外层平级插件（自研 tool 承载基础能力 + 外部 MCP 承载外部系统，二者平级、由 LLM 直接调用）；L2 框架外挂件（WorldModel/Trajectory）外挂为生命周期钩子。</div>
 <script>
 (function(){
   var links=[].slice.call(document.querySelectorAll('.toc-sidebar a'));

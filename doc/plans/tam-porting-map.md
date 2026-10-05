@@ -9,9 +9,9 @@
 |---|---|---|
 | 内容 | 事实 atoms + 用户画像 | 知识型技能（playbook）+ 可重放宏（substeps） |
 | 存储 | `projects/<pid>/memory/index.db` + `~/.omniagent/memory/index.db` + `user_profile.md` | `projects/<pid>/skills/` + `~/.omniagent/skills/` |
-| 生产者 | LLM 提炼（scope=global/project 标注）→ 判重 → 落库 | 人工维护 + 自动宏提取（`skill.auto_distill`） |
+| 生产者 | LLM 提炼（scope=global/project 标注）→ 判重 → 落库 | 人工维护 + 可选自动宏提取（`skill.auto_distill`，默认关） |
 | 消费者 | 注入检索段（两路 FTS）+ 画像常驻 | 目录 top-3 + `load_skill` / `search_skill` / `replay_skill` |
-| 晋升 | LLM 标注 scope 入全局库 | 升 global 仅人工「设为全局」；N=3 candidate→active |
+| 晋升 | LLM 标注 scope 入全局库 | 升 global 仅人工「设为全局」；自动候选机制默认关，未验证 |
 
 验收口径：store / 内容 / 消费者 / 晋升四分离——skill 文件不含纯事实陈述、不进注入块；memory 条目不进回放器。
 
@@ -28,6 +28,7 @@
 
 ### 2.2 写入链（核实）
 
+- **L0 契约（v3/conversation/add）**：`messages` 只收 `{role: "user"|"assistant", content: 1~8192 字}`——**纯对话文本，没有 tool/tool_call 角色**；L1 提炼的原料就是这些文本。⇒ host 对话里没有实质内容时，TAM 同样提炼不出东西（宁缺毋滥是 prompt 内建纪律）。Omni 的 capture 形态与该契约一致。
 - 触发：每 5 轮对话（warmup 翻倍封顶 5）+ idle 兜底 + 串行队列；提炼超时 180s、单次入库上限 20。
 - 提炼 prompt 三任务合一（情境切分 + 类型化提取 + JSON 输出），「宁缺毋滥 / 独立完整 / 归纳合并」，负面清单排闲聊；`<think>` 剥离 + JSON 修复是 thinking 模型必需。
 - 判重两阶段：①无 LLM 候选召回（FTS/向量 topK=5+新条数；库空→整批直接 store）；②单次 LLM 统一池批判，四态 **store/update/merge/skip**，merge/update 必填 merged_content 且 version=max+1；**失败语义：LLM 失败/解析失败/漏判/非法 action 一律 fallback store（宁重复不丢失）**。
@@ -52,7 +53,7 @@
 | 写入节流 | ✅ 简化：任务收尾触发（run 结束即检查点） | ✅ 已实施 |
 | RRF / bm25 归一 / 0.3 门槛 | 向量臂（S2）时启用 | ⏸ 未做 |
 | 三预算 + 超时跳过 | 条数 5 / 字符 / 超时 | 部分（条数已定） |
-| L2 场景 agent / L3 persona 执行器 | 治理机制可借鉴，执行器不搬；画像自动维护以 `memory_tam._maybe_maintain_profile` 落地（gate `knowledge.profile.auto_maintain`） | ✅ 画像已实施 |
+| L2 场景 agent / L3 persona 执行器 | 治理机制可借鉴，执行器不搬；画像自动维护以 `memory_tam._maybe_maintain_profile` 落地（gate `knowledge.profile.auto_maintain`） | ✅ 画像已实施；**L2 后置 = 本表唯一缺口的已验证平面，见 §6** |
 
 ### 2.5 Omni 落点（实际实现）
 
@@ -83,7 +84,7 @@
 
 **硬禁令**：知识型技能不得从执行轨迹自动转录、不得以 `objective[:40]` 写死规则命名；LLM 提炼也不得产出录像式步骤。
 
-### 3.3 自动蒸馏（`skill.auto_distill`，默认关）
+### 3.3 可选自动宏提取（`skill.auto_distill`，默认关，未验证）
 
 - **触发**：任务收尾（`loop/finish.py::_finish` 写完 run record 后）→ `skill_library.maybe_distill_skill`。
 - **双轨**：步骤 = 轨迹结构化提取（原始 args）；标签 = LLM（routine/description）。
@@ -98,7 +99,7 @@
 | **按需加载** | `load_skill(name)`：有 playbook 返回文字引导，否则回退脱敏动作序列；命中即记 `total_uses` |
 | **检索** | `search_skill(query, limit)`；现状缺陷与修复方案见 `skill-search-redesign.md` |
 | **回放** | `replay_skill`：白名单硬重放（`skill.replay_allow_tools`）；GUI 坐标类降级「参考建议」；S0/S2 照常生效 |
-| **缓存淘汰** | `SkillLibrary.evict_stale`：candidate TTL 14d / active 闲置 30d 且 confidence<0.5；移入 `_archive/` 降级不删；手写技能永不淘汰。触发点待接（Curator 退役后暂无生产者） |
+| **缓存淘汰** | `SkillLibrary.evict_stale`：candidate TTL 14d / active 闲置 30d 且 confidence<0.5；移入 `_archive/` 降级不删；手写技能永不淘汰。触发点待接（evict_stale 淘汰触发点仍未接；蒸馏生产者已重接至任务收尾） |
 
 **选档纪律**：相关性判断交模型，不做词面打分；无模型时保持原序、不做相关性判断。
 
@@ -116,3 +117,31 @@
 - B 组命中必须 **execution-verified**（回放真省步才算命中）；「检索到/注入」不算命中。
 - 对照：A=无 skill；B=skill 回放；同任务集交错执行。
 - 负结果纪律：连续 2 个任务集 B 不优于 A 即停手。
+
+## 6. 历史依据与已验证数据（hachimi P2-R，2026-10-01~02）
+
+> 来源：hachimi 侧「知识模块现状盘点与重构专项（P2-R）」——rollouts→facts/lessons 链**从最初设计就按 TAM 分层映射**（§3.1），但按手机端约束做了内容语义本地化：**提炼原料 = 轨迹 + 每步状态摘要**（非对话文本；"环境事实必须靠 LLM 从轨迹提取，这是 memory 层唯一的内容源"）。⇒ 本表的"原料扩展"类改动有已验证依据，不属自创。
+
+### 6.1 有效性数据（三层递进）
+
+| 实验 | 条件 | 结果 |
+|---|---|---|
+| §6.1 严格对照 | 冻结快照 + 清零复验，T5 ×10/组 | 步数三口径全不显著（组内方差 5~7 倍淹没效应） |
+| §6.2 低方差判据 | 对既有 20 条轨迹回溯 | **知识被采纳**：首动作命中注入序列 0.90、前 5 步 1.00、主动调 load/search_skill 0.90——不显著是执行抖动，非模型忽略 |
+| §6.3 高知识密度任务 | T3（怪癖密集）×12/组，冻结快照 | **总步 −60%（p=0.0225）、确认步 −58.8%（p=0.009）显著**；简单任务（T5）收益天花板仅 2~3 步，不可观测 |
+
+结论：**有效性 = 知识密度 × 消费形态的函数**。简单任务白给；判据必须按任务知识密度选择（步数 vs 二值采纳指标）。
+
+### 6.2 已验证的机制件（L2 实施时直接复用，勿重造）
+
+- **原料**：轨迹 + 状态摘要 → LLM 提取（交白卷纪律 + 节流：单次 ≤3 条 / 同域 300s 冷却）
+- **去重**：LLM 语义判重（hachimi 的控件 id 词面规则是 GUI 特化，Omni 不照搬）；条目内容剥 `- - xxx` 脏数据
+- **容量**：效用滑动窗口替代完美归并——印证 hits、反证 −3/次且累计 3 次直接淘汰、30 天新鲜度衰减；"机制迁移，常量不迁移"（Omni 按层设限：注入层硬上限、结构层降级不删、证据层只归档）
+- **消费形态**：hachimi = 常驻注入每步重发（手机每步计费所致）；**Omni 是组装期注入一次，常驻 vs 检索的取舍待 L2 设计时定**——这是 L2 与 hachimi 形态的唯一实质分歧点
+
+### 6.3 已知失效形态（防回退）
+
+- 机械转录的步骤序列作为**注入**：10 次加载零步数改善；塞常驻块反而更差（hachimi 实测 45 步 > 无知识基线）
+- 弱化措辞"以实际观测为准"：在 GUI 场景 = 授权重探索（perception 翻倍）；措辞必须中性
+- 步数作为唯一判据：被确认动作淹没（~40% 步是 observe），必须用有效步数/二值采纳指标
+- 配额制提炼：实测约 23% 产出无证据支撑——只允许交白卷

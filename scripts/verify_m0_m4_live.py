@@ -7,8 +7,8 @@
   M3b 两层编排：u2 规划 + 本地 4B 执行 + escalate/verify 门控
   M4a 轨迹落盘 + telemetry + 显式 verify
   M4b.1 world-model 持久化（current.md + checkpoint）
-  M4b.2 skill 库 + N=3 晋升（同 objective 连跑 3 次触发）
-  M4b.3 Curator 触发式维护（任务后跑，标 excluded）
+  M4b.2 skill 库（候选宏缓存，同 objective 连跑 3 次触发）
+  M4b.3 触发式维护（已退役：原任务后跑、标 excluded）
 
 大脑模型从 config.brain 读取（当前=u2），不硬编码；换模型只改 config。
 
@@ -17,7 +17,7 @@
   - 本地 4B-vl llama-server 在 8085（model_hub 或手动起）
   - config.brain.api_key 已设（u2 的 key）
 
-用法（同 objective 连跑 3 次以触发 skill N=3 晋升）：
+用法（同 objective 连跑 3 次以触发候选 macro 缓存）：
   .venv/Scripts/python.exe scripts/verify_m0_m4_live.py "观察主界面并描述可见元素" default 8
   .venv/Scripts/python.exe scripts/verify_m0_m4_live.py "观察主界面并描述可见元素" default 8
   .venv/Scripts/python.exe scripts/verify_m0_m4_live.py "观察主界面并描述可见元素" default 8
@@ -120,12 +120,12 @@ def main():
         report["skills_error"] = str(e)
         log(f"M4b.2 skill 库读取失败: {e}")
 
-    # M4b.3 Curator excluded
+    # M4b.3 退役前 excluded 残留检查（触发式维护模块已删，仅清残留）
     excluded_dir = os.path.join(traj_dir, "excluded") if os.path.isdir(traj_dir) else None
     if excluded_dir and os.path.isdir(excluded_dir):
         ex = [f for f in os.listdir(excluded_dir) if f.endswith(".json")]
-        report["curator_excluded"] = len(ex)
-        log(f"M4b.3 Curator: {len(ex)} 条 excluded")
+        report["excluded_trajectories"] = len(ex)
+        log(f"M4b.3 退役残留 excluded: {len(ex)} 条")
 
     with open(RESULT, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)

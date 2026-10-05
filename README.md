@@ -20,11 +20,11 @@
 - 通用工具运行时：加能力 = 写工具 / Provider，内核零场景硬编码（红线 lint + CI 守护）。
 - 本地模型生命周期管理、MCP 接入、GUI / 设备操控执行后端。
 - 会话记录增量落盘 + 重放合并（崩溃不丢过程流）；项目级 AGENTS.md 三层纪律注入（global → project → task）；技能库（人工维护 + 按需加载）。
-  （skill 提取链修订：录像式机械转录整链已于 2026-10-03 A9 删除；2026-10-04 skill 轴以**可重放宏缓存**形态复活——结构化提取 + N=3 晋级 + 回放执行器，`skill.auto_distill` 默认关，有效性验证未做，见下。）
+  （skill 提取链修订：录像式机械转录整链已于 2026-10-03 A9 删除；2026-10-04 skill 轴以**可重放宏缓存**形态保留但默认关闭——结构化提取 + 回放执行器，`skill.auto_distill` 默认关，有效性验证未做，见下。）
 
 **尚未验证（诚实边界）**
-- 记忆轴处于**重构期**：旧的自升级管线（K 系列）已整体退役，新管线按 **TencentDB Agent Memory** 移植重建（设计见 `doc/plans/memory-rag-design.md`），有效性验证未开始。
-- **skill 宏轴（2026-10-04 复活）有效性未验证**：hachimi 真机试点已收口——机制层跑通（蒸馏链 5/5 成功、entry_id 精确分结构、N=3 晋升生效），但**注入技能序列零步数收益**（Δsteps=0，简单 UI 任务）⇒ 价值全系于回放执行器（跳过每步 LLM 决策），收益 A/B 待在 Omni 上以游戏脚本 / 确定性工具链场景补测；`skill.auto_distill` 默认关。
+- 记忆轴处于**重构期**：新管线按 **TencentDB Agent Memory** 移植重建（设计见 `doc/plans/memory-rag-design.md`），有效性验证未开始。
+- **skill 宏轴（2026-10-04 保留，默认关）有效性未验证**：hachimi 真机试点已收口——机制层跑通（蒸馏链 5/5 成功、entry_id 精确分结构），但**注入技能序列零步数收益**（Δsteps=0，简单 UI 任务）⇒ 价值全系于回放执行器（跳过每步 LLM 决策），收益 A/B 待在 Omni 上以游戏脚本 / 确定性工具链场景补测；`skill.auto_distill` 默认关。
 - 单域、小样本，非生产级。
 - skill 驱动的角色化团队（team-mode）**规划中**：将复用派发底座的 `agent` 字段与执行单元注册表（见 `doc/plans/`），尚未实现。
 
@@ -33,7 +33,7 @@
 | 文档 | 角色 |
 |------|------|
 | [`doc/agent-control-product-design.html`](doc/agent-control-product-design.html) | 产品设计（定位 / 原则 / 技术选型 / 行业对标 / 维护约定） |
-| [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | 架构设计（图集 N1–N11） |
+| [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | 架构设计（图集 N1–N10） |
 | [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | **架构决策权威（单一事实来源）** |
 | [`spec/coding_standard.md`](spec/coding_standard.md) | 工程规范（X3 现行编码规范） |
 
@@ -77,14 +77,14 @@
 
 两层 + Escalation 的通用 Agent Runtime：`Brain（在线规划）` → `Tool Runtime（SDK Runner 内层循环 + LangGraph 编排）` → `tool 插件层（device / vision / python / mcp 平级）` → `执行后端（devices/，L1，内核外）` → `Environment`。知识层旁路：`技能库 + 用户画像 + AGENTS.md 纪律 → 注入消费`（记忆轴按 TencentDB Agent Memory 移植重建中，见 `doc/plans/memory-rag-design.md`）。
 
-> 全部架构图（分层框架 / MCP 解耦 / ReAct 闭环 / Vision SoM / Meta-loop / 两层执行 Escalation / 上下文管理 / 持久化检查点 / Project-Task 模型 / 前端设计 / 知识层自升级）见 **架构设计 N1–N11**。
+> 全部架构图（分层框架 / MCP 解耦 / ReAct 闭环 / Vision SoM / 知识层（TAM）/ 两层执行 Escalation / 上下文管理 / 持久化检查点 / Project-Task 模型 / 前端设计）见 **架构设计 N1–N10**。
 
 ## 目录地图
 
 | 路径 | 作用 |
 |------|------|
 | `omni_core/brain/` | 模型客户端 + 工具 schema + providers + SDK 循环（`sdk_loop.py`） |
-| `omni_core/local/` | 世界模型 / 观测 / ToolLoop（`loop/` 五 Mixin）/ skill / curator / trajectory / telemetry / states |
+| `omni_core/local/` | 世界模型 / 观测 / ToolLoop（`loop/` 五 Mixin）/ skill / trajectory / telemetry / states |
 | `omni_core/tools/` | 四跳隔离工具插件层（device / vision / python / mcp 平级） |
 | `omni_core/orchestration/` | 通用多 agent 编排（LangGraph `Send` 扇出） |
 | `devices/` | 执行后端 L1（EmulatorBackend u2/ADB · HostBackend pyautogui），已从内核迁出 |
@@ -136,11 +136,11 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
 - General tool runtime: adding a capability = writing a tool / provider; zero scene-specific logic in the kernel (enforced by a red-line lint + CI).
 - Local model lifecycle management, MCP integration, GUI / device execution backends.
 - Session records are persisted incrementally with replay coalescing (crash-safe); three-layer AGENTS.md discipline injection (global → project → task); skill library (manually maintained + on-demand loading).
-  (Skill-chain revision: the mechanical-transcription chain was deleted on 2026-10-03 (A9); on 2026-10-04 the skill axis was revived as a **replayable macro cache** — structural extraction + N=3 promotion + replay executor, `skill.auto_distill` off by default, effectiveness unverified, see below.)
+  (Skill-chain revision: the mechanical-transcription chain was deleted on 2026-10-03 (A9); on 2026-10-04 the skill axis was retained as a **replayable macro cache** — default off — with structural extraction + replay executor, `skill.auto_distill` off by default, effectiveness unverified, see below.)
 
 **Not yet verified (honest caveat)**
-- The **memory axis is under reconstruction**: the old self-upgrade pipeline (K-series) has been fully retired; the new pipeline is a direct port of **TencentDB Agent Memory** (design in `doc/plans/memory-rag-design.md`). Effectiveness validation has not started.
-- **Skill macro axis (revived 2026-10-04) effectiveness unverified**: the hachimi real-device pilot closed with the mechanism validated end-to-end (distillation chain 5/5 runs, entry_id correctly distinguishing structural variants, N=3 promotion working) but **zero step savings from injecting the skill sequence** (Δsteps=0 on a simple UI task) ⇒ value hinges entirely on the replay executor (skipping per-step LLM decisions); the A/B is still pending on Omni in game-script / deterministic-toolchain scenarios; `skill.auto_distill` is off by default.
+- The **memory axis is under reconstruction**: the new pipeline is a direct port of **TencentDB Agent Memory** (design in `doc/plans/memory-rag-design.md`). Effectiveness validation has not started.
+- **Skill macro axis (retained 2026-10-04, default off) effectiveness unverified**: the hachimi real-device pilot closed with the mechanism validated end-to-end (distillation chain 5/5 runs, entry_id correctly distinguishing structural variants) but **zero step savings from injecting the skill sequence** (Δsteps=0 on a simple UI task) ⇒ value hinges entirely on the replay executor (skipping per-step LLM decisions); the A/B is still pending on Omni in game-script / deterministic-toolchain scenarios; `skill.auto_distill` is off by default.
 - Single domain, small sample size; not production-grade.
 - A skill-driven role-based team (team-mode) is **planned**: it will reuse the dispatch foundation's `agent` field and executor registry (see `doc/plans/`); not yet implemented.
 
@@ -149,7 +149,7 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
 | Document | Role |
 |----------|------|
 | [`doc/agent-control-product-design.html`](doc/agent-control-product-design.html) | Product design (positioning / principles / tech choices / industry comparison / conventions) |
-| [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | Architecture design (diagrams N1–N11) |
+| [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | Architecture design (diagrams N1–N10) |
 | [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | **Authoritative architecture decisions (single source of truth)** |
 | [`spec/coding_standard.md`](spec/coding_standard.md) | Engineering standard (current X3 coding conventions) |
 
@@ -193,14 +193,14 @@ Seven non-negotiable principles — the basis for all technical choices and a "s
 
 A two-tier + Escalation general-purpose agent runtime: `Brain (online planning)` → `Tool Runtime (SDK Runner inner loop + LangGraph orchestration)` → `tool plugin layer (device / vision / python / mcp, all peers)` → `execution backend (devices/, L1, outside the kernel)` → `Environment`. Knowledge-layer side path: `skill library + user profile + AGENTS.md discipline → injection` (the memory axis is being re-built as a TencentDB Agent Memory port, see `doc/plans/memory-rag-design.md`).
 
-> All architecture diagrams (layered framework / MCP decoupling / ReAct loop / Vision SoM / Meta-loop / two-tier execution escalation / context management / persistence checkpoints / Project-Task model / frontend design / knowledge-level self-upgrade) are in **Architecture Design N1–N11**.
+> All architecture diagrams (layered framework / MCP decoupling / ReAct loop / Vision SoM / knowledge layer (TAM) / two-tier execution escalation / context management / persistence checkpoints / Project-Task model / frontend design) are in **Architecture Design N1–N10**.
 
 ## Repository Map
 
 | Path | Purpose |
 |------|---------|
 | `omni_core/brain/` | Model clients + tool schema + providers + SDK loop (`sdk_loop.py`) |
-| `omni_core/local/` | World model / observation / ToolLoop (`loop/`, five mixins) / skill / curator / trajectory / telemetry / states |
+| `omni_core/local/` | World model / observation / ToolLoop (`loop/`, five mixins) / skill / trajectory / telemetry / states |
 | `omni_core/tools/` | Four-hop isolated tool plugin layer (device / vision / python / mcp, all peers) |
 | `omni_core/orchestration/` | General multi-agent orchestration (LangGraph `Send` fan-out) |
 | `devices/` | Execution backend L1 (EmulatorBackend u2/ADB · HostBackend pyautogui), moved out of the kernel |

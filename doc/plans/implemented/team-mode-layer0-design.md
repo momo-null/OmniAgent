@@ -255,7 +255,7 @@ allow_dispatch = bool(_dispatch_cfg.get("enabled", True))
 
 - `escalate` / `verify` 完成判定（防假成功）
 
-- 长任务压缩、Curator 自升级 / K 系列知识闭环
+- 长任务压缩、知识闭环
 
 - 双层大脑（planner / executor 分离模型）
 

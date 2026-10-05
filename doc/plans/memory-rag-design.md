@@ -100,7 +100,7 @@ projects/<pid>/memory/index.db
 
 - **写时索引**：`distill_task_memory` / merge 落 fact → 写 meta + FTS →（开关开时）embed
   → upsert vectors。单条失败不阻断入库（事实照存，`indexed_at` 留空）。
-- **惰性回填**：curator 空闲轮扫描 `indexed_at IS NULL` 补索引——与 digest/profile 同模式。
+- **惰性回填**：内核空闲轮扫描 `indexed_at IS NULL` 补索引——与 digest/profile 同模式。
 - **效用不进索引**：A5 效用分查询时 join `fact_stats`，效用更新**不需要重嵌入**。
 - **规模判断**：fact_slot_cap 200 + 全局数百条 → 暴力余弦 <10ms，**不需要 FAISS /
   向量数据库**（TAM 默认形态同理）。
@@ -110,7 +110,7 @@ projects/<pid>/memory/index.db
 - 本地 llama-server 挂 embedding 模型（bge-m3 / gte 小模型档，`/embeddings` 端点），
   项目已有本地模型生命周期管理可复用。
 - **排除**一切云 embedding API——记忆是用户个人数据，出机即越线。
-- 向量列带 `model` 标记；换模型 = 整库重嵌入（惰性，curator 慢速回填）。
+- 向量列带 `model` 标记；换模型 = 整库重嵌入（惰性，内核慢速回填）。
 
 ### 2.4 三预算（对齐 TAM 口径，初值待校准）
 

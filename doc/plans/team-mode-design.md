@@ -58,7 +58,7 @@ knowledge: |
   ↓ 角色调 game MCP 工具操作；共享黑板（WorldModel 分区 view(scope)）
 角色常驻（任务内，各自滚动摘要记忆）· 结果回灌主 agent
   ↓ 任务结束
-销毁 → Curator 提炼角色经验 → skill knowledge 段进化（复用现有 Meta-loop / N=3 晋升门）
+销毁 → 内核提炼角色经验 → skill knowledge 段进化
 ```
 
 三个关键约束（红线对齐）：
@@ -111,7 +111,7 @@ MT-1 匿名 worker 扇出（现状 dispatch）      ← 已有，保底
 | **CrewAI** | agents 文件化（role/goal/backstory + llm + tools） | L2 schema 直接参考；但 Crew 是静态配置，无涌现编排 |
 | **LangGraph supervisor** | 星型拓扑 + team_members 动态更新 + per-agent Store 记忆 | graph 扩展方向与官方演进一致（我们用 WorldModel 分区替代 Store，更轻） |
 | **DyLAN**（COLM 2024） | AIS 无监督选团（+25% 准确率实证）+ 动态拓扑 + In-Situ Learning | 动态选团有效性有数据背书；本设计更激进一步（角色定义本身涌现） |
-| **Voyager** | 验证入库 + embedding 检索 + skill 组合复用（3.3x 实证） | 与 Curator / N=3 晋升门 / recall 同构；本设计 skill 为 markdown 人可读写，更可运维 |
+| **Voyager** | 验证入库 + embedding 检索 + skill 组合复用（3.3x 实证） | 与 recall 同构；本设计 skill 为 markdown 人可读写，更可运维 |
 | MetaGPT | SOP 硬编码进代码 | **反面教材**：换领域要改代码；本设计理念与其相反 |
 
 **组合独特性**：三层分离（core 零知识 + MCP 能力 + skill 知识）+ 渐进 schema（L0 纯文本也合法）+ 涌现编排，现有工作无完全一致组合——最接近的是 Voyager 的引擎/skill 分离（但单 agent）扩展到多 agent。
@@ -124,7 +124,7 @@ MT-1 匿名 worker 扇出（现状 dispatch）      ← 已有，保底
 | 建团质量差（角色重叠 / 粒度失衡） | L2 上限护栏（≤6 角色，config 可配）；skill knowledge 段给参考角色划分 |
 | 主 agent 协调轮次膨胀 | max_rounds 既有兜底；黑板摘要注入（不灌全量） |
 | 角色 history 无限增长 | 滚动摘要 + 最近 N 轮（对齐大脑压缩策略；失败退化硬滑窗） |
-| skill schema 漂移（Curator 写坏 L2 段） | L2 解析宽容（坏字段忽略不拒载）+ Curator 只追加 knowledge 段（不碰结构字段） |
+| skill schema 漂移（写坏 L2 段） | L2 解析宽容（坏字段忽略不拒载）+ 只追加 knowledge 段（不碰结构字段） |
 
 ## 10. 待定项
 
