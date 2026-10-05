@@ -164,7 +164,24 @@ class InstructionMixin:
                     try:
                         from omni_core import memory_tam
                         _pid = TaskStore.project_of(str(task_id)) if task_id else ""
+                        # L2 场景块常驻段（TAM L2）：不受池子阈值限制，恢复语境
+                        _sc = memory_tam.load_scene_text(_pid)
+                        if _sc:
+                            parts.append(("scene", _sc))
                         _mt = memory_tam.inject_text(_pid, query or "")
+                        if self.on_debug:
+                            try:
+                                _hits = sum(
+                                    1 for _l in _mt.splitlines() if _l.startswith("- ")) if _mt else 0
+                                self.on_debug("memory_inject", {
+                                    "title": "记忆注入",
+                                    "pool": memory_tam.count_atoms(_pid)
+                                            + memory_tam.count_global_atoms(),
+                                    "hits": _hits,
+                                    "scene_chars": len(_sc),
+                                })
+                            except Exception:
+                                pass
                         if _mt.strip():
                             parts.append(("memory", _mt))
                     except Exception:

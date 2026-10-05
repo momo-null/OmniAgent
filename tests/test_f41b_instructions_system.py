@@ -449,7 +449,7 @@ def test_instructions_injected_and_drift_logged_to_trajectory(monkeypatch, tmp_p
     assert drift is not None and drift["layers"] == ["global"]
 
 
-# --- 6. 画像仍走尾部（F4.2 尾部重插机制未被 K 系列退役影响） -------------------
+# --- 6. 画像仍走尾部（F4.2 尾部重插机制保持） -------------------
 def test_profile_still_in_tail_not_system(monkeypatch, tmp_path):
     """纪律 → system；画像（非纪律的弱注入内容）→ 尾部重插，不进 system。"""
     g = tmp_path / "g.md"

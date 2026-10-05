@@ -237,7 +237,14 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # TAM 记忆层:任务收尾触发提炼+判重+落库(buffer 里的本会话消息;异常静默)
         try:
             from omni_core import memory_tam
-            memory_tam.flush(TaskStore.project_of(task_id), brain_cfg, source_task=task_id)
+            _pid = TaskStore.project_of(task_id)
+            _mstat = memory_tam.flush(_pid, brain_cfg, source_task=task_id)
+            _debug_push("memory_flush", {
+                "title": "记忆沉淀",
+                **_mstat,
+                "project_pool": memory_tam.count_atoms(_pid),
+                "global_pool": memory_tam.count_global_atoms(),
+            })
         except Exception:
             pass
         # 把本轮执行轨迹（思考 + 工具调用）连同结论，作为「归属 agent 的一整轮」持久化：

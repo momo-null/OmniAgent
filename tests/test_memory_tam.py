@@ -167,3 +167,41 @@ def test_profile_maintain_below_trigger_noop(monkeypatch):
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应调用 LLM")))
     memory_tam._maybe_maintain_profile(pid, brain_cfg={})  # 不触发生成、不抛
     assert not _RP.user_profile().exists()
+
+
+# === L2 场景块（TAM scene_blocks 思路） ========================================
+def test_scene_maintain_writes_and_watermark(monkeypatch):
+    """L2 维护：证据+现有块 → LLM 更新 scene.md + meta 水位；间隔内不重跑。"""
+    pid, _ = _mk_project("d-tam-l2")
+    calls = []
+
+    def fake_chat_json(brain_cfg, system, user, timeout=10.0):
+        calls.append(user)
+        return {"scene": "殖民地状态：2 名殖民者，研究 MicroelectronicsBasics 进行中。"}
+
+    monkeypatch.setattr(memory_tam.llm_judge, "chat_json", fake_chat_json)
+    memory_tam._maybe_maintain_scene(
+        pid, {"mock": 1}, "[user] 继续游戏\n[assistant] 殖民地正常推进", task_id="")
+    p = _RP.project_dir(pid) / "memory" / "scene_blocks" / "scene.md"
+    assert p.is_file() and "MicroelectronicsBasics" in p.read_text(encoding="utf-8")
+
+    # 间隔内第二次调用：不触发 LLM（calls 数不变）、不改文件
+    before = p.read_text(encoding="utf-8")
+    memory_tam._maybe_maintain_scene(pid, {"mock": 1}, "新证据", task_id="")
+    assert len(calls) == 1
+    assert p.read_text(encoding="utf-8") == before
+
+
+def test_scene_load_and_disabled_gate(monkeypatch):
+    pid, _ = _mk_project("d-tam-l2b")
+    p = _RP.project_dir(pid) / "memory" / "scene_blocks" / "scene.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("殖民地事实一行", encoding="utf-8")
+    assert memory_tam.load_scene_text(pid) == "殖民地事实一行"
+    # gate 关（enabled False）→ 维护直接返回
+    import config as config_mod
+    monkeypatch.setattr(config_mod, "get_config",
+                        lambda k, d=None: False if k == memory_tam._GATE else d)
+    monkeypatch.setattr(memory_tam.llm_judge, "chat_json",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应调用 LLM")))
+    memory_tam._maybe_maintain_scene(pid, {"mock": 1}, "[user] x", task_id="")  # 不抛即可

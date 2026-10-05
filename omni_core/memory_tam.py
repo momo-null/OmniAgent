@@ -162,10 +162,17 @@ def flush(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
     if not enabled() or not project_id or len(msgs) < _FLUSH_MIN_ROLES:
         return stats
     digest = "\n".join(f"[{m['role']}] {m['content']}" for m in msgs)[-_FLUSH_MAX_CHARS:]
-    atoms = _extract(digest, brain_cfg)  # 失败 → []
+    # 原料质量观测：会话消息大量为空时，digest 没有可提炼的实质内容
+    _contentful = sum(1 for m in msgs if len((m.get("content") or "").strip()) >= 10)
+    atoms, _note = _extract_detail(digest, brain_cfg)
+    if not atoms and _contentful < 2:
+        _note = f"原料薄(有效消息 {_contentful} 条)；" + _note
     atoms = atoms[:_MAX_ATOMS_PER_FLUSH]
     stats["extracted"] = len(atoms)
     if not atoms:
+        stats["note"] = _note
+        # 白卷不影响 L2：场景块维护吃的是会话摘要+世界状态，与 L1 提炼独立
+        _maybe_maintain_scene(project_id, brain_cfg, digest, task_id=source_task, stats=stats)
         return stats
     try:
         conn = open_db(project_id)
@@ -212,6 +219,7 @@ def flush(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
     except Exception:
         pass
     _maybe_maintain_profile(project_id, brain_cfg)
+    _maybe_maintain_scene(project_id, brain_cfg, digest, task_id=source_task, stats=stats)
     return stats
 
 
@@ -237,9 +245,18 @@ _DEDUP_SYSTEM = (
 
 def _extract(digest: str, brain_cfg) -> List[Dict[str, str]]:
     """提炼 → [{text, scope}];LLM 返回裸字符串或未标 scope 一律按 project(保守不丢)。"""
+    return _extract_detail(digest, brain_cfg)[0]
+
+
+def _extract_detail(digest: str, brain_cfg) -> tuple:
+    """提炼 → ({text, scope} 列表, 原因说明);空列表时原因写明白卷还是失败。"""
     try:
-        data = llm_judge.chat_json(brain_cfg, _EXTRACT_SYSTEM, digest)
-        facts = (data or {}).get("facts") or []
+        # timeout=60s：P2-R §9.5 真机定参——reasoning 模型提炼思考常超 30s，
+        # 默认 10s 会随机超时→假白卷/假失败（2026-10-05 真机复现并修复）
+        data = llm_judge.chat_json(brain_cfg, _EXTRACT_SYSTEM, digest, timeout=60.0)
+        if data is None:
+            return [], "提炼失败(无模型/请求失败/解析失败)"
+        facts = data.get("facts") or []
         out = []
         for f in facts:
             if isinstance(f, dict):
@@ -252,9 +269,111 @@ def _extract(digest: str, brain_cfg) -> List[Dict[str, str]]:
                 s = str(f).strip()
                 if s:
                     out.append({"text": s[:200], "scope": "project"})
-        return out
+        if not out:
+            return [], "白卷(模型判无可沉淀的跨会话事实)"
+        return out, ""
     except Exception:
-        return []
+        return [], "提炼失败(异常)"
+
+
+# ---------------------------------------------------------------- L2 场景块（TAM scene_blocks 思路）
+
+_L2_MIN_INTERVAL_S = 900    # 最小维护间隔（对齐 TAM l2MinIntervalSeconds）
+_L2_MAX_CHARS = 4000        # 场景块硬上限（常驻注入的预算约束）
+_SCENE_INJECT_CHARS = 1200  # 注入时的截断
+
+_SCENE_SYSTEM = (
+    "你是场景知识维护器。给你「当前场景知识」和「新证据」（会话要点与任务世界状态）。"
+    "任务：输出更新后的完整场景知识——保留仍然成立的内容，把新证据中属于"
+    "环境事实/App 怪癖/UI 语义/可靠操作方式的条目合并进去，剔除已过时或与证据矛盾的条目，"
+    "矛盾的以新证据为准。不要虚构；用短陈述句、每条一行；"
+    "没有可合并的新信息就原样返回。"
+    '只返回 JSON:{"scene": "<完整场景知识全文,≤3500字符>"}'
+)
+
+
+def _scene_path(project_id: str):
+    return rp.project_dir(project_id) / "memory" / "scene_blocks" / "scene.md"
+
+
+def load_scene_text(project_id: str, limit: int = _SCENE_INJECT_CHARS) -> str:
+    """L2 常驻注入段：场景知识全文（截断）。缺失/异常返回空（零注入不阻断）。"""
+    try:
+        p = _scene_path(project_id)
+        if not p.exists():
+            return ""
+        return p.read_text(encoding="utf-8").strip()[:limit]
+    except Exception:
+        return ""
+
+
+def _maybe_maintain_scene(project_id: str, brain_cfg, digest: str,
+                          task_id: str = "", stats: Optional[Dict[str, Any]] = None) -> None:
+    """L2 场景块维护：新证据 + 现有块 → LLM 增量更新 scene.md（TAM scene_blocks 思路）。
+
+    - 触发：任务收尾（flush 尾部）；最小间隔 900s（项目库 meta 水位 last_scene_ts）
+    - 原料：现有 scene.md + 会话摘要 digest + world_model 摘要（若有）
+    - 治理：LLM 失败/无变化/空证据 → 不动现文件；块硬上限截断；异常静默
+    """
+    if stats is None:
+        stats = {}
+    try:
+        if not enabled() or not project_id or not brain_cfg:
+            return
+        conn = open_db(project_id)
+        last = None
+        try:
+            row = conn.execute("SELECT v FROM meta WHERE k='last_scene_ts'").fetchone()
+            last = row[0] if row else None
+        except Exception:
+            pass
+        now = datetime.now(timezone.utc)
+        if last:
+            try:
+                if (now - datetime.fromisoformat(last)).total_seconds() < _L2_MIN_INTERVAL_S:
+                    conn.close()
+                    return
+            except Exception:
+                pass
+        conn.close()
+
+        p = _scene_path(project_id)
+        cur = p.read_text(encoding="utf-8")[:_L2_MAX_CHARS] if p.exists() else ""
+        evidence = []
+        d = (digest or "").strip()
+        if d:
+            evidence.append("[会话要点]\n" + d[:3000])
+        if task_id:
+            try:
+                wm = rp.task_world_model(task_id)
+                if wm.exists():
+                    wtxt = wm.read_text(encoding="utf-8").strip()
+                    if wtxt:
+                        evidence.append("[世界状态]\n" + wtxt[:2500])
+            except Exception:
+                pass
+        if not evidence and not cur:
+            return  # 无现有块也无证据 → 没有可维护的内容
+
+        user = (f"当前场景知识：\n{cur or '(空)'}\n\n新证据：\n" + "\n\n".join(evidence))
+        data = llm_judge.chat_json(brain_cfg, _SCENE_SYSTEM, user, timeout=60.0)
+        text = str((data or {}).get("scene") or "").strip()
+        if not text or text == cur:
+            return  # 无变化 → 不写
+        text = text[:_L2_MAX_CHARS]
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f"<!-- scene updated: {_now()} -->\n{text}\n", encoding="utf-8")
+        stats["scene_chars"] = len(text)
+        # 水位
+        try:
+            c2 = open_db(project_id)
+            c2.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('last_scene_ts',?)", (_now(),))
+            c2.commit()
+            c2.close()
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def _decide(conn: sqlite3.Connection, atom: str, brain_cfg, fts_ok: bool) -> Dict[str, Any]:
@@ -269,7 +388,7 @@ def _decide(conn: sqlite3.Connection, atom: str, brain_cfg, fts_ok: bool) -> Dic
             return {"action": "store"}
         cands = "\n".join(f"[{rid}] {txt}" for rid, txt in rows)
         data = llm_judge.chat_json(brain_cfg, _DEDUP_SYSTEM,
-                                   f"新事实:{atom}\n\n已有记忆候选:\n{cands}")
+                                   f"新事实:{atom}\n\n已有记忆候选:\n{cands}", timeout=60.0)
         for d in (data or {}).get("decisions") or []:
             if str(d.get("action")) in ("duplicate", "merge") and d.get("target_id"):
                 out = {"action": d["action"], "target_id": d["target_id"],

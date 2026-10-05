@@ -105,7 +105,7 @@ def test_store_finish_run_writes_record_and_failure(tmp_path, monkeypatch):
     assert (P.task_dir("t_app1") / "failures" / "runXYZ.json").exists()
 
 
-# TrajectoryStore.prune 已随 B4 删除（真清理由 Curator._manual_prune 承担）
+# TrajectoryStore.prune 已随 B4 删除（真清理由由收尾阶段承担）
 
 
 # === ToolLoop 集成落盘 ========================================================

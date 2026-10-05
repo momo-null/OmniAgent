@@ -113,8 +113,8 @@ class FinishMixin:
             result["report_file"] = report_file
             result["metrics"] = telemetry.compute(run_meta)
 
-        # skill 轴 · 结构化宏提取（skill.auto_distill 默认关；原 Curator 第 9a 步重接，
-        # K 系列退役后拆为 skill_library.maybe_distill_skill 独立挂点）。
+        # skill 轴 · 结构化宏提取（skill.auto_distill 默认关；生产者为
+        # skill_library.maybe_distill_skill，由 ToolLoop 收尾触发）。
         # 开关关闭 → 零动作；异常静默，绝不影响主流程。
         if spec is not None and store is not None:
             try:

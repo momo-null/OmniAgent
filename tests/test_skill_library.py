@@ -1,4 +1,4 @@
-"""M4b.2 Skill 库测试：save/load、N=3 晋升、失败打断、录制。"""
+"""Skill 库测试：save/load、候选宏缓存、失败打断、录制。"""
 import json
 from pathlib import Path
 
@@ -184,7 +184,7 @@ class TestSkillLibrary:
     def test_pattern_matching_merge(self, tmp_path):
         """同名或同 pattern 的 skill 合并（entry_id 不同时的 legacy 兜底）。
 
-        2026-10-04 语义修正：created 分支同样记账首次成功（否则 N=3 晋升门实际
+        2026-10-04 语义修正：created 分支同样记账首次成功（否则 N=3 门实际
         要 4 次成功才触发）。candidate 按真实流程不预置计数：创建=1，合并再 +1=2。
         """
         lib = SkillLibrary("merge_test")
@@ -422,7 +422,7 @@ class TestEvictStale:
         assert lib.load("手写技能") is not None
 
 
-# === 生产者 · 结构化宏提取（skill.auto_distill；原 Curator 测试移植） ==========
+# === 生产者 · 结构化宏提取（skill.auto_distill） ==========
 class TestSkillAutoDistill:
     def _write_run(self, task_id, run_id, success, end_ts, step_records):
         d = _RP.task_dir(task_id)
@@ -471,6 +471,17 @@ class TestSkillAutoDistill:
         self._write_run("sk2", "r1", True, "2026-10-04T10:00:00+00:00", self._STEPS[:1])
         self._mock_labels(monkeypatch)
         assert self._distill("sk2")["reason"] == "too_few_steps"
+
+    def test_not_replayable_skipped(self, monkeypatch):
+        """回放白名单前置把关：步骤含白名单外工具 → 不建候选（宁严勿松）。"""
+        steps = [
+            {"step": 1, "action": {"tool": "shell_exec", "args": {"command": "echo a"}}, "result": {"ok": True}},
+            {"step": 2, "action": {"tool": "advance_tick", "args": {"ticks": 100}}, "result": {"ok": True}},
+        ]
+        self._write_run("sk_nr", "r1", True, "2026-10-05T10:00:00+00:00", steps)
+        self._mock_labels(monkeypatch)
+        out = self._distill("sk_nr")
+        assert out["action"] == "skipped" and out["reason"] == "not_replayable"
 
     def test_validate_failure_no_output(self, monkeypatch):
         self._write_run("sk3", "r1", True, "2026-10-04T10:00:00+00:00", self._STEPS)

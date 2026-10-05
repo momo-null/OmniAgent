@@ -5,7 +5,7 @@
 - LLMClient cfg -> SDK Model 装配（§5.1 BrainClient 降级为 model provider）
 - omni_core.tools 业务函数被 SDK function_tool 包成平级插件（tools 暴露 schema）
 - Agent 装配正确、工具 schema 可被 SDK 读取
-- 护城河钩子（OmniRunHooks.on_tool_end）在工具执行后触发
+- L2 后处理钩子（OmniRunHooks.on_tool_end）在工具执行后触发
 """
 import os
 import pytest
@@ -59,8 +59,8 @@ def test_sdk_function_tool_wraps_business_fn():
 
 
 def test_hooks_fire_on_tool_end():
-    # 验证护城河钩子：SDK 在工具执行后回调 on_tool_end，把 (tool_name, result)
-    # 交给注入的回调（接 Trajectory/Curator 落盘），与循环解耦。
+    # 验证 L2 后处理钩子：SDK 在工具执行后回调 on_tool_end，把 (tool_name, result)
+    # 交给注入的回调（接 Trajectory 落盘），与循环解耦。
     #
     # 注：本仓库未安装 pytest-asyncio（pyproject 里的 asyncio_mode 只是声明，
     # pytest 会报 "Unknown config option"），async 用例会被判为「不支持的 async def」。

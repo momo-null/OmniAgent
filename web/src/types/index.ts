@@ -305,14 +305,6 @@ export interface RuntimeSnapshot {
   project_id: string;
 }
 
-// ── 全局长期记忆（/api/runtime/memory） ─────────────
-export interface MemoryIndex {
-  master: string; // MEMORY.md 全文（机器归纳 + 人工编辑）
-  rollouts_total: number; // rollouts 文件总数
-  merged_total: number; // 已合并进 MEMORY.md 的 task 数
-  enabled: boolean; // 知识层弱注入（memory）是否开启
-}
-
 // ── P0 用户画像（/api/runtime/profile） ─────────────
 export interface ProfileIndex {
   profile: string; // user_profile.md 全文（用户直接维护；LLM 自动维护待 A8 基建）
@@ -323,30 +315,6 @@ export interface ProfileIndex {
 export interface CharacterData {
   character: string; // character.md 全文（人格设定，随 system prompt 注入）
   name: string; // 从 frontmatter name: 解析的助手名，缺省 "OmniAgent"
-}
-
-export interface RolloutInfo {
-  task_id: string;
-  distilled_at: string;
-  success: boolean | null;
-  facts_n: number;
-  lessons_n: number;
-  merged: boolean; // 是否已合并进 MEMORY.md
-}
-
-export interface RolloutsResponse {
-  rollouts: RolloutInfo[];
-  total: number;
-}
-
-export interface RolloutDetail {
-  task_id: string;
-  content: string; // rollout md 全文
-  trajectory: string; // trajectory 引用路径
-  facts_n: number;
-  lessons_n: number;
-  distilled_at: string;
-  success: boolean | null;
 }
 
 

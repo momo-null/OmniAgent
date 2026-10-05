@@ -277,6 +277,14 @@ class SdkBridgeMixin:
                         "global": sum(1 for s in _cat if s.get("source") == "global"),
                     },
                 })
+                # 同步推 Debug 面板（trajectory 只落盘，面板看轨迹才知道）
+                if self.on_debug:
+                    self.on_debug("skill_catalog", {
+                        "title": "技能目录注入",
+                        "chars": len(skill_catalog),
+                        "skills": len(_cat),
+                        "names": [s.get("name") for s in _cat],
+                    })
             except Exception:
                 pass
         # 新一轮：清空上轮遗留的待关联参数（避免跨 run 串味）
@@ -289,11 +297,21 @@ class SdkBridgeMixin:
             self._action_count += 1
             # 工具调用结果埋点：让前端日志可见「每步 react（工具结果）」
             _dbg = self._dbg(role)
+            _s = ""
             if _dbg:
                 _s = result if isinstance(result, str) else str(result)
                 if len(_s) > 400:
                     _s = _s[:400] + "...(截断)"
                 _dbg("tool_result", {"tool": tool_name, "result": _s})
+                # 工具自声明的 debug_kind（元数据分发，零工具名字面量）：
+                # skill 类工具发专属事件，Debug 面板可按类过滤
+                try:
+                    from omni_core.tools.base import TOOL_REGISTRY as _REG
+                    _dk = getattr(_REG.get(tool_name), "meta", {}).get("debug_kind")
+                    if _dk:
+                        _dbg(_dk, {"title": tool_name, "tool": tool_name, "result": _s})
+                except Exception:
+                    pass
             # 对话区实时工具调用（左栏卡片）：关联本轮回话参数（按工具名 FIFO 匹配）。
             # FIFO 匹配无条件执行：args 是轨迹 / 世界模型的落盘输入（提取器前置依赖），
             # 不再仅在有 UI 钩子时才关联。同轮同名多次调用可能错位——展示级启发式，接受。
@@ -431,6 +449,7 @@ class SdkBridgeMixin:
             verify_fail_max=int(self.escalation.get("verify_fail_max", 3)) if allow_escalate else 0,
             should_stop=self._is_stop_requested,
             on_step=_on_step,
+            on_debug=self.on_debug,
             on_state=lambda s: self._set_state(AgentState(s)),
             compress_after=compress_after,
             # T3.2：粘性压缩（max_input_tokens>0）同样需要摘要回调，与旧 chunk 压缩共用

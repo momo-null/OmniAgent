@@ -255,7 +255,7 @@ def build_skill_catalog(task_id: str, query: str = "", desc_limit: int = 300,
     → 为 True 的技能不出现在目录（不可被模型直接调用）。
 
     排序（选档交模型，不做词面打分）：
-    - 无模型 / 无 query：按 N=3 晋升的效用信号（success_count 降序）稳定排序，
+    - 无模型 / 无 query：按 success_count 效用信号（降序）稳定排序，
       同数保持枚举原序；
     - 带 query 且有 brain_cfg：LLM 选档判定相关技能并重排；调用失败 →
       保持效用序。

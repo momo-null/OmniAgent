@@ -25,6 +25,7 @@ from backend.api.router_models import router as models_router
 from backend.api.router_runtime import router as runtime_router
 from backend.api.router_llm import router as llm_router
 from backend.api.router_system import router as system_router
+from backend.api.routers.debug_api import router as debug_router
 from backend.api.router_settings import router as settings_router
 
 # ── 服务配置 ──────────────────────────────────────────────
@@ -128,6 +129,9 @@ app.include_router(runtime_router)
 app.include_router(llm_router)
 app.include_router(system_router)
 app.include_router(settings_router)
+# ── Debug 模块挂载（可整体删除：删本行 + backend/api/routers/debug_api.py +
+#    前端 web/src/components/DebugPanel.tsx 与 web/src/api/debugApi.ts） ──
+app.include_router(debug_router)
 
 
 @app.get("/")

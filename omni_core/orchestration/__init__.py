@@ -5,6 +5,6 @@
              只有主 agent 调 `dispatch` 产出计划时才并行扇出
 
 没有 Manager/Worker 的角色分层——是否拆子 agent 由主 agent 决定（业务决定）。
-执行单元（子 agent 内层循环 / 护城河落盘）由 ToolLoop 注入，
+执行单元（子 agent 内层循环 / L2 状态落盘）由 ToolLoop 注入，
 本层零领域逻辑（设计 doc/plans/multi-agent-redesign-2026-09-13.md §2）。
 """

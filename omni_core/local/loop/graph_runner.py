@@ -202,7 +202,7 @@ class GraphRunnerMixin:
         # 模型按需调用 load_skill 工具加载完整指令（omni_core.tools.skill_tool.load_skill）。
         # 注：纪律文件（AGENTS.md）**不在此处**——F4.1b 起由 _run_via_sdk 统一在 run 起始
         # 读快照后并入 system 尾部（同样作用于子任务），此处不重复拼接。
-        # （K 系列记忆注入已随其代码退役；记忆轴按 TAM 移植重建，见 memory-rag-design。）
+        # （记忆注入按 TAM 移植重建，见 memory-rag-design。）
         # F2.4：主链墙钟对齐——取自 runtime.long_task.wallclock_sec（缺省 0=不检查）。
         # 与子任务墙钟（runtime.escalation.wallclock_sec，缺省 120s，worker 防打转）解耦。
         main_wallclock_sec = self._resolve_main_wallclock(budget, spec)

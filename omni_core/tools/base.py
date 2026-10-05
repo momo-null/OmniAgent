@@ -94,6 +94,7 @@ def function_tool(
     percept: Optional[str] = None,
     timeout: Optional[float] = None,
     risk: Optional[str] = None,
+    debug_kind: Optional[str] = None,
 ) -> Callable[[Callable], Callable]:
     """把业务函数注册为平级 tool 插件（**用 SDK 的 function_tool**）。
 
@@ -111,6 +112,8 @@ def function_tool(
         risk: S2 风险类别自声明——
             ``"exec"``（命令执行）/ ``"actuate"``（键鼠设备注入）/ ``"network"``
             （网络出站）。声明后执行前过前置门；未声明=纯/读（S1 漏斗仍生效）。
+        debug_kind: 调试旁路事件类别——声明后每次执行会向前端 Debug 面板
+            发一条该 kind 的事件（与 percept 同为元数据分发，内核零工具名字面量）。
 
     Usage::
         @function_tool(description="点击归一化坐标", unit="host", risk="actuate")
@@ -144,6 +147,8 @@ def function_tool(
         meta = {"percept": percept} if percept else {}
         if risk:
             meta["risk"] = risk
+        if debug_kind:
+            meta["debug_kind"] = debug_kind
         register_tool(ToolPlugin(
             name=tool.name, tool=tool, unit=unit, source=source, meta=meta,
         ))

@@ -1,10 +1,7 @@
 import axios from "axios";
 import type {
-  MemoryIndex,
   ProfileIndex,
   CharacterData,
-  RolloutsResponse,
-  RolloutDetail,
   ModelsIndex,
 } from "../types";
 
@@ -105,25 +102,6 @@ export const llmApi = {
 export const systemApi = {
   health: () => http.get("/health"),
   gpu: () => http.get("/api/system/gpu"),
-};
-
-// ── K1 全局长期记忆（/api/runtime/memory） ─────────────
-export const memoryApi = {
-  // 只读聚合：master 全文 + summary 字符数 + rollouts/已合并计数 + 注入开关
-  index: () => http.get<MemoryIndex>("/api/runtime/memory"),
-  // 回放列表（倒序，支持分页）
-  rollouts: (params?: { limit?: number; offset?: number }) =>
-    http.get<RolloutsResponse>("/api/runtime/memory/rollouts", params ? { params } : {}),
-  // 单条全文（含 trajectory 引用）
-  rollout: (taskId: string) =>
-    http.get<RolloutDetail>(`/api/runtime/memory/rollouts/${encodeURIComponent(taskId)}`),
-  // 用户直写唯一入口：覆盖 MEMORY.md 并服务端重生成 summary
-  update: (master: string) => http.put("/api/runtime/memory", { master }),
-  // 重置：清空 memory/ 全部产物（需 ?confirm=reset 由后端校验）
-  reset: () => http.delete("/api/runtime/memory?confirm=reset"),
-  // 删除单条 rollout（不回滚已合并内容）
-  deleteRollout: (taskId: string) =>
-    http.delete(`/api/runtime/memory/rollouts/${encodeURIComponent(taskId)}`),
 };
 
 // ── P0 用户画像（/api/runtime/profile） ─────────────

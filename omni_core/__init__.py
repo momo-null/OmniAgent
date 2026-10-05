@@ -1,4 +1,4 @@
-"""OmniAgent 内核包（L2 护城河 / 编排层）。
+"""OmniAgent 内核包（L2 框架外挂件 / 编排层）。
 
 M4 后的职责边界：
 - 本包是**通用 agent 内核**：编排（tool_loop）、两次选举/升级策略（orchestration）、

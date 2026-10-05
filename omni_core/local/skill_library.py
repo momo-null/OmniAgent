@@ -555,7 +555,7 @@ class SkillLibrary:
             return {"action": "promoted" if promoted else "updated",
                     "skill_name": existing.name, "promoted": promoted,
                     "success_count": existing.metadata.success_count}
-        # created 分支同样记账首次成功（否则 N=3 晋升门实际要 4 次成功才触发——
+        # created 分支同样记账首次成功（否则 N=3 门实际要 4 次成功才触发——
         # 首次成功从不计数的历史 bug，2026-10-04 宏轴复活时修正）
         candidate.record_success()
         self.save(candidate)
@@ -686,9 +686,21 @@ def validate_skill_summary(cand: Dict[str, Any], executed_tools: Any = ()) -> bo
 
 # ---------------------------------------------------------------------------
 # 生产者 · 结构化宏提取（skill.auto_distill 开关）
-# 原 Curator 第 9a 步（maybe_distill_skill）；2026-10-05 K 系列退役后拆出独立挂点，
+# maybe_distill_skill 独立挂点，
 # 由 ToolLoop 收尾（loop/finish.py）触发。开关默认关 → 不改变任何现有行为。
 # ---------------------------------------------------------------------------
+
+def _replay_allow_tools() -> set:
+    """回放硬重放白名单（config ``skill.replay_allow_tools``；缺省与 skill_tool 同款）。"""
+    try:
+        import config
+        raw = config.get_config("skill.replay_allow_tools", None)
+        if raw:
+            return {str(t).strip() for t in raw}
+    except Exception:
+        pass
+    return {"shell_exec", "read_file", "write_file", "list_dir", "search_content"}
+
 
 def maybe_distill_skill(task_id: str, brain_cfg: Optional[Dict[str, Any]],
                         success: bool, objective: str) -> Dict[str, Any]:
@@ -698,8 +710,8 @@ def maybe_distill_skill(task_id: str, brain_cfg: Optional[Dict[str, Any]],
     存 ``skills/``、经回放执行器消费；不进注入块。身份只用 entry_id 哈希（plan §2.6
     定案——缓存语义=同序列同宏；LLM 语义对齐即 hachimi 坑#2 假泛化，不启用）。
 
-    降级（宁严勿松）：无 brain / 任务未成功 / 步数 <2 / 标签 LLM 失败 / 校验不过
-    → 本轮不产出（返回 {"action": "skipped", "reason": ...}）。
+    降级（宁严勿松）：无 brain / 任务未成功 / 步数 <2 / 步骤不全在回放白名单 /
+    标签 LLM 失败 / 校验不过 → 本轮不产出（返回 {"action": "skipped", "reason": ...}）。
 
     Returns:
         promote_or_insert 结果 dict（action: created/updated/promoted…）或 skipped。
@@ -711,6 +723,11 @@ def maybe_distill_skill(task_id: str, brain_cfg: Optional[Dict[str, Any]],
     substeps = substeps_from_trajectory(task_id)
     if len(substeps) < 2:  # executed≥2 才建候选（plan §2.2，避坑#4 配额幻觉）
         return {"action": "skipped", "reason": "too_few_steps"}
+    # 回放白名单前置把关（宁严勿松）：步骤不全在白名单 → 回放时全部降级参考建议，
+    # 宏的回放价值为零，不值得产出缓存（开放式任务的监控循环在此被拦下）。
+    allow = _replay_allow_tools()
+    if allow and not all(s.tool in allow for s in substeps):
+        return {"action": "skipped", "reason": "not_replayable"}
     objective = str(objective or "").strip()
     labels = _skill_label_llm(brain_cfg, objective, substeps)
     if not isinstance(labels, dict):

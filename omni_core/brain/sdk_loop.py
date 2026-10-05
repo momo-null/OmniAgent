@@ -119,15 +119,49 @@ class OmniHooks(RunHooks):
     另挂 on_llm_end：每次模型响应 +1 模型调用计数（F1.2 指标回填）。
     """
 
-    def __init__(self, on_step: Optional[Callable[[str, Any], None]] = None, state: Any = None):
+    def __init__(self, on_step: Optional[Callable[[str, Any], None]] = None, state: Any = None,
+                 on_debug: Optional[Callable[[Any], None]] = None):
         self.on_step = on_step
         self._state = state
+        self.on_debug = on_debug
 
     async def on_tool_end(self, context, agent, tool, result) -> None:
         if self.on_step is None:
             return
         try:
             self.on_step(getattr(tool, "name", "?"), result)
+        except Exception:
+            pass
+
+    async def on_llm_start(self, context, agent, system_prompt, input_items) -> None:
+        """调试旁路：SDK 主链路的每次模型请求（旧 llm.py chat 埋点在 SDK 路径不触发）。
+
+        载荷只给预览与计数（system 头 800 字 / input 尾 6 条各 300 字），全量
+        prompt 不出内核。异常静默，绝不影响模型请求。
+        """
+        if self.on_debug is None:
+            return
+        try:
+            sys_p = system_prompt or ""
+            items = list(input_items or [])
+            tail = []
+            for it in items[-6:]:
+                if isinstance(it, dict):
+                    role = str(it.get("role") or it.get("type") or "?")
+                    content = it.get("content")
+                    s = content if isinstance(content, str) else json.dumps(
+                        content or it, ensure_ascii=False, default=str)
+                else:
+                    role = type(it).__name__
+                    s = str(it)
+                tail.append({"role": role, "chars": len(s), "preview": s[:300]})
+            self.on_debug("llm_request", {
+                "title": "LLM 请求",
+                "system_chars": len(sys_p),
+                "system_preview": sys_p[:800],
+                "input_count": len(items),
+                "input_tail": tail,
+            })
         except Exception:
             pass
 
@@ -1220,6 +1254,7 @@ def run_subtask_sdk(
     verify_fail_max: int = 3,
     should_stop: Optional[Callable[[], bool]] = None,
     on_step: Optional[Callable[[str, Any], None]] = None,
+    on_debug: Optional[Callable[[Any], None]] = None,
     on_state: Optional[Callable[[str], None]] = None,
     compress_after: int = 0,
     summarize: Optional[Callable[[List[Any]], Optional[str]]] = None,
@@ -1313,7 +1348,7 @@ def run_subtask_sdk(
         if on_step is not None:
             on_step(tool, result)
 
-    hooks = OmniHooks(_hook, state=state)
+    hooks = OmniHooks(_hook, state=state, on_debug=on_debug)
     should_stop = should_stop or (lambda: False)
     started = time.time()
 

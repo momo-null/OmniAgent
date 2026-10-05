@@ -56,6 +56,7 @@ def skill_load_limit() -> int:
     description=("按名称加载技能的完整指令（正文引导；无正文时返回脱敏动作序列）。"
                  "仅当技能目录摘要不足以指导执行时调用。"),
     unit="skill",
+    debug_kind="skill_call",
 )
 def load_skill(skill_name: str) -> Dict[str, Any]:
     """加载指定技能的完整指令内容（playbook 文字引导优先，空则回退脱敏动作序列）。
@@ -151,6 +152,7 @@ def _clip_result(result: Any, limit: int = 2000) -> Any:
     description=("按关键词检索可复用技能（匹配名称/描述/标签），返回摘要列表。"
                  "执行详情用 load_skill 加载；动作序列回放用 replay_skill。"),
     unit="skill",
+    debug_kind="skill_call",
 )
 def search_skill(query: str, limit: int = 5) -> Dict[str, Any]:
     """关键词检索技能（发现层；不参与技能身份判定）。
@@ -203,6 +205,7 @@ def search_skill(query: str, limit: int = 5) -> Dict[str, Any]:
     description=("按名称回放技能的动作序列：白名单内确定性工具按序硬重放（每步照常"
                  "过安全审批），白名单外步骤（如 GUI 坐标类）降级为参考建议返回。"),
     unit="skill",
+    debug_kind="skill_call",
 )
 def replay_skill(skill_name: str) -> Dict[str, Any]:
     """回放执行器：可重放宏的价值 = 回放省步。

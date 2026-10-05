@@ -18,7 +18,6 @@ import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import BugReportIcon from "@mui/icons-material/BugReport";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import CheckIcon from "@mui/icons-material/Check";
@@ -31,8 +30,8 @@ import { useTaskStore } from "../../store/taskStore.tsx";
 import ScrollArea, { THUMB_RIGHT, THUMB_WIDTH } from "../../components/ScrollArea.tsx";
 import Markdown from "../../components/Markdown.tsx";
 import ModelPicker from "../../components/ModelPicker.tsx";
+import DebugPanel from "../../components/DebugPanel.tsx";
 import type { ChatMsg, ProcessItem, ApprovalCardInfo, ModelsIndex } from "../../types";
-import type { DebugLog } from "../../store/taskStore";
 import { characterApi, modelCatalogApi, settingsApi } from "../../api/client";
 
 // 选中模型的本地兜底：后端目录为准，本地只用于首屏即时显示（切换后由后端 defaults 持久化）
@@ -391,74 +390,6 @@ const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false
   );
 });
 
-function kindColor(kind: string): "default" | "primary" | "secondary" | "error" | "success" | "warning" {
-  if (kind === "llm_error") return "error";
-  if (kind === "llm_response") return "success";
-  if (kind === "llm_request") return "primary";
-  if (kind === "tool_result") return "primary";
-  if (kind === "task_init") return "secondary";
-  return "default";
-}
-
-function FieldRow({ k, v }: { k: string; v: unknown }) {
-  const [open, setOpen] = useState(false);
-  const str = typeof v === "string" ? v : JSON.stringify(v, null, 2);
-  // 长文本字段（prompt / content / arguments / error 等）默认折叠，点开看全量
-  if (typeof v === "string" && v.length > 200) {
-    return (
-      <Box sx={{ mt: 0.5 }}>
-        <Button size="small" sx={{ px: 0, py: 0, minWidth: 0 }} onClick={() => setOpen((o) => !o)}>
-          {k} {open ? "收起" : "展开"}
-        </Button>
-        {open && (
-          <Box component="pre" sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 12, maxHeight: 320, overflow: "auto", bgcolor: "action.hover", p: 1, borderRadius: 1, mt: 0.5 }}>
-            {str}
-          </Box>
-        )}
-      </Box>
-    );
-  }
-  return (
-    <Typography variant="caption" display="block" sx={{ wordBreak: "break-word" }}>
-      <b>{k}:</b> {str}
-    </Typography>
-  );
-}
-
-function LogRow({ log }: { log: DebugLog }) {
-  const [expanded, setExpanded] = useState(false);
-  const time = new Date(log.ts).toLocaleTimeString();
-  return (
-    <Box sx={{ mb: 1, p: 1, borderRadius: 1, bgcolor: "background.paper" }}>
-      <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
-        <Chip size="small" label={log.kind} color={kindColor(log.kind)} />
-        {log.role && <Chip size="small" label={log.role} variant="outlined" />}
-        <Typography variant="caption" color="text.secondary">{time}</Typography>
-        <IconButton size="small" sx={{ ml: "auto", py: 0 }} onClick={() => setExpanded((v) => !v)}>
-          {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-        </IconButton>
-      </Stack>
-      <Typography variant="body2" sx={{ mt: 0.5 }}>{log.title}</Typography>
-      {expanded && (
-        <Box sx={{ mt: 0.5 }}>
-          {/* 思考（推理链）置顶高亮，让「每轮 react」的 thought 一眼可见 */}
-          {log.kind === "llm_response" && typeof log.payload?.content === "string" && log.payload.content.trim() && (
-            <Box sx={{ mb: 0.5, p: 1, borderRadius: 1, bgcolor: "action.hover", borderLeft: "3px solid", borderColor: "success.main" }}>
-              <Typography variant="caption" color="success.main" sx={{ fontWeight: 600 }}>思考</Typography>
-              <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: 13, mt: 0.25 }}>
-                {log.payload.content}
-              </Typography>
-            </Box>
-          )}
-          {Object.entries(log.payload).map(([k, v]) => (
-            <FieldRow key={k} k={k} v={v} />
-          ))}
-        </Box>
-      )}
-    </Box>
-  );
-}
-
 export default function Chat() {
   const { messages, running, sendMessage, injectMessage, stopTask, debugLogs, clearDebugLogs, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval, taskObjectives } = useTaskStore();
   const [draft, setDraft] = useState("");
@@ -810,33 +741,15 @@ export default function Chat() {
       </Box>
 
       {/* 右：信息展示区（公共区域）。默认常驻 30px 纵向图标轨（Debug 置顶）；
-          点击展开为 420px 窗口面板，后续文件预览 / 可视化等展示窗口复用此格式 */}
+          点击展开为 420px 窗口面板，后续文件预览 / 可视化等展示窗口复用此格式。
+          Debug 面板是可整体删除的独立模块（components/DebugPanel.tsx + api/debugApi.ts） */}
       {logOpen ? (
-        <Box sx={{ width: 420, flexShrink: 0, borderLeft: "1px solid", borderColor: "divider", display: "flex", flexDirection: "column", minHeight: 0 }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ p: 1, flexShrink: 0 }}>
-            <Stack direction="row" spacing={0.5} alignItems="center">
-              <BugReportIcon fontSize="small" />
-              <Typography variant="subtitle2">Debug</Typography>
-            </Stack>
-          <Stack direction="row" spacing={0.5} alignItems="center">
-            <Button size="small" onClick={clearDebugLogs}>清空</Button>
-            <IconButton size="small" onClick={() => setLogOpen(false)} title="收起面板">
-              <ChevronRightIcon fontSize="small" />
-            </IconButton>
-          </Stack>
-          </Stack>
-          <ScrollArea sx={{ flexGrow: 1, minHeight: 0 }}>
-            <Box sx={{ px: 1, pb: 1, pr: 0.5 }}>
-            {debugLogs.length === 0 ? (
-              <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
-                暂无 Debug 日志。发送消息后，这里显示：任务下发 / 发给 LLM 的 prompt / 每轮 react（thought + action）。
-              </Typography>
-            ) : (
-              debugLogs.map((l: DebugLog, i: number) => <LogRow key={i} log={l} />)
-            )}
-            </Box>
-          </ScrollArea>
-        </Box>
+        <DebugPanel
+          logs={debugLogs}
+          onClear={clearDebugLogs}
+          onClose={() => setLogOpen(false)}
+          taskId={currentTaskId}
+        />
       ) : (
         <Box
           sx={{
