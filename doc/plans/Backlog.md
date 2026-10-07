@@ -66,6 +66,19 @@
     5. **前端待办清单投影**：实现 todo 元工具结果的前端清单视图。
     6. **顺序依赖测试基线（暂缓）**：单进程按序执行时，`TOOL_REGISTRY` 等进程级全局会造成污染；该问题不阻断当前功能，按用户决定不作为近期主线。
 
+### 上下文压缩 · 遗留项
+- 来源：`doc/plans/context-compression.md`（现行架构）
+- 待办：
+    1. **`compress_threshold` 调优**：估算口径修正（CJK 每字 1 token）后，实际触发点已回到
+       真实 token 量级（22.5 万估算 ≈ 22.5 万真值）；建议先真机观察一轮再决定是否调低。
+    2. **状态质量层（非降本项）**：state_text 填充面窄（仅声明 `percept="state"` 的工具触发
+       `world.update`，非 GUI 任务恒「(无)」）；facts 无模型可用写入方（唯一自动写入是压缩
+       事件的 `[压缩提取]`，`add_fact` 未暴露为工具）；world.objective 每 run 被本轮输入无条件
+       覆盖（F2.1 设计；task.json objective 仅空时自动命名，不受影响）。定位：修续跑/跨轮的
+       状态质量，是「摘要层替代重放」的前置。
+    3. **mcp-filter（工具 schema 裁剪）**：仓库无实现；当前 1 个 MCP server 但工具数多 →
+       用户单独验证、单独处理。
+
 ### 性能与体验优化 · 剩余项
 - 待办/观察：
     1. **O6 收紧子 agent 上下文**：`omni_core/local/loop/graph_runner.py` 的 `_exec_runtime_ctx` 仍注入 `global_skills_dir`，`omni_core/brain/prompt.py` 仍渲染该字段。是否让 worker 只保留 `task_dir` / `task_skills_dir` 尚待设计拍板。

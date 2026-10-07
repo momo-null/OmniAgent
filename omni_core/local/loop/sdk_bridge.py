@@ -83,12 +83,18 @@ class SdkBridgeMixin:
         M4b.1: 压缩后将关键进展 merge_progress 回 world-model facts（防 JPEG 效应）。
         M8: 带 ``source``（分支标识）写入，使共享黑板上的压缩产物可溯源。
         """
+        from omni_core.brain.sdk_loop import SUMMARY_INSTRUCTION
+
         flat = []
         for t in old_turns:
             for m in t:
                 content = m.get("content")
                 if content is None and m.get("tool_calls"):
                     content = "<tool_call>"
+                # 八段摘要指令经下方 system prompt 下发（与 _CompactionModel 同一口径）；
+                # _CompactionModel 追加的同名指令消息不重复进待压正文
+                if content == SUMMARY_INSTRUCTION:
+                    continue
                 flat.append(f"[{m.get('role', '?')}] {content or ''}")
         text = "\n".join(flat)
         # T3.2：热前缀——把当前系统提示并入待压缩文本，使摘要贴合当前任务上下文
@@ -99,8 +105,7 @@ class SdkBridgeMixin:
             try:
                 reply = brain.chat(
                     [
-                        {"role": "system", "content": "你是上下文压缩器。把以下多轮交互压成一段简短中文摘要，"
-                         "保留：任务目标、已完成动作、关键屏幕状态、未决问题，不超过150字。"},
+                        {"role": "system", "content": SUMMARY_INSTRUCTION},
                         {"role": "user", "content": text},
                     ],
                     tools=None,

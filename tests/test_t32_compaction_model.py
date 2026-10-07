@@ -297,3 +297,35 @@ def test_on_compact_exception_never_breaks_request():
     items = _msgs(10)
     _invoke(model, items)                      # 不抛异常即通过
     assert inner.calls[0]["input"][0]["content"].startswith("[历史压缩摘要]")
+
+
+# --- 9. 摘要指令统一：_compress_history 以八段指令为 system prompt -------------
+def test_compress_history_uses_summary_instruction_and_strips_duplicate():
+    """摘要指令单一口径：_compress_history 的 system prompt = 八段 SUMMARY_INSTRUCTION；
+    _CompactionModel 追加的同名指令消息被剔除，不重复混进待压正文。"""
+    from omni_core.brain.llm import BrainReply
+    from omni_core.local.loop.sdk_bridge import SdkBridgeMixin
+
+    seen = {}
+
+    class _Brain:
+        def chat(self, messages, tools=None, tool_choice="auto"):
+            seen["msgs"] = messages
+            return BrainReply(content="1. 任务目标：无\n2. 已完成动作：无")
+
+    class _Bridge:
+        brain_long_task = {"compress": True}
+
+        def _log(self, *a, **k):
+            pass
+
+    turns = [[{"role": "user", "content": "旧上下文一行"},
+              {"role": "user", "content": SUMMARY_INSTRUCTION}]]
+    out = SdkBridgeMixin._compress_history(_Bridge(), _Brain(), turns)
+    system_msg, user_msg = seen["msgs"][0], seen["msgs"][1]
+    assert system_msg["role"] == "system" and system_msg["content"] == SUMMARY_INSTRUCTION
+    assert "150字" not in system_msg["content"]
+    assert "关键屏幕状态" not in system_msg["content"]
+    assert SUMMARY_INSTRUCTION not in user_msg["content"]
+    assert "旧上下文一行" in user_msg["content"]
+    assert out[0]["content"].startswith("[历史压缩摘要]")
