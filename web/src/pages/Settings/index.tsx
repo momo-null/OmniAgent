@@ -572,9 +572,52 @@ function CompanionTab() {
         sx={{ mb: 2, minHeight: 36, "& .MuiTab-root": { minHeight: 36, py: 0.5, fontSize: 13 } }}>
         <Tab label="角色" />
         <Tab label="画像" />
+        <Tab label="记忆" />
       </Tabs>
       {sub === 0 && <CharacterTab />}
       {sub === 1 && <ProfileTab />}
+      {sub === 2 && <MemoryTab />}
+    </Box>
+  );
+}
+
+// 「伙伴 → 记忆」子 Tab：记忆轴总开关（runtime.knowledge.memory.enabled）。
+// 单一总闸 = TAM 语义：关 = 不记录（L1 提炼 / L2 场景维护）也不再注入；历史数据保留。
+function MemoryTab() {
+  const [enabled, setEnabled] = useState<boolean>(false);
+  const [loaded, setLoaded] = useState(false);
+  const [saved, setSaved] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    settingsApi.get().then((r) => {
+      const d = r.data as any;
+      const v = d?.runtime?.knowledge?.memory?.enabled;
+      if (typeof v === "boolean") setEnabled(v);
+    }).catch(() => {}).finally(() => setLoaded(true));
+  }, []);
+  const save = async (v: boolean) => {
+    setError(""); setSaved("");
+    try {
+      await settingsApi.put({ runtime: { knowledge: { memory: { enabled: v } } } });
+      setSaved("已保存");
+    } catch (e) { setError((e as Error).message); }
+  };
+  return (
+    <Box>
+      <Typography variant="subtitle2" gutterBottom>记忆</Typography>
+      <Stack spacing={2} sx={{ maxWidth: 480 }}>
+        <FormControlLabel control={
+          <Switch disabled={!loaded} checked={enabled}
+            onChange={(e) => { const v = e.target.checked; setEnabled(v); void save(v); }} />}
+          label={<LabelWithTip text="记忆轴总开关 (runtime.knowledge.memory.enabled)"
+            desc="单一总闸，管记忆全链路：开启后任务收尾提炼记忆（L1 atoms）、整理场景块（L2）、并把记忆/画像注入后续任务的系统提示；关闭后不记录、不维护、不注入。已产生的记忆数据保留，重新打开即恢复消费。" />} />
+        <Alert severity="info">
+          关闭 = 不记录也不再注入，<code>~/.omniagent/</code> 下已产生的记忆数据不会删除；
+          检索记忆另有池子门槛（≥20 条前零注入）。保存后即时生效（下次 run 起按新开关运行）。
+        </Alert>
+        {saved && <Alert severity="success" onClose={() => setSaved("")}>{saved}</Alert>}
+        {error && <Alert severity="error" onClose={() => setError("")}>{error}</Alert>}
+      </Stack>
     </Box>
   );
 }

@@ -161,6 +161,45 @@ class TestKeyMasking:
             assert k not in brain
 
 
+# === 记忆轴总开关（设置页「伙伴 → 记忆」数据源） ===
+class TestMemoryGate:
+    def test_memory_gate_roundtrip(self, client, monkeypatch, tmp_path):
+        """runtime.knowledge.memory.enabled：GET 出缺省骨架，PUT 打开持久化并可回读；
+        关闭 = 与出厂默认相同 → 差集被剪掉，生效值回退 False（不残留旧值）。"""
+        from omni_core.local import runtime_paths as P
+        monkeypatch.setattr(P, "_GLOBAL", tmp_path / ".omniagent")
+        P.ensure_global_dirs()
+
+        import config
+        config._config_cache = {}
+        config._settings_cache = {}
+
+        # 无用户配置 → GET 出缺省骨架（False）
+        g = client.get("/api/settings")
+        assert g.status_code == 200
+        assert g.json()["runtime"]["knowledge"]["memory"]["enabled"] is False
+
+        # 打开 → 持久化到用户 settings 并回读 True
+        r = client.put("/api/settings",
+                       json={"runtime": {"knowledge": {"memory": {"enabled": True}}}})
+        assert r.status_code == 200
+        config._config_cache = {}
+        config._settings_cache = {}
+        g2 = client.get("/api/settings")
+        assert g2.json()["runtime"]["knowledge"]["memory"]["enabled"] is True
+        saved = config.load_settings()
+        assert saved["runtime"]["knowledge"]["memory"]["enabled"] is True
+
+        # 关闭 → 与出厂默认相同被剪掉，生效值回退 False
+        r2 = client.put("/api/settings",
+                        json={"runtime": {"knowledge": {"memory": {"enabled": False}}}})
+        assert r2.status_code == 200
+        config._config_cache = {}
+        config._settings_cache = {}
+        g3 = client.get("/api/settings")
+        assert g3.json()["runtime"]["knowledge"]["memory"]["enabled"] is False
+
+
 # === M3 工具插件层枚举（前端 Skills&Tools 面板数据源） ===
 class TestToolsEndpoint:
     def test_tools_lists_three_classes(self, client):
