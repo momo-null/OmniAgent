@@ -23,7 +23,7 @@
   （skill 提取链修订：录像式机械转录整链已于 2026-10-03 A9 删除；2026-10-04 skill 轴以**可重放宏缓存**形态保留但默认关闭——结构化提取 + 回放执行器，`skill.auto_distill` 默认关，有效性验证未做，见下。）
 
 **尚未验证（诚实边界）**
-- 记忆轴处于**重构期**：新管线按 **TencentDB Agent Memory** 移植重建（设计见 `doc/plans/memory-rag-design.md`），有效性验证未开始。
+- 记忆轴已按 **TencentDB Agent Memory** 移植重建（现行架构见 `doc/plans/memory-architecture.md`），机制已真机验证，长期有效性观察中。
 - **skill 宏轴（2026-10-04 保留，默认关）有效性未验证**：早期真机试点已收口——机制层跑通（蒸馏链 5/5 成功、entry_id 精确分结构），但**注入技能序列零步数收益**（Δsteps=0，简单 UI 任务）⇒ 价值全系于回放执行器（跳过每步 LLM 决策），收益 A/B 待在 Omni 上以脚本化 / 确定性工具链场景补测；`skill.auto_distill` 默认关。
 - 单域、小样本，非生产级。
 - skill 驱动的角色化团队（team-mode）**规划中**：将复用派发底座的 `agent` 字段与执行单元注册表（见 `doc/plans/`），尚未实现。
@@ -75,7 +75,7 @@
 
 ## 架构速览
 
-两层 + Escalation 的通用 Agent Runtime：`Brain（在线规划）` → `Tool Runtime（SDK Runner 内层循环 + LangGraph 编排）` → `tool 插件层（device / vision / python / mcp 平级）` → `执行后端（devices/，L1，内核外）` → `Environment`。知识层旁路：`技能库 + 用户画像 + AGENTS.md 纪律 → 注入消费`（记忆轴按 TencentDB Agent Memory 移植重建中，见 `doc/plans/memory-rag-design.md`）。
+两层 + Escalation 的通用 Agent Runtime：`Brain（在线规划）` → `Tool Runtime（SDK Runner 内层循环 + LangGraph 编排）` → `tool 插件层（device / vision / python / mcp 平级）` → `执行后端（devices/，L1，内核外）` → `Environment`。知识层旁路：`技能库 + 用户画像 + AGENTS.md 纪律 → 注入消费`（记忆轴已按 TencentDB Agent Memory 移植重建，现行架构见 `doc/plans/memory-architecture.md`）。
 
 > 全部架构图（分层框架 / MCP 解耦 / ReAct 闭环 / Vision SoM / 知识层（TAM）/ 两层执行 Escalation / 上下文管理 / 持久化检查点 / Project-Task 模型 / 前端设计）见 **架构设计 N1–N10**。
 
@@ -139,7 +139,7 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
   (Skill-chain revision: the mechanical-transcription chain was deleted on 2026-10-03 (A9); on 2026-10-04 the skill axis was retained as a **replayable macro cache** — default off — with structural extraction + replay executor, `skill.auto_distill` off by default, effectiveness unverified, see below.)
 
 **Not yet verified (honest caveat)**
-- The **memory axis is under reconstruction**: the new pipeline is a direct port of **TencentDB Agent Memory** (design in `doc/plans/memory-rag-design.md`). Effectiveness validation has not started.
+- The **memory axis** is a direct port of **TencentDB Agent Memory** (current architecture in `doc/plans/memory-architecture.md`); the mechanism is live-verified, long-term effectiveness under observation.
 - **Skill macro axis (retained 2026-10-04, default off) effectiveness unverified**: an early real-device pilot closed with the mechanism validated end-to-end (distillation chain 5/5 runs, entry_id correctly distinguishing structural variants) but **zero step savings from injecting the skill sequence** (Δsteps=0 on a simple UI task) ⇒ value hinges entirely on the replay executor (skipping per-step LLM decisions); the A/B is still pending on Omni in scripted / deterministic-toolchain scenarios; `skill.auto_distill` is off by default.
 - Single domain, small sample size; not production-grade.
 - A skill-driven role-based team (team-mode) is **planned**: it will reuse the dispatch foundation's `agent` field and executor registry (see `doc/plans/`); not yet implemented.
@@ -191,7 +191,7 @@ Seven non-negotiable principles — the basis for all technical choices and a "s
 
 ## Architecture Overview
 
-A two-tier + Escalation general-purpose agent runtime: `Brain (online planning)` → `Tool Runtime (SDK Runner inner loop + LangGraph orchestration)` → `tool plugin layer (device / vision / python / mcp, all peers)` → `execution backend (devices/, L1, outside the kernel)` → `Environment`. Knowledge-layer side path: `skill library + user profile + AGENTS.md discipline → injection` (the memory axis is being re-built as a TencentDB Agent Memory port, see `doc/plans/memory-rag-design.md`).
+A two-tier + Escalation general-purpose agent runtime: `Brain (online planning)` → `Tool Runtime (SDK Runner inner loop + LangGraph orchestration)` → `tool plugin layer (device / vision / python / mcp, all peers)` → `execution backend (devices/, L1, outside the kernel)` → `Environment`. Knowledge-layer side path: `skill library + user profile + AGENTS.md discipline → injection` (the memory axis is a TencentDB Agent Memory port, current architecture in `doc/plans/memory-architecture.md`).
 
 > All architecture diagrams (layered framework / MCP decoupling / ReAct loop / Vision SoM / knowledge layer (TAM) / two-tier execution escalation / context management / persistence checkpoints / Project-Task model / frontend design) are in **Architecture Design N1–N10**.
 

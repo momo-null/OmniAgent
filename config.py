@@ -264,7 +264,7 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
             "instructions_limit": 8192,
         },
     },
-    # 知识层（TAM 移植重建中，memory-rag-design.md / tam-porting-map.md）
+    # 知识层（TAM 移植；现行架构见 doc/plans/memory-architecture.md）
     "knowledge": {
         # 记忆检索注入 gate（memory_tam；池子 ≥20 条前零注入）
         "memory": {"enabled": False},

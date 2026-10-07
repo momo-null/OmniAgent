@@ -48,7 +48,10 @@
 ### 画像/角色卡/记忆 · 遗留项
 - 来源：`doc/plans/memory-architecture.md`
 - 待办：
-    1. **检索层 / RAG**（§0）：设计已立（2026-10-04，`doc/plans/memory-rag-design.md`——仅 memory 轴，skill 严格排除、两轴正交是硬约束；参照 TencentDB Agent Memory 的本地 SQLite/FTS5 形态与三预算口径）。**触发条件**：project fact_index + 全局 MEMORY.md 合计 > 100 条，或注入预算出现可观截断——满足前不动工（早期试点实测：池子 1 条时排序无差别）。落地切片：S1 FTS5 → S2 向量臂 → S3 RRF+三预算，每步独立可回退。
+    1. **检索升级（向量臂 + RRF）**：现行 L1 为 FTS5 字面召回，升级路径与硬约束见
+       `doc/plans/memory-architecture.md` §2.2。**触发条件**：两库 atoms 合计 > 100
+       或出现实测漏召回（同义改写查不到已存事实）——满足前不动工（早期试点实测：
+       池子 1 条时排序无差别）。
     2. **多角色记忆档位 1-3**（§5.3）：档位 1 = per-role 记忆隔离（`memory/roles/<role>/`，
        低复杂度按需启用）；档位 2 = 记忆膨胀后轻量检索（SQLite + sqlite-vec）；档位 3 = 真
        多 agent 运行时。设计先行、均为增量可逆，启用时机 = 需要角色各自持久记忆 / 模型成本显著下降。

@@ -127,14 +127,14 @@
 
 ---
 
-### 6.4 记忆轴（TAM 移植重建中）
+### 6.4 记忆轴（TAM 移植）
 
 > 旧的记忆维护管线（含 rollouts / MEMORY.md
 > 常驻注入 / 稳态收敛 / 信号体系）**已于 2026-10-05 整体退役删除**——其判据体系从未完成
-> 验证，历史文档已移除。记忆轴现按开源项目 **TencentDB Agent Memory（TAM）** 直接移植
-> 重建：设计见 `doc/plans/memory-rag-design.md`（SQLite+FTS5 分层存储 / LLM 提炼 atoms /
-> duplicate-merge-independent 三态判重 / 分层检索 + 三预算 + LLM 终审注入）。
-> 重建完成前，本节不描述任何已实现的记忆行为。
+> 验证，历史文档已移除。记忆轴现按开源项目 **TencentDB Agent Memory（TAM）** 直接移植：
+> L0 会话 → L1 atoms（SQLite+FTS5 双库 / LLM 提炼 / duplicate-merge-independent
+> 三态判重）→ L2 场景块（agent 循环整理）→ L3 用户画像；机制与注入面见
+> `doc/plans/memory-architecture.md`（唯一事实源）。
 
 **红线（继承不变）**：内核零场景硬编码；任何语义判断不得写成规则+参数（无模型时降级为
 「不判断」，绝不猜）。
