@@ -1,4 +1,4 @@
-"""L2 场景执行器 + 收尾意图门 真机验证(真实端点,deepseek-v4-flash-vision=main 槽位)。
+"""L2 场景执行器 + 收尾意图门 真机验证(真实端点,取 main 槽位当前配置模型)。
 
 覆盖单测测不到的四件事:
   S1 场景维护真实 agent 循环:真实多轮 scene_read/scene_write、META 落盘、索引同步;

@@ -128,6 +128,11 @@ agent(大脑)──通过──→ 任务执行 → 轨迹落盘 → 蒸馏/整�
 
 背景:畸形调用表现为「文本被当普通输出、调用根本不派发」,而 oneshot 语义会把
 纯文本收尾判成功 → 任务静默假成功。
+根源(2026-10-07 同目标 A/B 定案,模型侧格式泄漏):弱模型(某第三方聚合渠道的
+推理模型)在「长叙述正文 + 并行调用意图」形态下把调用序列写成普通文本 token,
+服务端只认特殊 token id → 原样透传;官方端点同族模型同任务零发作。已排除:
+记忆注入(零注入也发作)、截断(调用块完整)、并行调用压垮解析器(纠正轮并行
+调用解析正常)。意图门纠正重试是唯一恢复通道(实测 2/2)。
 
 - **触发点**:`sdk_loop` 方案 B 分支——纯文本收尾且 `verify_done()` 走
   「无校验条件,信任大脑」路径、即将判成功**之前**;仅 oneshot 成功路径
@@ -182,7 +187,7 @@ agent(大脑)──通过──→ 任务执行 → 轨迹落盘 → 蒸馏/整�
 
 | 键 | 缺省 | 作用 |
 |---|---|---|
-| `runtime.knowledge.memory.enabled` | False | 记忆/场景注入与 L2 维护总 gate |
+| `runtime.knowledge.memory.enabled` | False | 记忆/场景注入与 L2 维护总 gate(设置页「伙伴 → 记忆」可开关) |
 | `runtime.knowledge.profile.enabled` | True | 画像注入 |
 | `runtime.long_task.finish_intent_check` | True | 收尾意图门 |
 | `knowledge.profile.auto_maintain` | True | 画像自动蒸馏 |

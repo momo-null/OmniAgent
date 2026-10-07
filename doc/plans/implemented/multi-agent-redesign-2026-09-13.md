@@ -19,7 +19,7 @@
 | D2 | 默认单 agent | 默认单 agent 跑完整任务；只有复杂任务（技能决策、长耗时并行读取/远程调用）才由主 agent 分发给并行子 agent。 |
 | D3 | 并行方式 | LangGraph `Send` 扇出（方案 a）。 |
 | D4 | 本地模型 | 本地模型以 **tool** 形态注入，带明确边界声明（含"不适合"场景），由主 LLM 决定是否派发推理/视觉。 |
-| D5 | 三态废弃 | `runtime.mode: dual / online_only / local_only` **取消**。这里只是多模型接入：主模型可配在线（deepseek/glm…）也可配本地；本地模型另立一份配置专供 tool 使用，带 `vision` 开关。 |
+| D5 | 三态废弃 | `runtime.mode: dual / online_only / local_only` **取消**。这里只是多模型接入：主模型可配在线（任意 OpenAI 兼容渠道）也可配本地；本地模型另立一份配置专供 tool 使用，带 `vision` 开关。 |
 | D6 | 软注入保真 | 必须保留"不打断当前 turn 的注入"语义（超长任务刚需），走 LangGraph `update_state` + checkpointer，不自研队列。 |
 | D7 | **A2** | 长任务节奏控制本版只做两项：**T2 预算感知提示**（新增）+ **T1 压缩产物归黑板**（改造）。T3 并行检查点、T1 的 token 级阈值留到后续里程碑。 |
 | D8 | **ii** | 共享黑板 = **WorldModel**（agent 间共享认知）；子任务"领取/状态机"= **TaskStore**（已有锁 + 原子写 + 白名单 update）。 |
