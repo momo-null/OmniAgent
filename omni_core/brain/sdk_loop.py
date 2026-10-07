@@ -415,64 +415,12 @@ class _CompactionModel(Model):
             yield chunk
 
 
-class _TailInjectModel(Model):
-    """F4.2：尾部重插——把记忆块追加到「压缩后」的本次请求 input 尾部。
-
-    注：F4.1b 起**纪律文件（AGENTS.md）不再走本路径**，改为 run 起始并入 system
-    prompt（缓存命中 + 覆盖语义正确）；本包装只承载 memory 这类「增长内容」。
-
-    关键约束（与 _CompactionModel / _BudgetHintModel 同范式）：
-    - **只改本次请求入参副本**：每次都构造新的 input 列表，不写回 SDK items
-      → 会话历史（items）不因注入增长；
-    - **发生在压缩之后**：本包装位于压缩内层（最接近真实模型），压缩先跑、本块后追加，
-      故注入内容不参与压缩、不会被摘要吞掉；
-    - 无块时零干预（透传，逐字节与现状一致）。
-
-    来源层级与字符数通过 ``on_inject`` 回调上报一次（落轨迹 metrics）。
-    """
-
-    def __init__(
-        self,
-        inner: Model,
-        block: str,
-        layers: Optional[List[str]] = None,
-        on_inject: Optional[Callable[[int, List[str]], None]] = None,
-    ):
-        self._inner = inner
-        self._block = block or ""
-        self._layers = list(layers or [])
-        self._on_inject = on_inject
-        self._reported = False
-
-    def _inject(self, args: tuple, kwargs: Dict[str, Any]):
-        if not self._block:
-            return args, kwargs
-        msg = {"role": "user", "content": self._block}
-        if "input" in kwargs:
-            return args, {**kwargs, "input": list(kwargs["input"]) + [msg]}
-        if len(args) >= 2:
-            return (args[0], list(args[1]) + [msg]) + tuple(args[2:]), kwargs
-        return args, kwargs
-
-    def _report_once(self) -> None:
-        if self._reported or self._on_inject is None or not self._block:
-            return
-        self._reported = True
-        try:
-            self._on_inject(len(self._block), list(self._layers))
-        except Exception:
-            pass
-
-    async def get_response(self, *args: Any, **kwargs: Any) -> Any:
-        self._report_once()
-        args, kwargs = self._inject(args, kwargs)
-        return await self._inner.get_response(*args, **kwargs)
-
-    async def stream_response(self, *args: Any, **kwargs: Any) -> Any:
-        self._report_once()
-        args, kwargs = self._inject(args, kwargs)
-        async for chunk in self._inner.stream_response(*args, **kwargs):
-            yield chunk
+# 注：_TailInjectModel（尾部每步重发记忆块）已于 2026-10-07 TAM 对齐时移除——
+# 静态内容每步重发 = 每步强化（反复 priming），是生成退化（工具调用写成 DSML 文本）
+# 的相关因素，形态亦偏离参照系 TAM（stable/dynamic 拆分 + 渐进披露）。现行形态：
+# 稳定段进 system prompt（run 开始读一次锁定）、L1 检索段 run 开始一条 user 消息、
+# L2 全文按需 read_scene 工具读取。见 doc/plans/memory-architecture.md §5；
+# **不要**重新引入本类或任何「每步请求追加固定内容」的 Model 包装（review_lint 红线）。
 
 
 def _is_tool_failure(result: Any) -> bool:
@@ -942,6 +890,10 @@ def _attach_partial_items(exc: BaseException, result: Any) -> None:
 _SUSPECT_NO_CALL_CHARS = 200
 _SUSPECT_PREVIEW_CHARS = 300
 
+# 收尾意图门：纯文本收尾判成功前的 LLM 语义复核次数上限（超限按原语义放行——
+# 防死循环,有界 while 兜底;判断本身在 sdk_bridge 注入的 judge 里,零格式字面量）
+_FINISH_INTENT_MAX = 2
+
 
 def _log_suspect_tool_call_text(text: str) -> None:
     if not text or len(text) < _SUSPECT_NO_CALL_CHARS:
@@ -1201,9 +1153,6 @@ def _assemble_agent_stack(
     allow_dispatch: bool,
     todo_store: Any,
     available_slots: Optional[List[str]] = None,
-    tail_inject_block: str,
-    tail_inject_layers: Optional[List[str]],
-    on_inject: Optional[Callable[[int, List[str]], None]],
     budget_hint_ratio: float,
     max_input_tokens: int,
     compress_threshold: float,
@@ -1221,17 +1170,15 @@ def _assemble_agent_stack(
 ) -> Tuple[SubtaskState, Any, Any, bool, Optional[_RepeatGuard]]:
     """装配子任务的模型包装链 + `Agent` 实例，并连接 MCP（由 run_subtask_sdk 抽出，零逻辑改动）。
 
-    包装链自内向外：尾部重插（记忆块）→ 预算提示 → 重复失败防护 → 粘性压缩 → 输出截断。
+    包装链自内向外：预算提示 → 重复失败防护 → 粘性压缩 → 输出截断
+    （记忆注入不走 Model 包装——稳定段在 instructions、检索段在起始 items，
+    见 doc/plans/memory-architecture.md §4/§5）。
     返回 ``(state, agent, model, use_compaction, _repeat_guard)`` 供后续块循环复用。
     """
     state = SubtaskState()
     # 收尾工具集（M7：允许派发时，dispatch 也触发收尾，好让编排层立刻扇出）
     stop_tools = ["task_done", "verify", "escalate"] + (["dispatch"] if allow_dispatch else [])
     model = _model_of(brain)
-    # F4.2：尾部重插（记忆块）——置于最内层（最接近真实模型），
-    # 确保压缩/保留先跑、本块后追加；只改本次请求副本，不落 SDK items（会话历史不增长）。
-    if tail_inject_block:
-        model = _TailInjectModel(model, tail_inject_block, tail_inject_layers, on_inject)
     if budget_hint_ratio > 0:
         model = _BudgetHintModel(model, state, max_steps, budget_hint_ratio)
     # T4.5（RG-1）：工具重复失败防护（默认 3 次，配置 0 = 关闭）
@@ -1304,11 +1251,12 @@ def run_subtask_sdk(
     wallclock_sec: float = 0.0,
     # F2.2：收尾语义——oneshot（缺省，纯文本收尾即 success）| daemon（纯文本汇报后 paused 等待续跑）
     task_mode: str = "oneshot",
-    # F4.2：尾部重插——**仅记忆块**（纪律文件 F4.1b 起已迁 system prompt），
-    # 非空时在压缩后追加到请求 input 尾部
-    tail_inject_block: str = "",
-    tail_inject_layers: Optional[List[str]] = None,
-    on_inject: Optional[Callable[[int, List[str]], None]] = None,
+    # TAM 对齐：L1 检索记忆 run 开始一条 user 消息（历史后、任务输入前），仅注入一次；
+    # 后续块由 to_input_list() 自然继承。稳定段（scene 导航/画像）在 instructions 里。
+    lead_in_message: str = "",
+    # 收尾意图门（Omni 加固）：纯文本收尾判「信任大脑」成功前的语义复核回调——
+    # 返回纠正消息则不判完成、继续跑；None 放行。由 sdk_bridge 注入（LLM 判断,零字面量）。
+    plain_finish_judge: Optional[Callable[[str], Optional[str]]] = None,
     # F4.1b：纪律文件 run 级快照（只读比对用；不改请求）+ 中途漂移告警回调
     instructions_snapshot: Any = None,
     on_instructions_drift: Optional[Callable[[List[str]], None]] = None,
@@ -1368,9 +1316,6 @@ def run_subtask_sdk(
         allow_dispatch=allow_dispatch,
         todo_store=todo_store,
         available_slots=available_slots,
-        tail_inject_block=tail_inject_block,
-        tail_inject_layers=tail_inject_layers,
-        on_inject=on_inject,
         budget_hint_ratio=budget_hint_ratio,
         max_input_tokens=max_input_tokens,
         compress_threshold=compress_threshold,
@@ -1424,9 +1369,13 @@ def run_subtask_sdk(
         if _c:
             items.append({"role": _r if _r in ("user", "assistant") else "user", "content": _c})
     # T2.4（O4'）：技能目录改为固定模板 User 消息，插在历史之后、本轮 user_input 之前；
-    # 记忆注入仍在 system（instructions），保持不变。
+    # L1 检索记忆（TAM 对齐）同为 run 开始一条 user 消息——置于技能目录之后、任务输入
+    # 之前（贴近当前任务，对齐 TAM「recall 结果 prepend 到 user prompt」）。两者都只在
+    # 起始 items 注入一次，后续块由 to_input_list() 自然继承，**不得**改回每步重发。
     if skill_catalog:
         items.append({"role": "user", "content": skill_catalog})
+    if lead_in_message:
+        items.append({"role": "user", "content": lead_in_message})
     items.append({"role": "user", "content": user_input})
 
     # chunk_turns 默认从 config 读取（runtime.chunk_turns，默认 50）；
@@ -1444,6 +1393,7 @@ def run_subtask_sdk(
     # 这里只做**只读比对**：run 中途文件被改动 → 告警（沿用快照，改动自下个 run 生效）。
     # 已告警过的变更集合只报一次，避免逐块刷屏。
     _drift_reported: set = set()
+    _finish_intent_nudges = 0  # 收尾意图门已纠正次数（run 级,限 _FINISH_INTENT_MAX）
     while max_steps is None or state.steps < max_steps:
         if should_stop():
             return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
@@ -1591,12 +1541,41 @@ def run_subtask_sdk(
             accepted, why = gate.verify_done()
             state.verify_fail = gate.verify_count
             if accepted:
-                state.done = True
-                # F2.2：daemon 模式纯文本收尾不触发 success 终态，改为 paused 等待续跑
-                if task_mode == "daemon":
-                    return _result(False, "daemon 模式汇报后暂停，等待唤醒", state.steps, False, "",
-                                   paused=True, llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
-                return _result(True, why or "模型已收尾，判定完成", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                # 收尾意图门（Omni 加固，TAM 无此机制；2026-10-07 决议：判断全 LLM、
+                # 零格式字面量）：「无校验条件，信任大脑」放行前，对纯文本收尾做一次
+                # 语义复核——若模型其实在尝试发起调用但未以结构化形式派发（畸形调用
+                # 表现为「文本被当普通输出、调用不派发」，曾致任务静默假成功），则不判
+                # 完成、回纠正消息继续跑。仅 oneshot 成功路径触发；每 run 限 2 次
+                # （超限按原语义放行，有界 while 兜底）；judge 未注入/异常 → fail-open。
+                if not gate.has_condition and plain_finish_judge is not None \
+                        and task_mode == "oneshot" and _finish_intent_nudges < _FINISH_INTENT_MAX:
+                    _finish_text = ""
+                    try:
+                        _finish_text = _parse_items(res)[1] or ""
+                    except Exception:
+                        _finish_text = ""
+                    try:
+                        _verdict = plain_finish_judge(_finish_text)
+                    except Exception:
+                        _verdict = None
+                    if _verdict:
+                        _finish_intent_nudges += 1
+                        items.append({"role": "user", "content": _verdict})
+                        # 不 return：落回 while 下一块，模型按纠正消息重试
+                    else:
+                        state.done = True
+                        # F2.2：daemon 模式纯文本收尾不触发 success 终态，改为 paused 等待续跑
+                        if task_mode == "daemon":
+                            return _result(False, "daemon 模式汇报后暂停，等待唤醒", state.steps, False, "",
+                                           paused=True, llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                        return _result(True, why or "模型已收尾，判定完成", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                else:
+                    state.done = True
+                    # F2.2：daemon 模式纯文本收尾不触发 success 终态，改为 paused 等待续跑
+                    if task_mode == "daemon":
+                        return _result(False, "daemon 模式汇报后暂停，等待唤醒", state.steps, False, "",
+                                       paused=True, llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                    return _result(True, why or "模型已收尾，判定完成", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
             # 有验证条件但未满足：不直接判失败，提示模型继续推进
             items.append({
                 "role": "user",

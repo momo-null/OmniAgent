@@ -5,17 +5,17 @@
 
 ## 待办
 
-### skill 宏轴 · 有效性验证（tam-porting-map §5）
-- 来源：`doc/plans/tam-porting-map.md` §5（skill 宏轴有效性验证）
+### skill 宏轴 · 有效性验证（memory-architecture.md §7.4）
+- 来源：`doc/plans/memory-architecture.md` §7.4（skill 宏轴有效性验证）
 - 状态：🟡 **实现已落地（2026-10-04 生产者于 2026-10-05 重接至任务收尾）；真机试点已收口——机制层跑通
   （蒸馏链 5/5 成功、entry_id 正确分结构），但注入技能形态零步数收益
   （Δsteps=0 负观测）**。⇒ 价值全系于 `replay_skill` 回放执行器（跳过每步 LLM 决策），不在注入参考。
 - 待办：
     1. **收益验证必须走回放口径**：A/B 对照中 B 组命中技能须实际调用 `replay_skill` 硬重放
-      （execution-verified），不得用"注入技能序列"当治疗臂——hachimi 已证该形态无可测收益。
-    2. **场景锚定确定性工具链 / 游戏脚本类**：shell/file 固定例程（LLM 跑通一次后程序化重放），
+      （execution-verified），不得用"注入技能序列"当治疗臂——早期试点已证该形态无可测收益。
+    2. **场景锚定确定性工具链 / 脚本化例程类**：shell/file 固定例程（LLM 跑通一次后程序化重放），
       不要用简单 UI 点屏任务（T2 类已证是收益最难点）。
-    3. 负结果纪律：连续 2 个任务集 B 不优于 A 即停手（沿用 hachimi 口径）；淘汰参数
+    3. 负结果纪律：连续 2 个任务集 B 不优于 A 即停手（沿用早期试点口径）；淘汰参数
       （`skill.evict_*`）待真机数据校准。
 
 ### 团队模式（Team Mode）· 角色型常驻子 agent
@@ -46,9 +46,9 @@
     3. **`security.deny_read_roots`**：可选的凭证目录读取黑名单 glob。读路径当前完全放开（S1 撤销后无读网关）；若凭证泄漏成为实际风险再立项。
 
 ### 画像/角色卡/记忆 · 遗留项
-- 来源：`doc/plans/implemented/profile-character-memory-design.md`
+- 来源：`doc/plans/memory-architecture.md`
 - 待办：
-    1. **检索层 / RAG**（§0）：设计已立（2026-10-04，`doc/plans/memory-rag-design.md`——仅 memory 轴，skill 严格排除、两轴正交是硬约束；参照 TencentDB Agent Memory 的本地 SQLite/FTS5 形态与三预算口径）。**触发条件**：project fact_index + 全局 MEMORY.md 合计 > 100 条，或注入预算出现可观截断——满足前不动工（hachimi 实测：池子 1 条时排序无差别）。落地切片：S1 FTS5 → S2 向量臂 → S3 RRF+三预算，每步独立可回退。
+    1. **检索层 / RAG**（§0）：设计已立（2026-10-04，`doc/plans/memory-rag-design.md`——仅 memory 轴，skill 严格排除、两轴正交是硬约束；参照 TencentDB Agent Memory 的本地 SQLite/FTS5 形态与三预算口径）。**触发条件**：project fact_index + 全局 MEMORY.md 合计 > 100 条，或注入预算出现可观截断——满足前不动工（早期试点实测：池子 1 条时排序无差别）。落地切片：S1 FTS5 → S2 向量臂 → S3 RRF+三预算，每步独立可回退。
     2. **多角色记忆档位 1-3**（§5.3）：档位 1 = per-role 记忆隔离（`memory/roles/<role>/`，
        低复杂度按需启用）；档位 2 = 记忆膨胀后轻量检索（SQLite + sqlite-vec）；档位 3 = 真
        多 agent 运行时。设计先行、均为增量可逆，启用时机 = 需要角色各自持久记忆 / 模型成本显著下降。
@@ -66,6 +66,6 @@
 ### 性能与体验优化 · 剩余项
 - 待办/观察：
     1. **O6 收紧子 agent 上下文**：`omni_core/local/loop/graph_runner.py` 的 `_exec_runtime_ctx` 仍注入 `global_skills_dir`，`omni_core/brain/prompt.py` 仍渲染该字段。是否让 worker 只保留 `task_dir` / `task_skills_dir` 尚待设计拍板。
-    2. **O2 外部工程侧编码**：RimWorld 桥接脚本 `mcp_call.py` 不在本仓库；其 UTF-8 统一需在外部工程完成。
+    2. **O2 外部工程侧编码**：外部桥接脚本不在本仓库；其 UTF-8 统一需在外部工程完成。
     3. **MCP `isError` 标记**：服务端异常文本可能伪装成业务观察返回；当前模型可自愈，维持观察，只有高频复现时才改 MCP 工具层。
 - 注：O7 空间层与上条「长任务优化」第 4 项为同一项，不重复列。

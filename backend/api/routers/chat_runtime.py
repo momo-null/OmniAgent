@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from omni_core.tools.base import TOOL_REGISTRY
 
 from backend.api.routers.helpers import (
     AGENT_MAIN,
@@ -10,7 +11,6 @@ from backend.api.routers.helpers import (
     Dict,
     List,
     Optional,
-    TOOL_REGISTRY,
     _config_hash,
     _cursor_lock,
     _ensure_outbox,
@@ -217,7 +217,8 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # 会话历史经 TaskSpec.history 单路注入（替代旧 prior_context，不再双重注入）。
 
         # ---- 执行任务：统一入口（主 agent，按需派发子 agent） ----
-        # F2.2：收尾语义来自 task.json（task_mode，缺省 oneshot；缺省行为不变）
+        # F2.2：收尾语义来自 task.json（task_mode，缺省 oneshot；缺省行为不变）。
+        # 闲聊/文本型任务的纯文本收尾判 success 是正常语义，不强制 daemon。
         _task_mode = str((_meta or {}).get("task_mode", "oneshot") or "oneshot")
         spec = TaskSpec(objective=last_user, done_when="",
                         task_id=task_id, project_id=None, max_steps=max_steps,
@@ -232,6 +233,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                                if (executor_cfg and executor_cfg.get("enabled")) else "回退主模型(brain)"),
             "max_steps": max_steps,
         })
+        result = None  # 防御：run_task 异常时 finally 仍能安全判 paused
         result = loop.run_task(spec)
         _reason = result.get("reason") or ""
         # TAM 记忆层:任务收尾触发提炼+判重+落库(buffer 里的本会话消息;异常静默)
@@ -291,11 +293,15 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         if rec is not None:
             rec.loop = None
         _finish_task(task_id, agent_id)
-        # 更新 task 状态为 done/failed（P1.4 任务状态机）
-        try:
-            _task_store().update(task_id, state="done")
-        except Exception:
-            pass
+        # daemon 纯文本汇报后 paused：本轮结束但任务保持活跃，等用户下条消息续跑，
+        # 不标 done（否则 chat 多轮会话被误判结束、无法续跑）。仅当 run_task 正常返回
+        # 且声明 paused 时跳过终态标记；异常/其它终态仍走原 done 收口。
+        if not (result and result.get("paused")):
+            # 更新 task 状态为 done/failed（P1.4 任务状态机）
+            try:
+                _task_store().update(task_id, state="done")
+            except Exception:
+                pass
 
 def _sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"

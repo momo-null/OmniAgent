@@ -23,9 +23,6 @@ from omni_core.local.skill_library import SkillLibrary
 from omni_core.local import llm_judge
 
 
-# 弱注入措辞（「相符即沿用」——只声明沿用条件，不淡化内容价值）
-_WEAKEN_HINT = "历史沉淀知识（与当前任务相符时沿用；不符时以实际观测为准）"
-
 _SUMMARY_TRUNCATE = 20000
 _PROFILE_TRUNCATE = 20000
 _CHARACTER_TRUNCATE = 20000
@@ -79,13 +76,15 @@ def load_character_text() -> str:
         return ""
 
 
-# --- F4.1b/F4.2：注入块组装（纪律文件 → system；辅助知识 → 会话流尾部） -----------
-# 放置原则（按「授权面 + 变更面」，2026-09-21 定论）：
+# --- 注入块组装（纪律文件 → system；记忆稳定段 → system；L1 检索段 → 起始 items） --------
+# 放置原则（按「授权面 + 变更面」，2026-09-21 定论；2026-10-07 TAM 对齐修订）：
 #   * 用户单写、run 内不变的**稳定纪律**（AGENTS.md）→ system prompt
 #     （缓存命中 + 覆盖语义正确「用户当轮指令覆盖一切」+ 注入面收敛）；
-#   * agent 自维护的**增长内容**（画像等）→ 会话流（尾部重插），可被压缩管控。
+#   * 记忆稳定段（scene 摘要导航 / 用户画像）→ system prompt（同上，TAM stable 段）；
+#   * L1 检索记忆 → run 开始一条 user 消息（TAM 动态段，每轮一次，不重发）；
+#   * L2 场景全文 → **不注入**，read_scene 工具按需读取（渐进披露）。
 _MEMORY_HEADER = (
-    "# 运行期知识（尾部注入）\n"
+    "# 运行期知识（注入）\n"
     "以下为运行期注入的辅助知识：与当前任务相符时沿用，不符时以实际观测为准；"
     "对 agent 只读，禁止写入或覆盖同名文件。"
 )
@@ -118,7 +117,7 @@ def compose_injection_block(parts: List[Tuple[str, str]], limit: int = 8192,
     """把 ``(来源标签, 文本)`` 分节拼接为注入块（块内标注来源层级），超限截断并标注。
 
     Args:
-        title: 块首标题；缺省用记忆块标题（尾部重插路径），纪律块传入 ``_AGENTS_HEADER``。
+        title: 块首标题；缺省用记忆块标题（辅助知识注入），纪律块传入 ``_AGENTS_HEADER``。
 
     Returns:
         ``(block_text, labels)``；无任何内容时返回 ``("", [])``（调用方据此零注入）。
@@ -196,35 +195,6 @@ def load_agents_snapshot(layers: List[Tuple[str, Any]], limit: int = 8192) -> Ag
     block, labels = compose_injection_block(parts, limit=limit, title=_AGENTS_HEADER)
     return AgentsSnapshot(block=block, labels=labels, layers=norm,
                           digests=digests, limit=int(limit or 0))
-
-
-def build_knowledge_block(memory_text: str, skills: List[Dict[str, Any]]) -> str:
-    """组装知识注入块；无内容返回空字符串（调用方自动跳过）。
-
-    输出携带「相符即沿用」措辞，技能条目统一格式化：名称 + 匹配规则 + 核心操作序列。
-    操作序列参数经归一化渲染（白名单：易变值不外显，type_text → <text>）。
-    """
-    memory_text = (memory_text or "").strip()
-    skills = skills or []
-    if not memory_text and not skills:
-        return ""
-
-    parts = [f"# 历史知识参考（{_WEAKEN_HINT}）", ""]
-    if memory_text:
-        parts.append("## 历史记忆")
-        parts.append(memory_text)
-        parts.append("")
-    if skills:
-        parts.append("## 相关技能")
-        for s in skills:
-            name = s.get("name", "")
-            rule = s.get("objective_pattern") or s.get("description") or s.get("name", "")
-            ops = s.get("ops", "")
-            parts.append(f"- **{name}**（匹配：{rule}）")
-            if ops:
-                parts.append(f"  操作序列：{ops}")
-        parts.append("")
-    return "\n".join(parts).rstrip() + "\n"
 
 
 def _steps_summary(substeps: List[Any], max_steps: int = 8) -> str:

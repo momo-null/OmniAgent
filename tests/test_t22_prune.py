@@ -3,15 +3,12 @@
 覆盖：
 1. ``_prune_tool_results`` 纯函数：超长 output 首尾截断（dict / 对象两种形式）、
    严格规避 UTF-16 代理对、低于阈值零干预、threshold=0 关闭、非目标 item 不动。
-2. ``run_subtask_sdk`` 压缩分支集成：修剪后若已低于压缩占比阈值则跳过
-   ``_maybe_compress``（纯截断够用）；修剪后仍超阈值则照常压缩。
+
+集成侧（prune 接入粘性压缩后生效）见 ``test_t32_compaction_model.py``。
 """
 import types
 
-import pytest
-
-from omni_core.brain import sdk_loop as sl
-from omni_core.brain.sdk_loop import _prune_tool_results, run_subtask_sdk
+from omni_core.brain.sdk_loop import _prune_tool_results
 
 
 ELLIPSIS = "\n…[已截断过长工具输出]…\n"
@@ -92,64 +89,4 @@ def test_prune_ignores_non_output_items():
     assert ELLIPSIS in items[1]["output"]
 
 
-# --- run_subtask_sdk 集成：跳过摘要判定 --------------------------------------
-class _FakeRes:
-    def __init__(self, items):
-        self._items = items
 
-    def to_input_list(self):
-        return self._items
-
-
-def _make_gate():
-    return types.SimpleNamespace(
-        verify_done=lambda: (False, ""),
-        verify_count=0,
-        has_condition=False,
-    )
-
-
-def _run_prune_scenario(monkeypatch, compress_threshold, ctx_window=20000):
-    calls = []
-    orig = sl._maybe_compress
-
-    def spy(items, keep, summarize):
-        calls.append(1)
-        return orig(items, keep, summarize)
-
-    monkeypatch.setattr(sl, "_maybe_compress", spy)
-    monkeypatch.setattr(sl, "run_async", lambda *a, **k: _FakeRes([
-        {"type": "function_call_output", "call_id": "c1", "output": "x" * 40000},
-    ]))
-
-    brain = {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}
-    run_subtask_sdk(
-        brain,
-        instructions="do it",
-        user_input="hi",
-        tools=[],
-        gate=_make_gate(),
-        max_steps=1,
-        chunk_turns=1,
-        should_stop=lambda: False,
-        summarize=lambda items: "summary",
-        ctx_window=ctx_window,
-        compress_threshold=compress_threshold,
-        prune_threshold=10000,
-        prune_head=2000,
-        prune_tail=1000,
-    )
-    return calls
-
-
-def test_prune_below_threshold_skips_summary(monkeypatch):
-    # 初始 ratio = 10000/20000 = 0.5 >= 0.5 进入压缩；
-    # 修剪后 output 变 ~3070 字符 → est ~767 → ratio 0.038 < 0.5 → 跳过摘要
-    calls = _run_prune_scenario(monkeypatch, compress_threshold=0.5)
-    assert calls == [], "修剪后已低于压缩阈值，应跳过 _maybe_compress"
-
-
-def test_prune_still_over_threshold_triggers_summary(monkeypatch):
-    # compress_threshold=0.01：修剪后 ratio 0.038 >= 0.01 → 仍压缩
-    calls = _run_prune_scenario(monkeypatch, compress_threshold=0.01)
-    assert len(calls) == 1, "修剪后仍超阈值，应调用 _maybe_compress"

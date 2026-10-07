@@ -67,6 +67,27 @@ def _mk_model(summarizer, threshold=1000, retain=0.5, hard=0, keep=8):
     return model, inner
 
 
+# --- 0. Prune-First：超长工具输出先截断，再判阈值 ------------------------------
+def test_prune_truncates_long_tool_output():
+    """prune_threshold > 0 时，超长 output 被首尾截断后进请求（工具返回体积生效）。"""
+    inner = _InnerModel()
+    model = _CompactionModel(
+        inner,
+        threshold_tokens=100000,   # 远高于内容量：确保只走 prune、不触发压缩
+        retain_ratio=0.5,
+        summarize=lambda items, si=None: "摘要",
+        prune_threshold=100,
+        prune_head=20,
+        prune_tail=10,
+    )
+    long_out = {"type": "function_call_output", "call_id": "c1", "output": "z" * 5000}
+    _invoke(model, [long_out])
+    sent = inner.calls[-1]["input"]
+    text = sent[0].get("output", "")
+    assert len(text) < 5000, "超长工具输出应被截断"
+    assert "已截断过长工具输出" in text
+
+
 # --- 1. 低于阈值零干预 --------------------------------------------------------
 def test_below_threshold_passthrough_untouched():
     calls = []
@@ -185,26 +206,19 @@ def test_degrades_to_hard_window_when_summary_invalid():
     assert model.summary_msg is None
 
 
-# --- 5. 配置与新旧逻辑互斥 ----------------------------------------------------
-def _run_with_spies(monkeypatch, max_input_tokens, ctx_window=20000):
+# --- 5. 配置开关：maxInputTokens 决定是否启用粘性压缩 --------------------------
+def _run_with_spies(monkeypatch, max_input_tokens):
     compaction_calls = []
-    maybe_calls = []
-    orig_maybe = sl._maybe_compress
-
-    def maybe_spy(items, keep, summarize):
-        maybe_calls.append(1)
-        return orig_maybe(items, keep, summarize)
 
     class _SpyCompaction(_CompactionModel):
         def __init__(self, *a, **kw):
             compaction_calls.append(1)
             super().__init__(*a, **kw)
 
-    monkeypatch.setattr(sl, "_maybe_compress", maybe_spy)
     monkeypatch.setattr(sl, "_CompactionModel", _SpyCompaction)
 
     class _Res:
-        """返回足够长的会话（10000 token），使旧 chunk 边界压缩在关闭粘性压缩时必然触发。"""
+        """返回足够长的会话，确保上下文管理段被走到。"""
 
         def to_input_list(self):
             return [_msg("x" * 40000)]
@@ -231,24 +245,21 @@ def _run_with_spies(monkeypatch, max_input_tokens, ctx_window=20000):
         chunk_turns=1,
         should_stop=lambda: False,
         summarize=lambda items: "摘要",
-        ctx_window=ctx_window,
         compress_threshold=0.01,
         max_input_tokens=max_input_tokens,
         retain_ratio=0.5,
     )
-    return compaction_calls, maybe_calls
+    return compaction_calls
 
 
 def test_compaction_disabled_when_max_input_tokens_zero(monkeypatch):
-    compaction_calls, maybe_calls = _run_with_spies(monkeypatch, max_input_tokens=0)
-    assert compaction_calls == [], "maxInputTokens=0 应关闭粘性压缩（默认行为不变）"
-    assert maybe_calls == [1], "未启用粘性压缩时应保留旧 chunk 边界压缩"
+    assert _run_with_spies(monkeypatch, max_input_tokens=0) == [], \
+        "maxInputTokens=0 应关闭粘性压缩"
 
 
-def test_compaction_enabled_disables_chunk_compression(monkeypatch):
-    compaction_calls, maybe_calls = _run_with_spies(monkeypatch, max_input_tokens=8000)
-    assert compaction_calls == [1], "maxInputTokens>0 应启用粘性压缩"
-    assert maybe_calls == [], "启用粘性压缩后应禁用旧 chunk 边界压缩（新旧互斥）"
+def test_compaction_enabled_when_max_input_tokens_positive(monkeypatch):
+    assert _run_with_spies(monkeypatch, max_input_tokens=8000) == [1], \
+        "maxInputTokens>0 应启用粘性压缩"
 
 
 # --- 6. 压缩检查点回调（中途蒸馏挂点，2026-10-04） ------------------------------

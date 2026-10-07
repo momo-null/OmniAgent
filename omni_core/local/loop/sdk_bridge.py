@@ -198,11 +198,13 @@ class SdkBridgeMixin:
             except Exception:
                 todo_store = None
         # T2.4：绑定当前 task_id，供 load_skill「私有优先、全局兜底」定位任务私有技能；
-        # 技能目录消息始终生成（skill 属 core 常开）。
+        # 技能目录消息始终生成（skill 属 core 常开）。read_scene（L2 按需读取端）同款绑定。
         try:
             from omni_core.tools.skill_tool import set_skill_task_context
+            from omni_core.tools.scene_tool import set_scene_task_context
 
             set_skill_task_context(spec.task_id)
+            set_scene_task_context(spec.task_id)
         except Exception:
             pass
         # F1.1：先取结构化 catalog（供埋点统计条数/来源），再格式化为 User 消息。
@@ -226,10 +228,25 @@ class SdkBridgeMixin:
         role = "executor" if is_sub else "brain"
         # F4.1b：纪律文件（AGENTS.md）进入 system prompt——run 开始读一次并锁定快照。
         # 放置原则：用户单写、run 内不变的稳定纪律 → system（缓存命中 + 覆盖语义正确
-        # 「用户当轮指令覆盖一切」+ 注入面收敛）；memory 属增长内容，仍走会话流尾部。
+        # 「用户当轮指令覆盖一切」+ 注入面收敛）；记忆稳定段（scene 导航/画像）同放置原则，
+        # 见下方 _memory_stable_block；L1 检索段 run 开始一条 user 消息（_memory_lead_in）。
         _instr_snapshot = self._load_instructions_snapshot(spec)
         system_prompt = self._merge_instructions(system_prompt, _instr_snapshot)
         system_prompt = self._merge_character(system_prompt)
+        # TAM 对齐：记忆**稳定段**（<scene-navigation> 摘要导航 + <user-persona> 画像）
+        # 并入 system prompt，run 开始读一次锁定（维护只在任务收尾 flush 触发，run 内不变）；
+        # scene 全文由模型按需调 read_scene 读取（渐进披露），**不进任何每步请求**。
+        # 位置在指纹计算之前——O5+ 不变式「Model-visible ⟺ logged」要求指纹含此块。
+        # L1 检索段（<relevant-memories>）走 run 开始一条 user 消息（见 _lead_in）。
+        # 尾部每步重发机制已移除：静态内容每步尾部重发 = 每步强化一次，反复 priming
+        # 抬高生成退化概率（doc/plans/memory-architecture.md §4/§5）。
+        _mem_block, _mem_layers = self._memory_stable_block(
+            is_sub, task_id=getattr(spec, "task_id", ""))
+        if _mem_block:
+            system_prompt = (system_prompt or "") + "\n\n" + _mem_block
+            self._log_knowledge_injection(traj, {
+                "kind": "memory_injected", "chars": len(_mem_block),
+                "layers": _mem_layers, "placement": "system"})
         if getattr(_instr_snapshot, "injected", False):
             self._log_knowledge_injection(traj, {
                 "kind": "instructions_injected",
@@ -425,16 +442,17 @@ class SdkBridgeMixin:
                 except Exception:
                     pass
 
-        # F4.1b/F4.2：尾部注入块——画像等辅助知识（纪律文件已迁 system prompt）。
-        # 构建一次，每请求由 Model 包装追加到压缩后的请求尾部（不落会话历史）。
-        _tail_block, _tail_layers = self._build_memory_injection(
+        # TAM 对齐：L1 检索记忆 → run 开始一条 user 消息（历史后、任务输入前），仅注入一次
+        # （对齐 TAM auto-recall 每轮一次；不得改回每步重发，见上方稳定段注释）。
+        _lead_in = self._memory_lead_in(
             is_sub, task_id=getattr(spec, "task_id", ""),
             query=getattr(spec, "objective", ""))
-        _on_inject = None
-        if _tail_block:
-            def _on_inject(chars, layers, _traj=traj):
-                self._log_knowledge_injection(
-                    _traj, {"kind": "memory_injected", "chars": chars, "layers": layers})
+        if _lead_in:
+            self._log_knowledge_injection(traj, {
+                "kind": "memory_injected", "chars": len(_lead_in),
+                "layers": ["memory"], "placement": "lead_in"})
+        # 收尾意图门（仅主链;子任务有 verify 门控,不走信任大脑路径）
+        _plain_judge = None if is_sub else self._plain_finish_judge(traj)
         res = run_subtask_sdk(
             brain,
             instructions=system_prompt,
@@ -448,9 +466,8 @@ class SdkBridgeMixin:
             # F4.1b：纪律文件快照（run 级锁定）——仅供 run 中途漂移检测/告警，不改请求
             instructions_snapshot=_instr_snapshot,
             on_instructions_drift=_on_instr_drift,
-            tail_inject_block=_tail_block,
-            tail_inject_layers=_tail_layers,
-            on_inject=_on_inject,
+            lead_in_message=_lead_in,
+            plain_finish_judge=_plain_judge,
             verify_fail_max=int(self.escalation.get("verify_fail_max", 3)) if allow_escalate else 0,
             should_stop=self._is_stop_requested,
             on_step=_on_step,

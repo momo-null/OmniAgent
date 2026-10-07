@@ -90,7 +90,7 @@ def main():
 
     from omni_core.local.loop import ToolLoop, TaskSpec
 
-    loop = ToolLoop(brain_cfg, executor_cfg=executor_cfg, verbose=True, max_history=12)
+    loop = ToolLoop(brain_cfg, executor_cfg=executor_cfg, verbose=True)
     out["tool_count"] = len(loop.registry.schemas)
     out["tool_names"] = [s["function"]["name"] for s in loop.registry.schemas]
     out["two_layer_enabled"] = loop.executor is not None

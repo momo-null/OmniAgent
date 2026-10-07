@@ -707,7 +707,7 @@ def maybe_distill_skill(task_id: str, brain_cfg: Optional[Dict[str, Any]],
 
     与 memory 轴零重叠（plan §1）：产物是可重放宏（``entry_id + substeps[原始 args]``），
     存 ``skills/``、经回放执行器消费；不进注入块。身份只用 entry_id 哈希（plan §2.6
-    定案——缓存语义=同序列同宏；LLM 语义对齐即 hachimi 坑#2 假泛化，不启用）。
+    定案——缓存语义=同序列同宏；LLM 语义对齐会引入假泛化（历史试点已踩坑），不启用）。
 
     降级（宁严勿松）：无 brain / 任务未成功 / 步数 <2 / 步骤不全在回放白名单 /
     标签 LLM 失败 / 校验不过 → 本轮不产出（返回 {"action": "skipped", "reason": ...}）。

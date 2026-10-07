@@ -6,12 +6,11 @@
 
 ## 1. 来源与现象
 
-2026-10-04 Rmiworld 真机验证（task `t_1514c53a6d5e`，运行中轨迹
-`2026-10-04_2352309b5a11.jsonl` step=9）：
+2026-10-04 真机验证（某真实 project 的运行中轨迹，step=9）：
 
-- 模型调用 `search_skill("殖民地管理 工作优先级 开局")` → `{"total": 0, "hits": []}`；
-- 项目内实际存在目标技能 `colony-management`（24 个 project 技能之一）；
-- 模型随后按项目 AGENTS.md 点名直接 `load_skill("colony-management")` → 成功返回完整
+- 模型调用 `search_skill("项目管理 优先级 排序")` → `{"total": 0, "hits": []}`；
+- 项目内实际存在目标技能（24 个 project 技能之一）；
+- 模型随后按项目 AGENTS.md 点名直接 `load_skill(目标技能名)` → 成功返回完整
   playbook 正文（step=13，`total_uses` 簿记 +1 正常）。
 
 ## 2. 根因
@@ -39,9 +38,8 @@
 技能占满、且 AGENTS.md 尚未点名新 skill 时，新 macro 对模型事实上不可发现——自动产出
 越多，该缺陷的边际代价越大。
 
-**2026-10-05 再证**（task `t_0c95387c870b`，Rmiworld 23 技能）：目录照常注入 top-3
-（addiction-management / animal-husbandry / base-building），但模型实际加载的
-`research-management` / `colony-management` 均为**目录外技能**（靠 AGENTS.md 点名/
+**2026-10-05 再证**（另一真实 project，23 技能）：目录照常注入 top-3，
+但模型实际加载的技能均为**目录外技能**（靠 AGENTS.md 点名/
 先验得知）；全程未调 `search_skill`。目录外技能的可发现性完全依赖点名路径。
 
 ## 4. 候选方案（按侵入度排序）
@@ -63,9 +61,9 @@
 
 ## 5. 验收用例
 
-1. 对现有 24 个 project 技能（Rmiworld），用 ≥5 条自然整句中文查询
-   （含「殖民地管理 工作优先级 开局」这条回归样本）→ 目标技能进入 `hits` top-3；
-2. 英文技能名直查（如 `killbox`）不回归：仍能命中 `killbox-design`；
+1. 对现有 24 个 project 技能，用 ≥5 条自然整句中文查询
+   （含一条多词组合回归样本）→ 目标技能进入 `hits` top-3；
+2. 英文技能名直查（单词查询）不回归：仍能命中对应英文命名的技能；
 3. 无关查询（如「今天天气」）不强行凑数：允许返回 0 命中；
 4. `search_skill` 现有调用方（模型工具面）schema 不变——只改内部打分，
    不改参数与返回结构；

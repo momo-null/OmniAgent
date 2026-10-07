@@ -49,6 +49,38 @@ def _atomic_write_text(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
+# 注入到提示词时单条动作的上限（字符）：不得塞原始返回
+_ACTION_ARG_CHARS = 80
+_ACTION_RESULT_CHARS = 120
+
+
+def _short_text(value: Any, limit: int) -> str:
+    """把任意值压成单行短文本：换行压平、超长截断。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False)
+        except Exception:
+            text = str(value)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def _fmt_action(action: Dict[str, Any]) -> str:
+    """一条动作 → 单行摘要（工具名 + 截断后的参数/结果）。
+
+    刻意不塞原文：这段文本会进续跑 hint 与跨轮注入，原文（含整段脚本）
+    会让模型照着续写、产出畸形工具调用。完整数据落 collected.json。
+    """
+    tool = action.get("tool") or "?"
+    args = _short_text(action.get("args"), _ACTION_ARG_CHARS)
+    result = _short_text(action.get("result"), _ACTION_RESULT_CHARS)
+    return f"{tool}({args}) -> {result}"
+
+
 class WorldModel:
     """内存 + 磁盘世界模型。资产跟 task_id 走。
 
@@ -160,7 +192,7 @@ class WorldModel:
         if recent:
             lines.append("最近动作:")
             for a in recent:
-                lines.append(f"  - {a['tool']}({a['args']}) -> {a['result']}")
+                lines.append(f"  - {_fmt_action(a)}")
         return "\n".join(lines)
 
     # --- M4b.1 知识累积 -----------------------------------------------------
@@ -241,7 +273,7 @@ class WorldModel:
             if recent:
                 lines.append("最近动作:")
                 for a in recent:
-                    lines.append(f"  - {a['tool']}({a['args']}) -> {a['result']}")
+                    lines.append(f"  - {_fmt_action(a)}")
             return "\n".join(lines)
 
     # --- M5 采集持久化（跨翻页/子任务不丢） --------------------------------
@@ -362,6 +394,11 @@ class WorldModel:
                     "collected": list(self.collected),
                     "notes": list(self.notes),
                     "facts_meta": {k: dict(v) for k, v in self.fact_meta.items()},
+                    "recent_actions": [
+                        {"tool": a.get("tool"), "args": a.get("args", {}),
+                         "result": a.get("result")}
+                        for a in self.recent_actions()
+                    ],
                 }
             _atomic_write_text(
                 self._dir() / "collected.json",
@@ -388,22 +425,16 @@ class WorldModel:
                     front_end = i
                     break
 
-        # 解析 facts 列表
+        # 解析 facts 列表：按 `# ` 标题切段，只收「已知事实」段
         body = content.split("\n")[front_end + 1:]
         parsed_facts = []
-        in_facts_section = False
-        in_actions_section = False
+        section = ""
         for line in body:
             s = line.strip()
-            if s.startswith("# 已知事实"):
-                in_facts_section = True
-                in_actions_section = False
+            if s.startswith("# "):
+                section = s[2:].strip()
                 continue
-            if s.startswith("# 最近动作"):
-                in_facts_section = False
-                in_actions_section = True
-                continue
-            if in_facts_section and s.startswith("- "):
+            if section == "已知事实" and s.startswith("- "):
                 fact = s[2:].strip()
                 if fact and fact != "_(暂无)_":
                     parsed_facts.append(fact)
@@ -427,6 +458,15 @@ class WorldModel:
                 self.fact_meta = {
                     f: dict(meta[f]) for f in self.facts if f in meta
                 }
+                # 恢复最近动作（续跑要拿回最近窗口；与 state_text 同走 JSON，
+                # 不解析 md 文本，避免 repr 结构回读失真）
+                for a in (data.get("recent_actions") or []):
+                    if isinstance(a, dict):
+                        self.actions.append({
+                            "tool": a.get("tool"),
+                            "args": a.get("args", {}),
+                            "result": a.get("result"),
+                        })
                 return True
             except Exception:
                 pass

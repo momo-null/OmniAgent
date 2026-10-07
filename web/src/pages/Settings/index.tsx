@@ -390,8 +390,6 @@ function OrchestrationTab() {
   const [maxParallel, setMaxParallel] = useState<number>(4);
   const [budgetRatio, setBudgetRatio] = useState<number>(0.75);
   const [chunkTurns, setChunkTurns] = useState<number>(50);
-  const [ltEnabled, setLtEnabled] = useState<boolean>(true);
-  const [ltMaxTurns, setLtMaxTurns] = useState<number>(16);
   const [ltCompress, setLtCompress] = useState<boolean>(true);
   // 上下文治理（高级）：工具输出修剪 / 粘性压缩 / 重复失败防护
   // 初值取推荐值（后端未配置时不显示裸 0，避免误以为功能关闭）
@@ -400,6 +398,7 @@ function OrchestrationTab() {
   const [pruneTail, setPruneTail] = useState<number>(CTX_RECOMMENDED.pruneTail);
   const [maxInputTokens, setMaxInputTokens] = useState<number>(CTX_RECOMMENDED.maxInputTokens);
   const [retainRatio, setRetainRatio] = useState<number>(CTX_RECOMMENDED.retainRatio);
+  const [compressThreshold, setCompressThreshold] = useState<number>(0);
   const [repeatGuard, setRepeatGuard] = useState<number>(CTX_RECOMMENDED.repeatGuard);
   const [saved, setSaved] = useState("");
   const [error, setError] = useState("");
@@ -414,8 +413,6 @@ function OrchestrationTab() {
       if (typeof lt.budget_hint_ratio === "number") setBudgetRatio(lt.budget_hint_ratio);
       if (typeof rt.chunk_turns === "number") setChunkTurns(rt.chunk_turns);
       const blt = d?.brain?.long_task || {};
-      if (typeof blt.enabled === "boolean") setLtEnabled(blt.enabled);
-      if (typeof blt.max_turns === "number") setLtMaxTurns(blt.max_turns);
       if (typeof blt.compress === "boolean") setLtCompress(blt.compress);
       // 上下文治理：后端返回的是「代码缺省 + 项目配置 + 用户配置」的生效值，直接展示
       const pr = blt.prune || {};
@@ -423,6 +420,7 @@ function OrchestrationTab() {
       if (typeof pr.head_chars === "number") setPruneHead(pr.head_chars);
       if (typeof pr.tail_chars === "number") setPruneTail(pr.tail_chars);
       if (typeof blt.retain_ratio === "number") setRetainRatio(blt.retain_ratio);
+      if (typeof blt.compress_threshold === "number") setCompressThreshold(blt.compress_threshold);
       if (typeof lt.repeat_guard === "number") setRepeatGuard(lt.repeat_guard);
       // 旧通道：输入预算挂在 brain.maxInputTokens（新 schema 在 provider 上配）
       const mit = d?.brain?.maxInputTokens ?? d?.brain?.max_input_tokens;
@@ -435,7 +433,7 @@ function OrchestrationTab() {
     if (!dirtyRef.current) return;
     dirtyRef.current = false;
     setError(""); setSaved("");
-    const s = { ltEnabled, ltCompress, ...overrides };
+    const s = { ltCompress, ...overrides };
     try {
       await settingsApi.put({
         runtime: {
@@ -446,8 +444,6 @@ function OrchestrationTab() {
         brain: {
           maxInputTokens: maxInputTokens || 0,
           long_task: {
-            enabled: s.ltEnabled,
-            max_turns: ltMaxTurns || 16,
             compress: s.ltCompress,
             prune: {
               threshold_chars: pruneThreshold || 0,
@@ -455,6 +451,7 @@ function OrchestrationTab() {
               tail_chars: pruneTail || 0,
             },
             retain_ratio: retainRatio,
+            compress_threshold: compressThreshold,
           },
         },
       });
@@ -478,12 +475,7 @@ function OrchestrationTab() {
           onChange={(e) => { dirtyRef.current = true; setChunkTurns(Number(e.target.value) || 50); }}
           onBlur={() => void saveAll()} />
 
-        <Typography variant="subtitle2" sx={{ mt: 1 }}>单大脑长任务压缩（不启本地模型时生效）</Typography>
-        <FormControlLabel control={<Switch checked={ltEnabled} onChange={(e) => { const v = e.target.checked; dirtyRef.current = true; setLtEnabled(v); void saveAll({ ltEnabled: v }); }} />}
-          label={<LabelWithTip text="启用长任务压缩 (brain.long_task.enabled)" desc="未在「模型」页给子 agent（worker）选模型时，主模型单大脑长跑会按间隔压缩历史；关闭则不做压缩。" />} />
-        <TextField label={<LabelWithTip text="压缩间隔 (brain.long_task.max_turns)" desc="单大脑路径下，每跑 N 轮把历史压缩成一段摘要，防止上下文溢出。用完不会停任务，只控制压缩频率。" />} type="number" value={ltMaxTurns}
-          onChange={(e) => { dirtyRef.current = true; setLtMaxTurns(Number(e.target.value) || 16); }}
-          onBlur={() => void saveAll()} />
+        <Typography variant="subtitle2" sx={{ mt: 1 }}>长任务压缩</Typography>
         <FormControlLabel control={<Switch checked={ltCompress} onChange={(e) => { const v = e.target.checked; dirtyRef.current = true; setLtCompress(v); void saveAll({ ltCompress: v }); }} />}
           label={<LabelWithTip text="调用主模型生成摘要 (brain.long_task.compress)" desc="开启：压缩时调用主模型生成中文摘要（更省上下文）。关闭：退化为截断兜底，不消耗额外调用。" />} />
 
@@ -496,6 +488,10 @@ function OrchestrationTab() {
         <TextField label={<LabelWithTip text="粘性压缩尾部保留比例 (brain.long_task.retain_ratio)" desc="超阈值时，尾部会话保留「上限 × 该比例」的 Token，其余压成摘要。留空/0 = 取默认 0.5。" />} type="number" value={retainRatio}
           inputProps={{ min: 0, max: 0.9, step: 0.05 }}
           onChange={(e) => { dirtyRef.current = true; setRetainRatio(Number(e.target.value) || 0.5); }}
+          onBlur={() => void saveAll()} />
+        <TextField label={<LabelWithTip text="压缩触发占比 (brain.long_task.compress_threshold)" desc="上下文达到「模型上下文上限 × 该占比」时触发压缩；越小越早压（更省 token，摘要更频繁）。填 0 = 取默认 0.5。" />} type="number" value={compressThreshold}
+          inputProps={{ min: 0, max: 0.9, step: 0.05 }}
+          onChange={(e) => { dirtyRef.current = true; setCompressThreshold(Number(e.target.value) || 0); }}
           onBlur={() => void saveAll()} />
         <TextField label={<LabelWithTip text="工具输出修剪阈值 (prune.threshold_chars)" desc="压缩前先把超长的工具输出做首尾截断，避免单个大 output 撑爆上下文。0 = 关闭（零干预）；建议 8192 左右。" />} type="number" value={pruneThreshold}
           onChange={(e) => { dirtyRef.current = true; setPruneThreshold(Number(e.target.value) || 0); }}
@@ -555,9 +551,9 @@ function AboutTab() {
             生效配置：
             <ul style={{ margin: "4px 0", paddingLeft: 20 }}>
               <li>通用 · 默认步数上限 → 仍是<b>总预算</b>（硬上限）</li>
-              <li>brain.long_task.enabled → 是否启用历史压缩</li>
-              <li>brain.long_task.max_turns → 每 N 轮压缩一次历史（防上下文溢出，不停任务）</li>
               <li>brain.long_task.compress → 压缩时是否调用主模型生成中文摘要</li>
+              <li>brain.long_task.compress_threshold → 触发压缩的上下文占比（0 = 取默认 0.5）</li>
+              <li>brain.maxInputTokens → 填 0 即关闭粘性压缩（真正的开关）</li>
             </ul>
             <b>编排 · 派发轮次 / 并发在此形态仍生效</b>：派发由主模型自派发执行（并发与上下文隔离仍有价值）。
           </Typography>

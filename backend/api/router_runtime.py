@@ -23,6 +23,9 @@ router.include_router(approvals_api.router)
 router.include_router(diagnostics_api.router)
 
 # 兼容 re-export：保留原模块暴露的全部模块级名（外部零改动）
+# TOOL_REGISTRY 经 omni_core.tools.base 直接导入（helpers 已不再 re-export，
+# 与 tools_api/chat_runtime 一致；此处仍 re-export 供外部 from router_runtime 取用）
+from omni_core.tools.base import TOOL_REGISTRY
 from backend.api.routers.helpers import (  # noqa: F401
     ROOT, CONFIG_PATH, manager, AGENT_MAIN, _traj_cursor, _cursor_lock,
     _EXEC_TOOLS, _append_task_name, _call_skill,
@@ -31,11 +34,10 @@ from backend.api.routers.helpers import (  # noqa: F401
     _merge_message_step, _merge_thinking_step, _paths, _project_store,
     _read_latest_collected, _read_skills,
     _read_trajectory, _read_world, _running_task_id,
-    _session_records_to_model_messages, _snapshot, _steps_to_text, _task_store,
+    _session_records_to_model_messages, _snapshot, _task_store,
     _trajectory_dir, _trim, _try_start_task, _upsert, clear_live_snapshot, config,
     live_snapshot, push_chat,
     push_message_stream, push_thinking, push_thinking_stream, push_tool_call,
-    TOOL_REGISTRY,
 )
 from backend.api.routers.chat_runtime import (  # noqa: F401
     _dispatch_chat, _sse, _stream_gen, api_chat, api_inject, api_stop,

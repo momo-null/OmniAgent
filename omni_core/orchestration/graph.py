@@ -60,6 +60,7 @@ class OmniState(TypedDict, total=False):
     last_escalated: bool
     last_escalate_reason: str
     last_provider_error: bool     # U3：主 agent 本轮是否命中 provider 服务侧错误
+    paused: bool                  # F2.2：daemon 模式纯文本收尾→任务保持活跃等续跑
     result: Dict[str, Any]        # 终态结果（结束节点写入）
 
 
@@ -110,6 +111,7 @@ def build_agent_graph(
             "last_escalated": bool(out.get("escalated")),
             "last_escalate_reason": out.get("escalate_reason", "") or "",
             "last_provider_error": bool(out.get("provider_error")),
+            "paused": bool(out.get("paused")),
             "consumed": len(state.get("results", [])),
             "injected_seen": len(state.get("injected", [])),
         }
@@ -171,6 +173,7 @@ def build_agent_graph(
                 escalated=bool(state.get("last_escalated")),
                 escalate_reason=state.get("last_escalate_reason", ""),
                 provider_error=bool(state.get("last_provider_error", False)),
+                paused=bool(state.get("paused", False)),
             )
         }
 

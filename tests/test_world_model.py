@@ -28,6 +28,37 @@ def _redirect(tmp_path):
     return _RP._GLOBAL
 
 
+def test_save_load_restores_recent_actions(tmp_path):
+    """续跑要拿回最近窗口：save → load 后 actions 必须非空（此前恒为空）。"""
+    _redirect(tmp_path)
+    wm = WorldModel(task_id="t_actions")
+    wm.log_action({"name": "click", "args": {"x": 1}}, {"ok": True})
+    wm.save()
+
+    restored = WorldModel(task_id="t_actions")
+    assert restored.load() is True
+    acts = restored.recent_actions()
+    assert len(acts) == 1, f"最近动作应在续跑时恢复，实际 {len(acts)} 条"
+    assert acts[0]["tool"] == "click"
+
+
+def test_log_action_records_tool_name():
+    """工具名契约：log_action 收 {"name": ...}，不得记成 None（调用方曾传 "tool"）。"""
+    wm = WorldModel(task_id="t_toolname")
+    wm.log_action({"name": "write_file", "args": {"path": "a.ps1"}}, {"ok": True})
+    assert wm.recent_actions()[0]["tool"] == "write_file"
+
+
+def test_summary_compresses_recent_actions():
+    """注入用的最近动作必须压成单行短摘要，不得塞原始返回（防模型照抄出畸形调用）。"""
+    wm = WorldModel(task_id="t_summary")
+    wm.log_action({"name": "write_file", "args": {"content": "x" * 5000}},
+                  {"ok": True, "output": "y" * 5000})
+    s = wm.summary()
+    assert "write_file" in s
+    assert len(s) < 600, f"最近动作应被压缩，实际摘要长度 {len(s)}"
+
+
 
 # --- 假后端 ---------------------------------------------------------------
 class _FakeBackendInner:

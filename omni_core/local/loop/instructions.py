@@ -140,60 +140,137 @@ class InstructionMixin:
             pass
         return system_prompt or ""
 
-    def _build_memory_injection(self, is_sub: bool, task_id: str = "", query: str = "",
-                                budget_chars: int = -1):
-        """F4.2：记忆检索段（TAM 移植）+ 用户画像块——尾部重插的来源（纪律文件已迁 system）。
+    def _memory_stable_block(self, is_sub: bool, task_id: str = ""):
+        """TAM 对齐：记忆**稳定段**进 system prompt——scene 摘要导航 + 用户画像。
 
-        * 记忆检索段：gate ``runtime.knowledge.memory.enabled``；池子低于
-          ``memory_tam._INJECT_TRIGGER`` 时零注入（与无记忆行为一致）；
-        * 画像块 gate：``runtime.knowledge.profile.enabled``（默认开，P0）。
+        形态对齐 TAM auto-recall（stable/dynamic 拆分）：
+        * ``<scene-navigation>``：L2 场景摘要 + 更新时间 + read_scene 指引——**只放索引**，
+          全文由模型按需调 ``read_scene`` 读取（渐进披露）；gate ``runtime.knowledge.memory.enabled``；
+        * ``<user-persona>``：用户画像（TAM 的 L3 persona 位置）；gate ``knowledge.profile.enabled``。
 
-        返回 ``(block_text, labels)``；无内容 → ``("", [])``（零注入）。
+        与纪律块同款约束：run 开始读一次、run 内不变（scene/画像维护只在任务收尾 flush
+        触发，run 中途文件不变），命中前缀缓存。子任务（is_sub）零注入，语义不变。
+        返回 ``(block, layers)``；全空 → ``("", [])``（零注入，逐字节不变）。
         """
-        try:
-            if not is_sub:
-                from omni_core.local.knowledge_inject import (
-                    compose_injection_block,
-                    load_profile_text,
-                )
+        if is_sub:
+            return "", []
+        parts: List[str] = []
+        layers: List[str] = []
+        if self.knowledge_cfg.get("memory"):
+            try:
+                from omni_core.local import scene_executor
+                _pid = TaskStore.project_of(str(task_id)) if task_id else ""
+                _entries = scene_executor.load_scene_nav(_pid)
+                if _entries:
+                    _rows = "\n".join(
+                        f"- {_e['filename']}（热度 {_e['heat']}）：{_e['summary']}"
+                        for _e in _entries)
+                    _block = ("<scene-navigation>\n"
+                              "以下是场景记忆索引（摘要）。需要某场景的完整环境事实时，"
+                              "调用 read_scene 工具（scene_name=文件名）读取全文；"
+                              "摘要与实际观测冲突时以观测为准。\n"
+                              f"{_rows}\n</scene-navigation>")
+                    parts.append(_block)
+                    layers.append("scene_nav")
+            except Exception:
+                pass
+        if self.knowledge_cfg.get("profile"):
+            try:
+                from omni_core.local.knowledge_inject import load_profile_text
+                _pt = load_profile_text()
+                if _pt.strip():
+                    parts.append(f"<user-persona>\n{_pt.strip()}\n</user-persona>")
+                    layers.append("user_profile")
+            except Exception:
+                pass
+        if not parts:
+            return "", []
+        return "\n\n".join(parts), layers
 
-                _limit = int(config.get_config("runtime.long_task.instructions_limit", 8192) or 8192)
-                parts: List[Tuple[str, str]] = []
-                # 记忆检索段（TAM 移植）：按任务目标从项目记忆库检索相关 atoms
-                if self.knowledge_cfg.get("memory"):
-                    try:
-                        from omni_core import memory_tam
-                        _pid = TaskStore.project_of(str(task_id)) if task_id else ""
-                        # L2 场景块常驻段（TAM L2）：不受池子阈值限制，恢复语境
-                        _sc = memory_tam.load_scene_text(_pid)
-                        if _sc:
-                            parts.append(("scene", _sc))
-                        _mt = memory_tam.inject_text(_pid, query or "")
-                        if self.on_debug:
-                            try:
-                                _hits = sum(
-                                    1 for _l in _mt.splitlines() if _l.startswith("- ")) if _mt else 0
-                                self.on_debug("memory_inject", {
-                                    "title": "记忆注入",
-                                    "pool": memory_tam.count_atoms(_pid)
-                                            + memory_tam.count_global_atoms(),
-                                    "hits": _hits,
-                                    "scene_chars": len(_sc),
-                                })
-                            except Exception:
-                                pass
-                        if _mt.strip():
-                            parts.append(("memory", _mt))
-                    except Exception:
-                        pass
-                # 画像（P0）：knowledge.profile.enabled 开启才注入（默认开）
-                if self.knowledge_cfg.get("profile"):
-                    _pt = load_profile_text()
-                    if _pt.strip():
-                        parts.append(("user_profile", _pt))
-                if parts:
-                    return compose_injection_block(parts, limit=_limit)
+    def _plain_finish_judge(self, traj: Optional[Any]):
+        """收尾意图门（Omni 加固,TAM 无此机制）：纯文本收尾判「信任大脑」成功前的语义复核。
+
+        背景：畸形调用表现为「文本被当普通输出、调用根本不派发」,而 oneshot 语义会把
+        纯文本收尾判成功 → 任务静默假成功（doc/plans/memory-architecture.md §6）。
+        判断**全 LLM**（是否在尝试发起但未派发调用）,零厂商格式字面量——与
+        「语义判断全 LLM、脚本只做簿记」红线同构;仅 oneshot 无校验条件路径触发。
+        judge 异常/无 brain_cfg/配置关 → 返回 None（fail-open=现状）。
+        """
+        brain_cfg = getattr(self, "brain_cfg", None)
+        if not brain_cfg:
+            return None
+        try:
+            if not bool(config.get_config("runtime.long_task.finish_intent_check", True)):
+                return None
         except Exception:
             pass
-        return "", []
+
+        def _judge(text: str) -> Optional[str]:
+            if not text or not text.strip():
+                return None
+            try:
+                from omni_core.local import llm_judge
+                # 提取式判断(比二分类稳):让模型找出所有"本应作为工具调用发出"的片段——
+                # 无论以什么形式出现(结构化、伪标签包裹、自然语言描述),判定权全在 LLM,
+                # 内核零格式字面量。真机实测:二分类问法对"开头像收尾+结尾藏伪调用"的
+                # 文本会漏判;提取问法不会(2026-10-07 真机验证)。
+                data = llm_judge.chat_json(
+                    brain_cfg,
+                    '你是 agent 输出审查器。下面是一段 agent 的输出文本。'
+                    '从中找出所有「本应作为工具调用发出」的片段:即命令、脚本、文件写入、'
+                    'API/工具调用等本应由工具执行的内容,无论它以什么形式出现'
+                    '(结构化调用、被标签/标记包裹的伪调用、自然语言描述的待执行步骤、'
+                    '代码块中的待执行脚本)。\n'
+                    '注意:纯结论、数字汇报、表格、说明文字不算;'
+                    '已经执行完成、仅在汇报结果的命令也不算(那是收尾陈述的组成部分)。\n'
+                    '示例(节选):文本为「扫描完成,共 5 个文件。接下来写入报告:\n'
+                    "<调用 action=\"write\" target=\"report.md\">...内容...</调用>」\n"
+                    '→ {"fragments": ["<调用 action=\\"write\\" target=\\"report.md\\">...内容...</调用>"]};'
+                    '文本为「扫描完成,最大文件 4.2GB」→ {"fragments": []}\n'
+                     '只返回 JSON:{"fragments": ["<片段原文>", "..."]};没有则 {"fragments": []}',
+                    text[:4000], timeout=90.0)
+            except Exception:
+                return None
+            frags = data.get("fragments") if isinstance(data, dict) else None
+            if not isinstance(frags, list) or not frags:
+                return None
+            self._log_knowledge_injection(traj, {
+                "kind": "finish_intent_check", "verdict": "attempted_tool_call",
+                "fragments": len(frags), "chars": len(text or "")})
+            return ("你上一条输出中似乎包含未真正派发的工具调用（调用以普通文本形式写出，"
+                    "因而没有执行）。请用结构化 tool_calls 重新发出同样的调用；"
+                    "不要把工具调用写进普通文本。")
+
+        return _judge
+
+    def _memory_lead_in(self, is_sub: bool, task_id: str = "", query: str = "") -> str:
+        """TAM 对齐：L1 检索记忆 **run 开始注入一次**（user 消息，历史后、任务输入前）。
+
+        频率语义对齐 TAM auto-recall（每轮一次）：run 即 Omni 的「一轮任务」——
+        起始 items 里的消息由后续块 ``to_input_list()`` 自然继承，天然不重发。
+        **不得**改回每步尾部注入：检索记忆属动态内容，尾部重发 = 每步强化一次，
+        反复 priming 抬高生成退化概率（memory-architecture.md §5）。
+        gate ``runtime.knowledge.memory.enabled``；池子低于阈值时零注入（TAM 原语义）。
+        """
+        if is_sub or not self.knowledge_cfg.get("memory"):
+            return ""
+        try:
+            from omni_core import memory_tam
+            _pid = TaskStore.project_of(str(task_id)) if task_id else ""
+            _mt = memory_tam.inject_text(_pid, query or "")
+            if self.on_debug:
+                try:
+                    _hits = sum(1 for _l in _mt.splitlines() if _l.startswith("- ")) if _mt else 0
+                    self.on_debug("memory_inject", {
+                        "title": "记忆注入",
+                        "pool": memory_tam.count_atoms(_pid)
+                                + memory_tam.count_global_atoms(),
+                        "hits": _hits,
+                        "placement": "lead_in",
+                    })
+                except Exception:
+                    pass
+            return _mt or ""
+        except Exception:
+            return ""
 

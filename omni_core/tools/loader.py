@@ -49,6 +49,7 @@ RESERVED_TOOL_NAMES = frozenset(
         "plan",
         "search_skill",
         "replay_skill",
+        "read_scene",
     }
 )
 

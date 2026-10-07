@@ -1,6 +1,6 @@
 """记忆层 · TAM(TencentDB Agent Memory)最小切片。
 
-移植映射见 doc/plans/tam-porting-map.md。三件套:
+分层与机制见 doc/plans/memory-architecture.md。三件套:
 - 写链:capture(会话消息入 buffer)→ flush(任务收尾触发:LLM 提炼 atoms(带 scope 标注)
   → 三态判重 → 落库)
 - 存储:每项目 ``projects/<pid>/memory/index.db`` + 全局层 ``~/.omniagent/memory/index.db``
@@ -9,7 +9,7 @@
   未标注默认 project(保守不丢)
 - 读链:inject(项目库 + 全局库两路检索,按分合并;池子低于阈值时零注入)
 
-红线(TAM/hachimi 双重验证):语义判断全 LLM(提炼/判重),脚本只做簿记;
+红线(TAM 验证):语义判断全 LLM(提炼/判重),脚本只做簿记;
 LLM 失败一律 fallback store(宁重复不丢失);任何异常不得打断主流程。
 """
 from __future__ import annotations
@@ -276,44 +276,21 @@ def _extract_detail(digest: str, brain_cfg) -> tuple:
         return [], "提炼失败(异常)"
 
 
-# ---------------------------------------------------------------- L2 场景块（TAM scene_blocks 思路）
+# ---------------------------------------------------------------- L2 场景块(TAM scene_blocks,执行器在 scene_executor.py)
 
 _L2_MIN_INTERVAL_S = 900    # 最小维护间隔（对齐 TAM l2MinIntervalSeconds）
-_L2_MAX_CHARS = 4000        # 场景块硬上限（常驻注入的预算约束）
-_SCENE_INJECT_CHARS = 1200  # 注入时的截断
-
-_SCENE_SYSTEM = (
-    "你是场景知识维护器。给你「当前场景知识」和「新证据」（会话要点与任务世界状态）。"
-    "任务：输出更新后的完整场景知识——保留仍然成立的内容，把新证据中属于"
-    "环境事实/App 怪癖/UI 语义/可靠操作方式的条目合并进去，剔除已过时或与证据矛盾的条目，"
-    "矛盾的以新证据为准。不要虚构；用短陈述句、每条一行；"
-    "没有可合并的新信息就原样返回。"
-    '只返回 JSON:{"scene": "<完整场景知识全文,≤3500字符>"}'
-)
-
-
-def _scene_path(project_id: str):
-    return rp.project_dir(project_id) / "memory" / "scene_blocks" / "scene.md"
-
-
-def load_scene_text(project_id: str, limit: int = _SCENE_INJECT_CHARS) -> str:
-    """L2 常驻注入段：场景知识全文（截断）。缺失/异常返回空（零注入不阻断）。"""
-    try:
-        p = _scene_path(project_id)
-        if not p.exists():
-            return ""
-        return p.read_text(encoding="utf-8").strip()[:limit]
-    except Exception:
-        return ""
+_PERSONA_SIGNAL_KEY = "persona_update_request"  # L2→L3 带外信号水位(场景 agent → 画像强制维护)
 
 
 def _maybe_maintain_scene(project_id: str, brain_cfg, digest: str,
                           task_id: str = "", stats: Optional[Dict[str, Any]] = None) -> None:
-    """L2 场景块维护：新证据 + 现有块 → LLM 增量更新 scene.md（TAM scene_blocks 思路）。
+    """L2 场景块维护薄壳：gate + 900s 水位 + 证据组装,机制全在 scene_executor。
 
     - 触发：任务收尾（flush 尾部）；最小间隔 900s（项目库 meta 水位 last_scene_ts）
-    - 原料：现有 scene.md + 会话摘要 digest + world_model 摘要（若有）
-    - 治理：LLM 失败/无变化/空证据 → 不动现文件；块硬上限截断；异常静默
+    - 机制：多文件主题块 + 带工具 agent 循环 + 容量治理/软删/归一化/索引
+      （TAM scene-extractor 完整移植,见 scene_executor.maintain_scenes）
+    - 带外信号：agent 请求画像重大更新时,落 meta 水位,下次 flush 强制画像维护
+    - 治理：LLM 失败/空证据 → 静默不动;异常绝不阻断主流程
     """
     if stats is None:
         stats = {}
@@ -337,8 +314,6 @@ def _maybe_maintain_scene(project_id: str, brain_cfg, digest: str,
                 pass
         conn.close()
 
-        p = _scene_path(project_id)
-        cur = p.read_text(encoding="utf-8")[:_L2_MAX_CHARS] if p.exists() else ""
         evidence = []
         d = (digest or "").strip()
         if d:
@@ -352,26 +327,31 @@ def _maybe_maintain_scene(project_id: str, brain_cfg, digest: str,
                         evidence.append("[世界状态]\n" + wtxt[:2500])
             except Exception:
                 pass
-        if not evidence and not cur:
-            return  # 无现有块也无证据 → 没有可维护的内容
 
-        user = (f"当前场景知识：\n{cur or '(空)'}\n\n新证据：\n" + "\n\n".join(evidence))
-        data = llm_judge.chat_json(brain_cfg, _SCENE_SYSTEM, user, timeout=60.0)
-        text = str((data or {}).get("scene") or "").strip()
-        if not text or text == cur:
-            return  # 无变化 → 不写
-        text = text[:_L2_MAX_CHARS]
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(f"<!-- scene updated: {_now()} -->\n{text}\n", encoding="utf-8")
-        stats["scene_chars"] = len(text)
-        # 水位
-        try:
-            c2 = open_db(project_id)
-            c2.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('last_scene_ts',?)", (_now(),))
-            c2.commit()
-            c2.close()
-        except Exception:
-            pass
+        from omni_core.local import scene_executor
+        scene_executor.maintain_scenes(project_id, brain_cfg, "\n\n".join(evidence),
+                                       task_id=task_id, stats=stats)
+
+        # 带外信号消费（L2→L3）：agent 请求画像更新 → 落水位,下次 flush 强制画像维护
+        signal = str(stats.get("persona_update_request") or "").strip()
+        if signal:
+            try:
+                c2 = open_db(project_id)
+                c2.execute("INSERT OR REPLACE INTO meta(k,v) VALUES(?,?)",
+                           (_PERSONA_SIGNAL_KEY, signal))
+                c2.commit()
+                c2.close()
+            except Exception:
+                pass
+        # 水位（有实际维护动作才推进,空维护不烧间隔——对齐 TAM checkpoint 语义）
+        if not stats.get("empty_maintenance"):
+            try:
+                c3 = open_db(project_id)
+                c3.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('last_scene_ts',?)", (_now(),))
+                c3.commit()
+                c3.close()
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -486,6 +466,8 @@ def _maybe_maintain_profile(project_id: str, brain_cfg) -> None:
     - gate:``knowledge.profile.auto_maintain``(默认开);人工编辑(PUT /profile)
       与自动维护共存——重写以"保留仍成立内容"为约束,人工内容不会被无故抹掉;
     - 触发:上次生成之后新增的 atoms 数 ≥ trigger_every_n(缺省 20);
+      **或**场景 agent 的带外信号(``persona_update_request`` 水位,见 _maybe_maintain_scene)
+      强制触发一次——场景整理 agent 视野最完整,它请求的画像更新不应等 atom 攒批;
     - 旧画像先备份 user_profile.md.bak;LLM 失败/输出异常 → 不动现文件。
     """
     try:
@@ -495,16 +477,20 @@ def _maybe_maintain_profile(project_id: str, brain_cfg) -> None:
         trigger = int(config.get_config(_PROFILE_TRIGGER, 20) or 20)
         conn = open_db(project_id)
         last_ts = None
+        force_reason = ""
         try:
             row = conn.execute("SELECT v FROM meta WHERE k='last_profile_ts'").fetchone()
             last_ts = row[0] if row else None
+            srow = conn.execute("SELECT v FROM meta WHERE k=?",
+                                (_PERSONA_SIGNAL_KEY,)).fetchone()
+            force_reason = str(srow[0] or "").strip() if srow else ""
         except Exception:
             pass
         if last_ts:
             n = conn.execute("SELECT COUNT(*) FROM atoms WHERE updated > ?", (last_ts,)).fetchone()[0]
         else:
             n = conn.execute("SELECT COUNT(*) FROM atoms").fetchone()[0]
-        if n < trigger:
+        if not force_reason and n < trigger:
             conn.close()
             return
         new_rows = conn.execute(
@@ -514,9 +500,20 @@ def _maybe_maintain_profile(project_id: str, brain_cfg) -> None:
         pp = rp.user_profile()
         old_profile = pp.read_text(encoding="utf-8") if pp.exists() else ""
         new_facts = "\n".join(f"- {c}" for (c,) in new_rows)
+        if force_reason:
+            new_facts = f"[场景整理请求画像更新(优先处理)]\n{force_reason}\n\n{new_facts}"
         data = llm_judge.chat_json(
             brain_cfg, _PROFILE_SYSTEM,
             f"当前用户画像:\n{old_profile or '(空)'}\n\n最近新事实:\n{new_facts}")
+        # 信号消费点:维护已尝试(成败均算),清水位防永久绕过触发节流
+        if force_reason:
+            try:
+                c3 = open_db(project_id)
+                c3.execute("DELETE FROM meta WHERE k=?", (_PERSONA_SIGNAL_KEY,))
+                c3.commit()
+                c3.close()
+            except Exception:
+                pass
         text = str((data or {}).get("profile") or "").strip()
         if not text:
             return

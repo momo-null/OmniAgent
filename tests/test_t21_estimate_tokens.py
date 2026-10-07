@@ -53,3 +53,11 @@ def test_estimate_empty_items_safe():
     items = [{"type": "function_call", "name": "t"}, {}]
     # 两个 item 都无有效文本 -> 各兜底 1
     assert _estimate_tokens(items) == 2
+
+
+def test_estimate_cjk_one_token_per_char():
+    """中文按 1 token/字：全量按 /4 会把中文低估约 4 倍，使压缩阈值形同虚设。"""
+    items = [{"role": "user", "content": "中" * 1000}]
+    est = _estimate_tokens(items)
+    # 旧口径 1000 // 4 = 250；新口径应为 ~1000
+    assert est >= 900, f"中文应按 1 token/字 估算，实际 {est}"

@@ -208,8 +208,8 @@ def test_coalesce_merges_partials_when_final_omits_steps():
 def test_coalesce_crashed_run_partials_only():
     """run 被杀只有 partial（无 final）→ 拼接出完整过程流（崩溃恢复）。"""
     recs = [
-        _rec("user", "开始游戏"),
-        _rec("assistant", "", {"steps": [{"type": "thinking", "content": "开局"}],
+        _rec("user", "开始新任务"),
+        _rec("assistant", "", {"steps": [{"type": "thinking", "content": "起步"}],
                                "partial": True, "run_key": "rk3"}),
         _rec("assistant", "", {"steps": [{"type": "tool_call", "name": "play"}],
                                "partial": True, "run_key": "rk3"}),

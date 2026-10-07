@@ -10,6 +10,9 @@
       （内核元工具 verify/plan/task_done/record/collect_list 豁免）。
   R3 text_of 非抽象：devices/base.py 里 text_of / verify_done 仍有默认实现体
       （必须用 @abstractmethod，内核不预设感知读法/完成判定）。
+  R4 记忆注入回流：内核里出现尾部每步重发机制的记号（_TailInjectModel/tail_inject*），
+      或在 memory_tam 之外调用 load_scene_text/read_scene_full（L2 全文只准经
+      read_scene 工具按需进上下文——见 doc/plans/memory-architecture.md §5）。
 
 约束域（M4 起「自动发现」，新增文件默认受约束，不用再手工登记）：
   KERNEL_DIRS   omni_core/**/*.py        -> 强制 R1 + R2
@@ -57,6 +60,13 @@ TOOL_BRANCH_RE = re.compile(r'(?:if|elif)\b[^\n]*?\.?name\s*==\s*["\']([\w]+)["\
 ABSTRACT_RE = re.compile(r"@abstractmethod")
 
 KERNEL_META_TOOLS = {"verify", "plan", "task_done", "record", "collect_list", "escalate"}
+
+# R4：记忆注入 placement 回流检测（TAM 对齐不变量，2026-10-07）
+TAIL_INJECT_RE = re.compile(r"\b(_TailInjectModel|tail_inject\w*)\b")
+# L2 场景全文读取只允许在 scene_executor.py 内部出现（供 read_scene 工具与整理 agent 用）；
+# 历史单文件版函数名一并保留在模式里—— reintroduction 即违规
+SCENE_FULLTEXT_RE = re.compile(r"\b(load_scene_text|read_scene_full|read_scene_block)\s*\(")
+SCENE_FULLTEXT_ALLOW = "omni_core/local/scene_executor.py"
 
 
 def _read(path: Path) -> list[str]:
@@ -131,6 +141,32 @@ def check_r3_abstract_backend(lines: list[str], path: Path, findings: list[str])
             )
 
 
+def check_r4_memory_placement(lines: list[str], path: Path, findings: list[str]) -> None:
+    """记忆注入 placement 三不变量（TAM 对齐）：禁尾部重发记号回流、禁 L2 全文进注入路径。"""
+    rel = _posix(path)
+    for n, raw in enumerate(lines, 1):
+        code = _strip_inline_comment(raw)
+        if not code.strip():
+            continue
+        m = TAIL_INJECT_RE.search(code)
+        if m:
+            findings.append(
+                f"[R4] {rel}:{n} 尾部每步重发机制记号 {m.group(0)!r} 回流 "
+                f"（记忆注入 = 稳定段进 system / L1 起始 items 一次 / L2 全文按需 read_scene，"
+                f"见 doc/plans/memory-architecture.md §5）"
+            )
+    if rel == SCENE_FULLTEXT_ALLOW:
+        return
+    for n, raw in enumerate(lines, 1):
+        code = _strip_inline_comment(raw)
+        m = SCENE_FULLTEXT_RE.search(code)
+        if m:
+            findings.append(
+                f"[R4] {rel}:{n} 内核在 memory_tam 之外读取 L2 场景全文 {m.group(1)!r} "
+                f"（全文只准经 read_scene 工具按需进上下文，注入路径只准用摘要导航）"
+            )
+
+
 def discover_files(dirs: list[str]) -> list[Path]:
     files: list[Path] = []
     for d in dirs:
@@ -164,6 +200,7 @@ def main() -> int:
         lines = _read(p)
         check_r1_screen_field(lines, p, findings)
         check_r2_tool_branch(lines, p, findings)
+        check_r4_memory_placement(lines, p, findings)
 
     # 设备驱动层：豁免 R1/R2（本就是设备实现），但对抽象基类强制 R3
     for p in discover_files(DEVICE_DIRS):
@@ -179,8 +216,9 @@ def main() -> int:
     for f in findings:
         print("  " + f)
     print(
-        "\n说明：R1=屏幕字段泄露 / R2=具体工具名分支 / R3=text_of非抽象。"
-        "L1 能力层（omni_core/tools/**）与设备层（devices/**）豁免 R1/R2。"
+        "\n说明：R1=屏幕字段泄露 / R2=具体工具名分支 / R3=text_of非抽象 / "
+        "R4=记忆注入placement回流。"
+        "L1 能力层（omni_core/tools/**）与设备层（devices/**）豁免 R1/R2/R4。"
     )
     return 1 if args.strict else 0
 

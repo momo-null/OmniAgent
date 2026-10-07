@@ -6,7 +6,8 @@
 3. 覆盖语义（官方规则）：纪律在 system，用户当轮消息仍排在最后（不被纪律"压住"）；
 4. `inject_instructions: false` → 零注入；超上限 → 截断标注；
 5. request_fingerprint 的 system hash 含纪律块 → 跨 run 随文件变、run 内不变；
-6. memory 仍走尾部（F4.2 未被本次迁移影响）。
+6. 记忆稳定段（画像/场景导航）进 system、尾部机制已移除（TAM 对齐，
+   L1 lead-in 与 read_scene 见 test_memory_alignment.py）。
 """
 import json
 import types
@@ -65,7 +66,6 @@ def _cfg(monkeypatch, **over):
     table = {
         "runtime.long_task.inject_instructions": True,
         "runtime.long_task.instructions_limit": 8192,
-        "runtime.long_task.memory_in_user": True,
     }
     table.update(over)
     monkeypatch.setattr(config_mod, "get_config", lambda p, d=None: table.get(p, d))
@@ -449,9 +449,9 @@ def test_instructions_injected_and_drift_logged_to_trajectory(monkeypatch, tmp_p
     assert drift is not None and drift["layers"] == ["global"]
 
 
-# --- 6. 画像仍走尾部（F4.2 尾部重插机制保持） -------------------
-def test_profile_still_in_tail_not_system(monkeypatch, tmp_path):
-    """纪律 → system；画像（非纪律的弱注入内容）→ 尾部重插，不进 system。"""
+# --- 6. 记忆稳定段进 system（TAM 对齐；尾部机制移除） -------------------
+def test_profile_in_system_not_tail(monkeypatch, tmp_path):
+    """TAM 对齐：纪律 → system；画像 → system 稳定段（<user-persona>）；尾部机制已移除。"""
     g = tmp_path / "g.md"
     g.write_text("DISCIPLINE", encoding="utf-8")
 
@@ -473,6 +473,7 @@ def test_profile_still_in_tail_not_system(monkeypatch, tmp_path):
                       traj=None, user_input="hi")
 
     assert "DISCIPLINE" in captured["instructions"]          # 纪律 → system
-    assert "PROFILE-TEXT" not in captured["instructions"]    # 画像不进 system
-    assert "PROFILE-TEXT" in captured["tail_inject_block"]   # 画像 → 尾部重插
-    assert captured["tail_inject_layers"] == ["user_profile"]
+    assert "<user-persona>" in captured["instructions"]      # 画像 → system 稳定段
+    assert "PROFILE-TEXT" in captured["instructions"]
+    assert "tail_inject_block" not in captured               # 尾部注入机制已删除
+    assert "lead_in_message" in captured                     # lead-in 通道存在（此处为空）

@@ -830,7 +830,7 @@
   <h3 id="s-92-Project-与-Task-归属规则" class="blk">9.2 Project 与 Task 归属规则</h3>
   <ol class="prin">
     <li><b>指定工作目录</b> → project_id = <code>slugify_path(绝对路径)</code>，会话历史落 <code>projects/&lt;project_id&gt;/</code>；task 资产仍落 <code>tasks/&lt;task_id&gt;/</code>（资产与 project 解耦）。</li>
-    <li><b>未指定工作目录（GUI / 游戏等）</b> → <code>auto_project_id()</code> 自动造 <code>~/OmniAgent/&lt;date&gt;-task-N</code>，永远有 project 归属，避免 null 分支。</li>
+    <li><b>未指定工作目录（GUI 任务等）</b> → 缺省落 <code>default</code> 项目（<code>auto_project_id</code> 已废除），永远有 project 归属，避免 null 分支。</li>
     <li><b>task 资产跟 task 走</b>：<code>tasks/&lt;task_id&gt;/</code> 存全部重资产；project 仅作会话历史容器，不重复存。</li>
     <li><b>前端历史 task list</b>：平铺读 <code>tasks/</code>，按 state / 时间排序，不按 project 嵌套。</li>
   </ol>
@@ -844,7 +844,7 @@
     <tr><td><code>vision</code>（runtime.vision）</td><td>本地 VLM 视觉工具（vision-mcp 后端）</td><td><code>enabled</code> + model / base_url</td></tr>
   </table>
 
-  <div class="redline"><b>红线不变：</b>目录结构只是<b>资产落盘位置的约定</b>，不引入任何 app / 游戏 / 场景专属逻辑。内核路径统一由 <code>runtime_paths.py</code>（<code>task_*</code> / <code>project_*</code> / <code>slugify_path</code> / <code>auto_project_id</code>）提供，<b>搜不到 <code>app</code> 作为分区键</b>。北极星红线（内核零场景硬编码）延续。</div>
+  <div class="redline"><b>红线不变：</b>目录结构只是<b>资产落盘位置的约定</b>，不引入任何 app / 游戏 / 场景专属逻辑。内核路径统一由 <code>runtime_paths.py</code>（<code>task_*</code> / <code>project_*</code> / <code>slugify_path</code>）提供，<b>搜不到 <code>app</code> 作为分区键</b>。北极星红线（内核零场景硬编码）延续。</div>
 </section>
 
 <!-- ============ N10 ============ -->

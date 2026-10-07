@@ -25,7 +25,7 @@ def _mk_project(pid="d-tam"):
 
 def test_flush_without_llm_stores_nothing_but_no_crash():
     pid, tid = _mk_project()
-    memory_tam.capture(pid, "user", "开始游戏")
+    memory_tam.capture(pid, "user", "开始新任务")
     memory_tam.capture(pid, "assistant", "好的")
     stats = memory_tam.flush(pid, brain_cfg=None, source_task=tid)  # 无 LLM → 提炼空
     assert stats["extracted"] == 0 and memory_tam.count_atoms(pid) == 0
@@ -34,10 +34,10 @@ def test_flush_without_llm_stores_nothing_but_no_crash():
 def test_store_search_roundtrip_with_fts():
     pid, _ = _mk_project()
     conn = memory_tam.open_db(pid)
-    memory_tam._fts_sync(conn, "r1", "殖民地已建立农田与灌溉系统")
-    memory_tam._fts_sync(conn, "r2", "用户喜欢夜视Mod")
+    memory_tam._fts_sync(conn, "r1", "项目已建立构建与部署流水线")
+    memory_tam._fts_sync(conn, "r2", "用户偏好深色主题")
     conn.commit(); conn.close()
-    hits = memory_tam.search(pid, "灌溉系统")  # trigram 需 ≥3 字符
+    hits = memory_tam.search(pid, "部署流水线")  # trigram 需 ≥3 字符
     assert any(h["record_id"] == "r1" for h in hits)
     assert memory_tam.search(pid, "不存在的词xyzzy") == [] or True  # 不抛异常即可
 
@@ -46,15 +46,15 @@ def test_dedup_fallback_store_without_brain():
     """无 LLM:判重 fallback store(宁重复不丢失)。"""
     pid, _ = _mk_project("d-tam2")
     conn = memory_tam.open_db(pid)
-    memory_tam._fts_sync(conn, "old", "殖民地已建立农田")
+    memory_tam._fts_sync(conn, "old", "项目已建立构建流程")
     conn.commit(); conn.close()
-    d = memory_tam._decide(conn, "殖民地已建立农田", None, fts_ok=True)
+    d = memory_tam._decide(conn, "项目已建立构建流程", None, fts_ok=True)
     assert d["action"] == "store"
 
 
 def test_inject_threshold_zero_when_pool_small():
     pid, _ = _mk_project("d-tam3")
-    assert memory_tam.inject_text(pid, "农田") == ""  # 池子 < 阈值 → 零注入
+    assert memory_tam.inject_text(pid, "部署") == ""  # 池子 < 阈值 → 零注入
 
 
 def test_disabled_gate_is_noop():
@@ -70,11 +70,11 @@ def test_disabled_gate_is_noop():
 def test_scope_routes_to_global_db(monkeypatch):
     """提炼带 scope:global 的 atom 入全局库,project 的入项目库。"""
     pid, tid = _mk_project("d-tam-scope")
-    memory_tam.capture(pid, "user", "我习惯深夜工作;这个项目的杀阵靠夜视")
+    memory_tam.capture(pid, "user", "我习惯深夜工作;这个项目的发布走灰度")
     memory_tam.capture(pid, "assistant", "记下了")
     monkeypatch.setattr(memory_tam.llm_judge, "chat_json", lambda *a, **k: {"facts": [
         {"text": "用户偏好深夜工作", "scope": "global"},
-        {"text": "本项目的杀阵设计依赖夜视", "scope": "project"},
+        {"text": "本项目的发布流程依赖灰度", "scope": "project"},
     ]})
     stats = memory_tam.flush(pid, brain_cfg={}, source_task=tid)
     assert stats["extracted"] == 2 and stats["stored"] == 2
@@ -103,16 +103,16 @@ def test_inject_two_way_retrieval(monkeypatch):
     monkeypatch.setattr(memory_tam, "_INJECT_TRIGGER", 2)
     ts = "2026-10-05T00:00:00+00:00"
     pconn = memory_tam.open_db(pid)
-    pconn.execute("INSERT INTO atoms VALUES(?,?,?,?,0,?,?)", ("p1", "本项目的灌溉系统覆盖三个区域", "fact", "t", ts, ts))
-    memory_tam._fts_sync(pconn, "p1", "本项目的灌溉系统覆盖三个区域")
+    pconn.execute("INSERT INTO atoms VALUES(?,?,?,?,0,?,?)", ("p1", "本项目的部署流水线覆盖三个环境", "fact", "t", ts, ts))
+    memory_tam._fts_sync(pconn, "p1", "本项目的部署流水线覆盖三个环境")
     pconn.commit(); pconn.close()
     gconn = memory_tam.open_global_db()
     gconn.execute("INSERT INTO atoms VALUES(?,?,?,?,0,?,?)", ("g1", "用户偏好中文回复", "fact", "t", ts, ts))
     memory_tam._fts_sync(gconn, "g1", "用户偏好中文回复")
     gconn.commit(); gconn.close()
     # 项目库命中
-    text = memory_tam.inject_text(pid, "灌溉系统")
-    assert "灌溉系统" in text
+    text = memory_tam.inject_text(pid, "部署流水线")
+    assert "部署流水线" in text
     # 项目库无相关、仅全局库命中 → 全局条目仍可见(跨项目)
     text2 = memory_tam.inject_text(pid, "中文回复")
     assert "中文回复" in text2
@@ -169,35 +169,61 @@ def test_profile_maintain_below_trigger_noop(monkeypatch):
     assert not _RP.user_profile().exists()
 
 
-# === L2 场景块（TAM scene_blocks 思路） ========================================
+# === L2 场景块(TAM scene-extractor 移植,执行器在 scene_executor) ================
 def test_scene_maintain_writes_and_watermark(monkeypatch):
-    """L2 维护：证据+现有块 → LLM 更新 scene.md + meta 水位；间隔内不重跑。"""
+    """L2 维护薄壳:gate+水位在 memory_tam,机制在 scene_executor;间隔内不重跑。"""
+    from omni_core.brain.llm import BrainReply, ToolCall
+    from omni_core.local import scene_executor
+
     pid, _ = _mk_project("d-tam-l2")
+    d = scene_executor.scene_blocks_dir(pid)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "old.md").write_text(
+        "-----META-START-----\nsummary: 旧块\nheat: 1\n-----META-END-----\n- 旧事实\n",
+        encoding="utf-8")
     calls = []
 
-    def fake_chat_json(brain_cfg, system, user, timeout=10.0):
-        calls.append(user)
-        return {"scene": "殖民地状态：2 名殖民者，研究 MicroelectronicsBasics 进行中。"}
+    class _Fake:
+        def __init__(self, cfg, timeout=180.0, on_debug=None):
+            self.calls = calls
 
-    monkeypatch.setattr(memory_tam.llm_judge, "chat_json", fake_chat_json)
-    memory_tam._maybe_maintain_scene(
-        pid, {"mock": 1}, "[user] 继续游戏\n[assistant] 殖民地正常推进", task_id="")
-    p = _RP.project_dir(pid) / "memory" / "scene_blocks" / "scene.md"
-    assert p.is_file() and "MicroelectronicsBasics" in p.read_text(encoding="utf-8")
+        def chat(self, messages, tools=None, tool_choice="auto"):
+            self.calls.append(list(messages))
+            i = len(self.calls) - 1
+            if i == 0:
+                return BrainReply(tool_calls=[ToolCall(
+                    name="scene_write",
+                    args={"scene_file": "old.md",
+                          "content": "-----META-START-----\nsummary: 旧块\nheat: 2\n"
+                                     "-----META-END-----\n- 旧事实\n- 项目状态:2 个进行中任务\n"},
+                    id="c1")])
+            return BrainReply(content="已更新")
 
-    # 间隔内第二次调用：不触发 LLM（calls 数不变）、不改文件
-    before = p.read_text(encoding="utf-8")
-    memory_tam._maybe_maintain_scene(pid, {"mock": 1}, "新证据", task_id="")
-    assert len(calls) == 1
-    assert p.read_text(encoding="utf-8") == before
+    monkeypatch.setattr(scene_executor, "LLMClient", _Fake)
+    _brain = {"base_url": "http://127.0.0.1:9", "model": "m", "api_key": "k"}
+    memory_tam._maybe_maintain_scene(pid, _brain, "[user] 继续推进", task_id="")
+    meta, _ = scene_executor.parse_scene_block((d / "old.md").read_text(encoding="utf-8"))
+    assert meta["heat"] == 2  # UPDATE → heat 旧+1(TAM 规则)
+    # 间隔内第二次调用:不触发 LLM(calls 数不变)、不改文件(一次维护 = 工具轮+收尾轮)
+    n_calls = len(calls)
+    assert n_calls >= 2
+    before = (d / "old.md").read_text(encoding="utf-8")
+    memory_tam._maybe_maintain_scene(pid, _brain, "新证据", task_id="")
+    assert len(calls) == n_calls
+    assert (d / "old.md").read_text(encoding="utf-8") == before
 
 
-def test_scene_load_and_disabled_gate(monkeypatch):
+def test_scene_block_read_and_disabled_gate(monkeypatch):
+    from omni_core.local import scene_executor
+
     pid, _ = _mk_project("d-tam-l2b")
-    p = _RP.project_dir(pid) / "memory" / "scene_blocks" / "scene.md"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("殖民地事实一行", encoding="utf-8")
-    assert memory_tam.load_scene_text(pid) == "殖民地事实一行"
+    d = scene_executor.scene_blocks_dir(pid)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "a.md").write_text(
+        "-----META-START-----\nsummary: 项目事实\nheat: 1\n-----META-END-----\n- 事实一行\n",
+        encoding="utf-8")
+    assert scene_executor.read_scene_block(pid, "a").startswith("-----META-START-----")
+    assert scene_executor.read_scene_block(pid, "缺失") == ""
     # gate 关（enabled False）→ 维护直接返回
     import config as config_mod
     monkeypatch.setattr(config_mod, "get_config",

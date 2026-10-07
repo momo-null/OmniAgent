@@ -28,6 +28,8 @@ async def list_tools():
         from omni_core.tools.base import TOOL_REGISTRY
         from omni_core.tools.env_loader import active_kind
         from omni_core.tools.loader import PluginContext, list_plugins, load_plugins
+        from omni_core.tools.mcp_servers import build_mcp_servers
+        from omni_core.async_bridge import run_async
 
         cfg = app_config.load_config() or {}
         env_kind = active_kind(cfg)
@@ -50,7 +52,6 @@ async def list_tools():
                 "server": p.meta.get("server") if p.source == "mcp" else None,
                 "parameters": fn.get("parameters") or {},
             })
-        tools.sort(key=lambda t: (t["source"], t["name"]))
 
         environments = [
             {"kind": e["kind"], "title": e["title"], "active": e["kind"] == env_kind}
@@ -59,6 +60,44 @@ async def list_tools():
         plugins = list_plugins(cfg, env_kind=env_kind)
 
         mcp_cfg = config.load_mcp_config()
+
+        # MCP 工具发现（只读枚举）：实际连接已启用 server 并 list_tools，
+        # 与运行时 _ensure_mcp_connected 同机制；单个 server 连不上 / 探活失败只跳过，
+        # 不拖垮整个枚举。工具名带 SDK 前缀 mcp_<server>__<tool>（与 agent 实际可见名一致）。
+        try:
+            _mcp_servers = build_mcp_servers(mcp_cfg.get("servers"), log=lambda m: None)
+            for _srv in _mcp_servers:
+                _nm = str(getattr(_srv, "name", "?") or "?")
+                try:
+                    if getattr(_srv, "session", None) is None:
+                        run_async(_srv.connect(), timeout=15)
+                    _raw = run_async(_srv.list_tools(), timeout=15) or []
+                    for _rt in _raw:
+                        _rn = str(getattr(_rt, "name", "") or "")
+                        if not _rn:
+                            continue
+                        tools.append({
+                            "name": f"mcp_{_nm}__{_rn}",
+                            "description": getattr(_rt, "description", "") or "",
+                            "source": "mcp",
+                            "unit": _nm,
+                            "server": _nm,
+                            "parameters": getattr(_rt, "input_schema", None) or {},
+                        })
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        _clean = getattr(_srv, "cleanup", None)
+                        if _clean is not None:
+                            run_async(_clean(), timeout=10)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        tools.sort(key=lambda t: (t["source"], t["name"]))
+
         servers = []
         for s in mcp_cfg.get("servers") or []:
             if not isinstance(s, dict):

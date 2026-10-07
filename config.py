@@ -274,6 +274,13 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
             "auto_maintain": True,
             "trigger_every_n": 20,
         },
+        # 场景块（L2，scene_executor = TAM scene-extractor 移植）：
+        # max_blocks 容量上限（TAM maxScenes 缺省 15，三级预警强制合并）；
+        # prompt_mode 提炼家族开关（personal=场景知识；work 家族将来加 prompt 常量即接入）
+        "scene": {
+            "max_blocks": 15,
+            "prompt_mode": "personal",
+        },
     },
     # skill 轴 · 结构化宏提取开关（默认关：押的是回放省步价值假设，
     # 负结果纪律 2 连败停手）

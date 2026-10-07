@@ -157,16 +157,11 @@ class GraphRunnerMixin:
         for note in (injected or []):
             user = f"{user}\n\n【人类指示（最高优先级）】{note}"
 
-        # M10：长任务压缩（原「单大脑」路径的能力，统一入口后主 agent 一样要吃）
-        compress_after = 0
-        if self.brain_long_task.get("enabled"):
-            compress_after = int(self.brain_long_task.get("max_turns", 16))
-        # D1/D2：token 占比触发压缩（抢在 context rot 前）；无占比配置退化为轮数。
-        # 大脑走压缩（不硬裁），故 history_keep=0。
+        # 长任务压缩参数（粘性压缩：阈值与硬顶，按 maxInputTokens 的比例计算）
+        # 大脑走压缩（不硬裁），故不设 history_keep（默认 0 = 不裁剪）。
         _lt = self.brain_long_task or {}
         compress_threshold = float(_lt.get("compress_threshold", 0.0) or 0.0)
         hard_ceiling = float(_lt.get("hard_ceiling", 0.0) or 0.0)
-        ctx_window = int(_lt.get("context_window", 0) or 0)
         # T2.2 Prune-First：压缩前对超长 tool 输出做首尾截断（0 = 关闭，零干预）
         _prune_cfg = _lt.get("prune") or {}
         # 缺省取代码常量（config.CONTEXT_DEFAULTS）；显式配 0 = 关闭
@@ -214,11 +209,8 @@ class GraphRunnerMixin:
             allow_dispatch=allow_dispatch, user_input=user,
             available_slots=list(self.executors.keys()),
             budget_hint_ratio=self.budget_hint_ratio,
-            compress_after=compress_after,
-            history_keep=0,
             compress_threshold=compress_threshold,
             hard_ceiling=hard_ceiling,
-            ctx_window=ctx_window,
             prune_threshold=prune_threshold,
             prune_head=prune_head,
             prune_tail=prune_tail,
@@ -236,6 +228,7 @@ class GraphRunnerMixin:
             "escalate_reason": res.get("escalate_reason", "") or "",
             "provider_error": bool(res.get("provider_error")),
             "budget_exhausted": "budget_exhausted" in (res.get("reason") or ""),
+            "paused": bool(res.get("paused")),
         }
 
     def _run_graph(self, spec: TaskSpec) -> Dict[str, Any]:
@@ -275,7 +268,7 @@ class GraphRunnerMixin:
                 pass
         world.run_id = run_id
         # F2.1：当前 turn 用户输入为 objective 唯一权威源。新 run 开始无条件用本轮
-        # 输入覆盖 world.objective（解决「续跑残留上一轮 objective 导致重复开局侦察」）。
+        # 输入覆盖 world.objective（解决「续跑残留上一轮 objective 导致重复的起始侦察」）。
         # 防御：objective 超长（>2000，疑似整段 system prompt 被塞入的污染形态）时
         # 拒绝持久化到 world_model.md frontmatter（不污染磁盘），本 run 仍用本轮输入。
         _OBJ_MAX = 2000
@@ -354,7 +347,7 @@ class GraphRunnerMixin:
             return res
 
         def _finalize_fn(state, success, reason, steps, rounds, escalated, escalate_reason,
-                         provider_error=False):
+                         provider_error=False, paused=False):
             # 仅回填计数 + 返回核心字段；落盘由下方 _finish 统一处理
             self.step = steps or self.step
             if escalated:
@@ -378,6 +371,7 @@ class GraphRunnerMixin:
                 "escalated": escalated,
                 "escalate_reason": escalate_reason,
                 "provider_error": bool(provider_error),
+                "paused": bool(paused),
                 "rounds": rounds,
                 "subtask_results": subtask_results,
             }
@@ -475,6 +469,7 @@ class GraphRunnerMixin:
         base["escalated"] = escalated
         base["escalate_reason"] = escalate_reason
         base["provider_error"] = provider_error
+        base["paused"] = bool(res.get("paused"))
         base["rounds"] = rounds
         base["subtask_results"] = subtask_results
         # M5: 把采集结果随运行结果一并返回，并落盘 tasks/<task_id>/collected.json
@@ -504,7 +499,9 @@ class GraphRunnerMixin:
                 validate_identifier(spec.task_id, "task_id")
                 # U3：provider 服务侧错误命中时，任务置 paused 且不写 finished_at
                 # （保留运行记录不变），由用户补充配额/稍后重试后从断点续跑。
-                if provider_error:
+                # F2.2：daemon 模式纯文本收尾同样置 paused——本轮结束但任务保持活跃，
+                # 等用户下条消息带 history 续跑，不误判完成（不写 finished_at）。
+                if provider_error or res.get("paused"):
                     TaskStore.update(
                         spec.task_id,
                         state="paused",

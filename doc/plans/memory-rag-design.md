@@ -12,7 +12,7 @@
 
 - 现行注入（TAM 移植，`omni_core/memory_tam.py`）：项目库 + 全局库两库合计 ≥20 条时
   检索段生效（FTS5 trigram 双路按分合并）；画像 `user_profile.md` 常驻；技能目录另行注入。
-- 池子小的时候成立；hachimi 实测**池子 1 条时排序无差别**（检索无增益）。崩坏点在池子
+- 池子小的时候成立；早期试点实测**池子 1 条时排序无差别**（检索无增益）。崩坏点在池子
   增长后：2000 字符装不下全部相关内容，常驻注入的召回率开始崩——这时候才需要 RAG。
 
 ### 0.2 触发条件（量化，满足其一即启动切片 1）
@@ -29,10 +29,10 @@
 - **skill 轴严格排除**：`substeps` / playbook / routine 标签一律**不进任何索引**；
   skill 轴的发现（注入目录 / `search_skill`）与消费（`replay_skill`）不经过本设计的
   任何环节。检索基础设施可以共用工程常识，但索引内容、存储位置、消费路径三不混
-  （对齐 tam-porting-map.md 零重叠验收口径）。
+  （对齐 memory-architecture.md §1 零重叠验收口径）。
 - 语义判断全 LLM、脚本只做簿记的红线**不变**：检索只做**候选生成**（排序是机制不是
   语义判断），终审仍是 §8.2-1 的 LLM 选档。检索参数（k、RRF 常数）是机制参数，
-  不构成 hachimi 意义上的"阈值写死语义"。
+  不属于被禁的"阈值写死语义"。
 
 ---
 
@@ -59,7 +59,7 @@
 | 混合融合 | **BM25 + 向量 + RRF** 融合，按需回落 L1/L0 | README |
 | 注入预算 | listing 生成 `<available_skills>` 块用 `char_budget`（0–64000，**默认 8000**） | v3 API 文档 |
 | 三预算 | 结果受**条数 / 字符 / 超时**三类上限约束（参数值未公开） | README |
-| 召回哲学 | 常驻 L2/L3 **恢复语境**，涉及具体约束再检索回落 L1/L0 | README / 设计文 |
+| 召回哲学 | 常驻 L2/L3 **恢复语境**，涉及具体约束再检索回落 L1/L0（**勘误 2026-10-07**：源码实测 `auto-recall.ts`——L2 只有**摘要导航**常驻 system，全文按需 `read` 读取（渐进披露）；「L2 全文常驻」是早期误读，Omni 已据此对齐，见 `memory-architecture.md`） | README / 设计文 / 源码 |
 | 头条收益 | 上下文卸载 + 任务画布 ⇒ **token −61%** | 宣传口径，未复现 |
 
 ### 1.3 本设计抄什么、不抄什么
@@ -96,6 +96,8 @@ projects/<pid>/memory/index.db
   ├── vectors    （fact_id, embedding BLOB, model, dim）    ← 向量臂切片启用
   └── meta       （fact_id, source_task, ts, scope, indexed_at）
 全局层：memory/index.db（同一 schema，索引全局 MEMORY.md bullets + L3 摘要）
+L2 层：memory/scene_blocks/*.md（多文件主题场景块）+ memory/scene_index.json
+      （META 投影缓存，scene_executor 维护后全量重建；2026-10-07 多文件执行器落地）
 ```
 
 - **写时索引**：`distill_task_memory` / merge 落 fact → 写 meta + FTS →（开关开时）embed

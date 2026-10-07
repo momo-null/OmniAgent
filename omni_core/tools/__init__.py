@@ -30,6 +30,7 @@ from omni_core.tools.skill_tool import (
     set_skill_task_context,
     skill_load_limit,
 )
+from omni_core.tools.scene_tool import read_scene, set_scene_task_context
 from omni_core.tools.loader import (
     PluginContext,
     LoadReport,
@@ -58,6 +59,8 @@ __all__ = [
     "load_skill",
     "set_skill_task_context",
     "skill_load_limit",
+    "read_scene",
+    "set_scene_task_context",
     "PluginContext",
     "LoadReport",
     "load_plugins",

@@ -77,7 +77,6 @@ class ToolLoop(
         self,
         brain_cfg: dict,
         verbose: bool = True,
-        max_history: int = 0,
         executor_cfg: Optional[dict] = None,
         escalation_cfg: Optional[dict] = None,
         on_debug=None,
@@ -117,10 +116,6 @@ class ToolLoop(
         # ExecutionModule 使用契约三成员（kind / text_of / verify_done）。
         self.exec = activate_environment(_cfg)
         self.exec_model = "none"
-        # max_history: 主链保留最近 N 轮（0=不裁剪，适合大上下文云端模型）。
-        # 小上下文本地模型设为较小值可防止多步后上下文溢出；
-        # 子任务内层 loop 改用 escalation.worker_history_keep（按轮裁剪，语义更清晰）。
-        self.max_history = max_history
         self.verbose = verbose
         self.brain_capabilities = (brain_cfg or {}).get("capabilities", {}) or {}
         # 思考路由模式（native/think-tag/none）：决定思考如何被采集与展示

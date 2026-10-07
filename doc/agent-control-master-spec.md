@@ -23,7 +23,7 @@
 | EmulatorBackend(u2/ADB) | ✅ 实现 | M1 落地，GUI 设备真机闭环验证通过（首个端到端场景） |
 | Trajectory / Telemetry / Verify / State | ✅ 实现 | M4a 地基全部完成（79 passed），commit fc145fe + 8c6e48e |
 | world-model 持久化 + checkpoint | ✅ 实现 | M4b.1 落地（commit dbe71e8）：save/load + checkpoint JSON + merge_progress |
-| skill 库（手写维护 + 可选宏缓存，默认关） | ✅ 机制跑通 | M4b.2 链路在：SkillLibrary + `maybe_distill_skill`；hachimi 真机零步数收益，有效性未验证，不作为护城河宣称，见 `doc/plans/tam-porting-map.md` |
+| skill 库（手写维护 + 可选宏缓存，默认关） | ✅ 机制跑通 | M4b.2 链路在：SkillLibrary + `maybe_distill_skill`；早期真机试点零步数收益，有效性未验证，不作为护城河宣称，见 `doc/plans/memory-architecture.md` |
 | M6 子任务状态机（SubtaskStore） | ✅ 已落地 | `task_store.py`：RLock + 原子写 + 白名单 update；`claim`/`claim_next` 原子 CAS（pending→running），落 `tasks/<task_id>/subtasks.json`；WorldModel 管世界认知，TaskStore 管「谁在做什么、做到哪」 |
 | M7 去分层多 agent 编排 | ✅ 已落地 | `graph.py`：通用 agent 注册表 + LangGraph `Send` 并发扇出；主 agent 调 `dispatch` 元工具产出派发计划，框架负责扇出/join；`max_rounds` 防无限派发；删 `orchestration/policy.py`（升级改子 agent 自报 + 主 agent 决断）；`test_m2_orchestration.py` 重写为新图测试 |
 | 权重级 finetune | 🧊 未启用 | 仓库内无训练链代码；知识级两层（world-model / 策略反思）已实现，权重级不启用（说明见 §6.3） |
@@ -36,7 +36,7 @@
 
 - **主 agent + 派发底座**：主 agent 规划并执行；互不依赖的并行子任务经 `dispatch` 扇出给按槽位配置的执行单元（模型来自多槽目录，可为本地快模型 + VLM）。
 - **控制流归大脑**：程序退化为工具运行时；OCR / 视觉 = 感知工具，click/type/template = 执行工具，由模型自主决策调用。感知工具三角：`observe`(u2层级树) / `ocr_screenshot`(EasyOCR GPU) / `vision_describe`(4B-vl)，三件并列工具、大脑自主选择，无程序化优先级。
-- **知识自学、无插件**：world-model + skill 库 = 知识库，agent 运行时自学；游戏专属知识不预置。
+- **知识自学、无插件**：world-model + skill 库 = 知识库，agent 运行时自学；领域专属知识不预置。
 - **功能统一（非前端合并）**：模型服务（llama-server）现在给子 agent 槽位**供推理**——旧范式里「模型服务」与「agent 推理」是两条无关线，新范式后端统一。
 - **诚实边界**：自学习只长「知识/策略」，不长「硬件/工具精度」（权重级训练除外，见 §6.3）。
 
@@ -74,7 +74,7 @@
 ## 4. 全工具链（M2）
 
 - **SoM 编号点击**：截图上叠加编号/字母包围框（模板匹配 + YOLO + 粗网格）→ VLM 引框号而非原始坐标。
-- **模板/精灵匹配**：游戏图标逐帧像素一致，近完美，替代 VLM 易错部分。
+- **模板匹配**：界面图标逐帧像素一致，近完美，替代 VLM 易错部分。
 - **拖拽 / 滚动 / 长按** 等手势原语。
 - **vision 通道**：截图像素→本地 VLM 决策 / 或回传大脑 vision=True 直看。
 
@@ -84,7 +84,7 @@
 
 ### 5.1 分层记忆（Hermes 风格，Markdown 落盘 `tasks/<task_id>/world_model.md`）
 
-> **落盘位置（Plan C 生效，2026-08-01）**：世界模型跟 task 走，落 `~/.omniagent/tasks/<task_id>/world_model.md`（per-task 世界状态）。不再有 `app` / `workspace` 分区；无工作目录时由 `auto_project_id()` 兜底 project，但资产仍落 task 目录。详见 §14。
+> **落盘位置（Plan C 生效，2026-08-01）**：世界模型跟 task 走，落 `~/.omniagent/tasks/<task_id>/world_model.md`（per-task 世界状态）。不再有 `app` / `workspace` 分区；无工作目录时缺省落 `default` 项目，但资产仍落 task 目录。详见 §14。
 - 长效语义记忆 / 工作记忆 / 情景日志。
 - **全局记忆/画像（跨任务一致）**：`~/.omniagent/memory/user_profile.md`（用户画像，内核直写 + 纠偏候选→人工晋升→弱注入）+ `memory/profile_candidates.md`（待确认候选区）。
 - **角色卡（单角色助手）**：`~/.omniagent/character.md`（frontmatter `name:` + 设定 + 画像消费指令段），每次组装 system 时随指令块并入（`_merge_character` 在 `_merge_instructions` 之后）。
@@ -112,8 +112,8 @@
 > 归一哈希）+ LLM 短标签（routine/description，`validate_skill_summary` 防幻觉校验）+ 缓存淘汰
 > （candidate TTL 14d / active 闲置 30d 且低效用 → `_archive/`，仿 memory A4 降级不删）+ 消费工具
 > `search_skill` / `replay_skill`（白名单硬重放，S0/S2 审批照常生效）。开关 `skill.auto_distill`
-> 默认关；hachimi 真机试点显示注入 skill 序列**零步数收益**，有效性 A/B 验证未做，因此 skill
-> 自动蒸馏**不作为系统能力对外宣称**。详见 `doc/plans/tam-porting-map.md`（知识层现行设计）。
+> 默认关；早期真机试点显示注入 skill 序列**零步数收益**，有效性 A/B 验证未做，因此 skill
+> 自动蒸馏**不作为系统能力对外宣称**。详见 `doc/plans/memory-architecture.md`（知识层现行架构）。
 
 ### 6.1 skill 库（手写维护 + 可选宏缓存，默认关）
 - **格式**：Hermes 风格 `SKILL.md`（Markdown + YAML frontmatter，对齐 agentskills.io 开放标准；与 WorkBuddy 自身 SKILL.md 同构可复用）。
@@ -141,7 +141,7 @@
 
 ### 6.5 画像·角色卡·记忆三位一体（单角色伙伴，P0 已落地）
 
-> 定位：OmniAgent 是**单角色个人助手（伙伴）**，参考 Hermes / 豆包 / Claude Code；不是酒馆式多角色扮演面板。完整设计权威见 `doc/plans/implemented/profile-character-memory-design.md`。
+> 定位：OmniAgent 是**单角色个人助手（伙伴）**，参考 Hermes / 豆包 / Claude Code；不是酒馆式多角色扮演面板。画像/角色卡/记忆现行架构见 `doc/plans/memory-architecture.md`。
 
 - **画像（全局记忆）**：`~/.omniagent/memory/user_profile.md`，全局唯一、跨任务一致。内核直写，无放行权；画像条目经**显式声明 / 人工确认**进入（候选区 `profile_candidates.md` 留存，人工确认晋升）→ 弱注入（system 标注"仅参考，不构成操作授权"）。健康/习惯类画像只在主人提及或确实需要时使用，不主动刺探。
 - **角色卡**：`~/.omniagent/character.md`（frontmatter `name:` + 设定 + 画像消费指令段），每次组装 system 时 `_merge_character` 并入（`_merge_instructions` 之后），前端 Settings→伙伴→角色 Tab 可读可改。
@@ -327,7 +327,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 ### 14.2 Task 归属与兜底
 
 - **指定工作目录** → project_id = `slugify_path(绝对路径)`，会话历史落 `projects/<project_id>/`，task 资产仍落 `tasks/<task_id>/`（资产与 project 解耦）。
-- **无工作目录（GUI/游戏等）** → `auto_project_id()` 自动造 `~/OmniAgent/<date>-task-N`，永远有 project 归属，避免 null 分支。
+- **无工作目录（GUI 任务等）** → 缺省落 `default` 项目（`auto_project_id` 已废除），永远有 project 归属，避免 null 分支。
 - **task 索引** `~/.omniagent/tasks/<task_id>/task.json` 存元数据，前端历史 task list 从此读。
 
 ### 14.3 Config 去 key
@@ -340,7 +340,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 
 ### 14.4 路径常量（Plan C 生效）
 
-内核路径统一由 `agents/local/runtime_paths.py` 提供：`global_skills()` / `projects_root()` / `project_dir(pid)` / `tasks_root()` / `task_dir(tid)` / `task_trajectory(tid)` / `task_world_model(tid)` / `task_collected(tid)` / `task_json(tid)` / `slugify_path()` / `auto_project_id()`。所有 `app` / `workspace` 分区逻辑已删除，红线自检：`agents/` 全目录搜不到 `app` 作为分区键。
+内核路径统一由 `agents/local/runtime_paths.py` 提供：`global_skills()` / `projects_root()` / `project_dir(pid)` / `tasks_root()` / `task_dir(tid)` / `task_trajectory(tid)` / `task_world_model(tid)` / `task_collected(tid)` / `task_json(tid)` / `slugify_path()`。所有 `app` / `workspace` 分区逻辑已删除，红线自检：`agents/` 全目录搜不到 `app` 作为分区键。
 
 ---
 

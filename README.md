@@ -24,7 +24,7 @@
 
 **尚未验证（诚实边界）**
 - 记忆轴处于**重构期**：新管线按 **TencentDB Agent Memory** 移植重建（设计见 `doc/plans/memory-rag-design.md`），有效性验证未开始。
-- **skill 宏轴（2026-10-04 保留，默认关）有效性未验证**：hachimi 真机试点已收口——机制层跑通（蒸馏链 5/5 成功、entry_id 精确分结构），但**注入技能序列零步数收益**（Δsteps=0，简单 UI 任务）⇒ 价值全系于回放执行器（跳过每步 LLM 决策），收益 A/B 待在 Omni 上以游戏脚本 / 确定性工具链场景补测；`skill.auto_distill` 默认关。
+- **skill 宏轴（2026-10-04 保留，默认关）有效性未验证**：早期真机试点已收口——机制层跑通（蒸馏链 5/5 成功、entry_id 精确分结构），但**注入技能序列零步数收益**（Δsteps=0，简单 UI 任务）⇒ 价值全系于回放执行器（跳过每步 LLM 决策），收益 A/B 待在 Omni 上以脚本化 / 确定性工具链场景补测；`skill.auto_distill` 默认关。
 - 单域、小样本，非生产级。
 - skill 驱动的角色化团队（team-mode）**规划中**：将复用派发底座的 `agent` 字段与执行单元注册表（见 `doc/plans/`），尚未实现。
 
@@ -140,7 +140,7 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
 
 **Not yet verified (honest caveat)**
 - The **memory axis is under reconstruction**: the new pipeline is a direct port of **TencentDB Agent Memory** (design in `doc/plans/memory-rag-design.md`). Effectiveness validation has not started.
-- **Skill macro axis (retained 2026-10-04, default off) effectiveness unverified**: the hachimi real-device pilot closed with the mechanism validated end-to-end (distillation chain 5/5 runs, entry_id correctly distinguishing structural variants) but **zero step savings from injecting the skill sequence** (Δsteps=0 on a simple UI task) ⇒ value hinges entirely on the replay executor (skipping per-step LLM decisions); the A/B is still pending on Omni in game-script / deterministic-toolchain scenarios; `skill.auto_distill` is off by default.
+- **Skill macro axis (retained 2026-10-04, default off) effectiveness unverified**: an early real-device pilot closed with the mechanism validated end-to-end (distillation chain 5/5 runs, entry_id correctly distinguishing structural variants) but **zero step savings from injecting the skill sequence** (Δsteps=0 on a simple UI task) ⇒ value hinges entirely on the replay executor (skipping per-step LLM decisions); the A/B is still pending on Omni in scripted / deterministic-toolchain scenarios; `skill.auto_distill` is off by default.
 - Single domain, small sample size; not production-grade.
 - A skill-driven role-based team (team-mode) is **planned**: it will reuse the dispatch foundation's `agent` field and executor registry (see `doc/plans/`); not yet implemented.
 
