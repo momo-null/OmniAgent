@@ -8,7 +8,7 @@
   M4a 轨迹落盘 + telemetry + 显式 verify
   M4b.1 world-model 持久化（current.md + checkpoint）
   M4b.2 skill 库（候选宏缓存，同 objective 连跑 3 次触发）
-  M4b.3 触发式维护（已退役：原任务后跑、标 excluded）
+  M4b.3 触发式维护（excluded 残留检查）
 
 大脑模型从 config.brain 读取（当前=u2），不硬编码；换模型只改 config。
 
@@ -120,7 +120,7 @@ def main():
         report["skills_error"] = str(e)
         log(f"M4b.2 skill 库读取失败: {e}")
 
-    # M4b.3 退役前 excluded 残留检查（触发式维护模块已删，仅清残留）
+    # M4b.3 excluded 残留检查
     excluded_dir = os.path.join(traj_dir, "excluded") if os.path.isdir(traj_dir) else None
     if excluded_dir and os.path.isdir(excluded_dir):
         ex = [f for f in os.listdir(excluded_dir) if f.endswith(".json")]

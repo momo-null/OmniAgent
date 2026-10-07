@@ -219,7 +219,7 @@ def save_providers(providers: Dict[str, Any]) -> None:
 
     data = dict(_catalog())
     data["providers"] = cleaned
-    # 清理指向已删除 provider/model 的默认选择（按**写入后**的目录判定，
+    # 清理指向不存在的 provider/model 的默认选择（按**写入后**的目录判定，
     # 否则会拿旧缓存把已失效的选择保留下来）
     defaults = data.get("defaults")
     if isinstance(defaults, dict):

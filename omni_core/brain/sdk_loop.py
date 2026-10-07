@@ -178,9 +178,9 @@ class OmniHooks(RunHooks):
 class _BudgetHintModel(Model):
     """M8 T2：包一层 Model，在步数越过阈值时把预算提示塞进**下一次** LLM 输入。
 
-    为什么不在块与块之间注入：本版 SDK 的 `Runner.run` 在 max_turns 用尽时直接抛
-    `MaxTurnsExceeded`，拿不回历史（stream_events 未接通，见 M5 遗留）；为了插提示
-    而人为切块会把已跑的若干轮历史丢掉。改在 Model 适配层注入后：
+    为什么不在块与块之间注入：`Runner.run` 在 max_turns 用尽时直接抛
+    `MaxTurnsExceeded`，拿不回历史；为了插提示而人为切块会把已跑的若干轮
+    历史丢掉。改在 Model 适配层注入后：
     - 不打断当前轮，也不切块，历史零丢失；
     - 提示出现在模型下一次决策的输入里，时机正好是阈值步。
     """
@@ -279,6 +279,9 @@ class _CompactionModel(Model):
         hard_ceiling_tokens: int = 0,
         keep_rounds: int = 8,
         on_compact: Optional[Callable[[], None]] = None,
+        prune_threshold: int = 0,
+        prune_head: int = 0,
+        prune_tail: int = 0,
     ):
         self._inner = inner
         self._threshold = int(threshold_tokens or 0)
@@ -286,6 +289,10 @@ class _CompactionModel(Model):
         self._summarize = summarize
         self._hard = int(hard_ceiling_tokens or 0)
         self._keep_rounds = int(keep_rounds or 8)
+        # Prune-First：压缩前先砍超长工具输出（0 = 关闭，零干预）
+        self._prune_threshold = int(prune_threshold or 0)
+        self._prune_head = int(prune_head or 0)
+        self._prune_tail = int(prune_tail or 0)
         # 压缩检查点回调：每当**新摘要**产出（含增量重压，不含粘性复用）触发一次。
         # 供上层做中途蒸馏等检查点动作；回调异常绝不影响模型请求（见 _safe_on_compact）。
         self._on_compact = on_compact
@@ -321,8 +328,15 @@ class _CompactionModel(Model):
             return None
         if not isinstance(items, list) or not items:
             return None
-        if _estimate_tokens(items) <= self._threshold:
-            return None                                   # 低于阈值：透传、零开销
+        # Prune-First：先砍超长工具输出再判阈值（只改本次请求副本，不落 SDK items）
+        if self._prune_threshold > 0:
+            items, _ = _prune_tool_results(
+                items, self._prune_threshold, self._prune_head, self._prune_tail
+            )
+            if _estimate_tokens(items) <= self._threshold:
+                return items                               # 修剪后已达标：不必压缩
+        elif _estimate_tokens(items) <= self._threshold:
+            return None                                    # 低于阈值：透传、零开销
         cut = self._cut_index(items)
         summary = self._sticky_summary(system_instructions, items, cut)
         if summary is None:
@@ -577,7 +591,7 @@ class _OutputTruncationModel(Model):
 
     @staticmethod
     def _usage_output(resp: Any) -> int:
-        """从 ModelResponse.usage 取输出 token 数（兼容新旧字段名）。"""
+        """从 ModelResponse.usage 取输出 token 数。"""
         u = getattr(resp, "usage", None)
         if u is None:
             return 0
@@ -673,9 +687,7 @@ def _extract(items):
     return reasoning, message, calls
 
 
-def _parse_llm_response(resp: Any):
-    """兼容旧调用：从 ModelResponse 取 ``(reasoning, message, calls)``。"""
-    return _extract(getattr(resp, "output", None) or [])
+
 
 
 def _parse_items(result: Any):
@@ -794,7 +806,7 @@ def _mk_dispatch(state: SubtaskState, gate: Any,
         "Args:\n"
         '    items: JSON 数组，每项形如 {"desc": "子任务描述", "done_when": "完成条件",\n'
         '        "agent": "执行单元名（可选）"}。' + _slot_hint + "\n"
-        "    need_verify: 本批次是否需二次复核（默认 false，行为与旧版一致）。\n"
+        "    need_verify: 本批次是否需二次复核（默认 false）。\n"
         "        开启后，子任务回收完成、下一轮执行前会再校验一次完成条件；\n"
         "        校验不通过只追加「复核未通过」标记，保留未完成语义交由模型\n"
         "        决策（不强制拦截、不做惩罚）。"
@@ -809,7 +821,7 @@ def _mk_dispatch(state: SubtaskState, gate: Any,
         Args:
             items: JSON 数组，每项形如 {"desc": "子任务描述", "done_when": "完成条件",
                 "agent": "执行单元名（可选）"}；不传 agent 则走默认执行单元。
-            need_verify: 本批次是否需二次复核（默认 false，行为与旧版一致）。
+            need_verify: 本批次是否需二次复核（默认 false）。
                 开启后，子任务回收完成、下一轮执行前会再校验一次完成条件；
                 校验不通过只追加「复核未通过」标记，保留未完成语义交由模型
                 决策（不强制拦截、不做惩罚）。
@@ -911,11 +923,41 @@ def build_meta_tools(
     return tools
 
 
+def _attach_partial_items(exc: BaseException, result: Any) -> None:
+    """把已跑出的 items 挂到 ``MaxTurnsExceeded`` 异常上回传给调用方。
+
+    不挂会让调用方拿「块前旧 items」重放下一块，整块对话记录蒸发。
+    """
+    if result is None:
+        return
+    try:
+        setattr(exc, "partial_items", result.to_input_list())
+    except Exception:
+        pass
+
+
+# 模型输出较长文本却没产出任何 tool_call 时，记录原文片段供事后取证。
+# 畸形工具调用（参数漏字符等）表现为「文本被当普通输出、调用根本不派发」，
+# 此前无任何痕迹可查——这是定位该类问题的最小可观测点。
+_SUSPECT_NO_CALL_CHARS = 200
+_SUSPECT_PREVIEW_CHARS = 300
+
+
+def _log_suspect_tool_call_text(text: str) -> None:
+    if not text or len(text) < _SUSPECT_NO_CALL_CHARS:
+        return
+    try:
+        print(f"[sdk_loop] 本轮未产出 tool_call，文本 {len(text)} 字符（疑似畸形调用）：\n"
+              f"{text[:_SUSPECT_PREVIEW_CHARS]}", flush=True)
+    except Exception:
+        pass
+
+
 async def _run_loop_streamed(agent, items, turns, hooks, on_llm_delta, on_llm_final,
                              on_turn_end=None):
     """用 ``Runner.run_streamed`` 跑一块：实时抽取 token 增量供前端打字机，结束再回传完整结果。
 
-    端点/模型不支持流式时退化为同步 ``Runner.run``（行为不变），保证兼容旧链路与测试。
+    端点/模型不支持流式时退化为同步 ``Runner.run``。
     ``on_llm_delta(kind, text)`` 在流式时按 token 回调（kind ∈ {reasoning, message}）；
     ``on_llm_final(reasoning, message, calls)`` 按**回合**回传该回合完整解析；
     ``on_turn_end()`` 在回合边界（该回合工具调用产出时）回调，供上游切块（seq++/清缓冲）。
@@ -925,6 +967,7 @@ async def _run_loop_streamed(agent, items, turns, hooks, on_llm_delta, on_llm_fi
     被 upsert 合并成一条并停在首次位置（现象：终态「结果与思考跑到最前、工具调用挤到后面」）。
     这里以流里的工具调用项作为回合边界：先把本回合内容收尾成独立块，再通知上游切块。
     """
+    result = None
     try:
         # 注意：run_streamed 是同步方法（直接返回 RunResultStreaming），不能 await。
         # 此前写成 await 会在首行抛 TypeError 被下方 except 无声吞掉、静默退回
@@ -968,38 +1011,51 @@ async def _run_loop_streamed(agent, items, turns, hooks, on_llm_delta, on_llm_fi
                             on_turn_end()
                         except Exception:
                             pass
+        # 畸形工具调用取证：不依赖 on_llm_final 是否挂载，流式路径无条件检测
+        if saw_delta and not turn_calls:
+            _log_suspect_tool_call_text("".join(m_buf))
         if on_llm_final is not None:
             try:
                 if saw_delta:
                     # 流式已逐回合交付：此处只补最后一回合的尾巴，绝不回灌整 chunk 聚合内容
                     if r_buf or m_buf or turn_calls:
+                        if not turn_calls:
+                            _log_suspect_tool_call_text("".join(m_buf))
                         on_llm_final("".join(r_buf), "".join(m_buf), list(turn_calls))
                     if on_turn_end is not None:
                         on_turn_end()
                 else:
                     # 全程无增量（端点不支持流式）：退回整块解析，行为与旧链路一致
                     reasoning, message, calls = _parse_items(result)
+                    if not calls:
+                        _log_suspect_tool_call_text(message)
                     on_llm_final(reasoning, message, calls)
             except Exception:
                 pass
         return result
-    except MaxTurnsExceeded:
+    except MaxTurnsExceeded as _mte:
+        # 本块步数用尽：把已跑出的 items 挂到异常上回传，避免整块历史丢失
+        _attach_partial_items(_mte, result)
         raise
     except Exception as e:
         # 不支持流式（如 chat_bridge 适配 / 离线端点）：退回同步跑，行为不变。
         # 必须留痕：此降级曾因静默吞异常掩盖 await 事故，绝不再无声失败。
         print(f"[sdk_loop] 流式不可用，退回同步 Runner.run: {type(e).__name__}: {e}", flush=True)
+        result = None
         try:
             result = await Runner.run(agent, items, max_turns=turns, hooks=hooks,
                                    run_config=_TOOL_NOT_FOUND_RUN_CONFIG)
             if on_llm_final:
                 try:
                     reasoning, message, calls = _parse_items(result)
+                    if not calls:
+                        _log_suspect_tool_call_text(message)
                     on_llm_final(reasoning, message, calls)
                 except Exception:
                     pass
             return result
-        except MaxTurnsExceeded:
+        except MaxTurnsExceeded as _mte:
+            _attach_partial_items(_mte, result)
             raise
         except Exception:
             raise
@@ -1153,13 +1209,15 @@ def _assemble_agent_stack(
     compress_threshold: float,
     hard_ceiling: float,
     retain_ratio: float,
-    compress_after: int,
     summarize: Optional[Callable[[List[Any]], Optional[str]]],
     max_output_tokens: int,
     on_truncate: Optional[Callable[[int, int], None]],
     model_settings: Any,
     on_state: Optional[Callable[[str], None]],
     on_compaction: Optional[Callable[[], None]] = None,
+    prune_threshold: int = 0,
+    prune_head: int = 0,
+    prune_tail: int = 0,
 ) -> Tuple[SubtaskState, Any, Any, bool, Optional[_RepeatGuard]]:
     """装配子任务的模型包装链 + `Agent` 实例，并连接 MCP（由 run_subtask_sdk 抽出，零逻辑改动）。
 
@@ -1198,8 +1256,11 @@ def _assemble_agent_stack(
             retain_ratio=_retain,
             summarize=summarize,
             hard_ceiling_tokens=_hard,
-            keep_rounds=compress_after or 8,
+            keep_rounds=8,
             on_compact=on_compaction,
+            prune_threshold=prune_threshold,
+            prune_head=prune_head,
+            prune_tail=prune_tail,
         )
     # T4.7：输出截断检测——包在最外层，拿到最终响应的 usage 用量
     if max_output_tokens > 0:
@@ -1256,12 +1317,10 @@ def run_subtask_sdk(
     on_step: Optional[Callable[[str, Any], None]] = None,
     on_debug: Optional[Callable[[Any], None]] = None,
     on_state: Optional[Callable[[str], None]] = None,
-    compress_after: int = 0,
     summarize: Optional[Callable[[List[Any]], Optional[str]]] = None,
     history_keep: int = 0,
     compress_threshold: float = 0.0,
     hard_ceiling: float = 0.0,
-    ctx_window: int = 0,
     prune_threshold: int = 0,
     prune_head: int = 0,
     prune_tail: int = 0,
@@ -1317,13 +1376,15 @@ def run_subtask_sdk(
         compress_threshold=compress_threshold,
         hard_ceiling=hard_ceiling,
         retain_ratio=retain_ratio,
-        compress_after=compress_after,
         summarize=summarize,
         max_output_tokens=max_output_tokens,
         on_truncate=on_truncate,
         model_settings=model_settings,
         on_state=on_state,
         on_compaction=on_compaction,
+        prune_threshold=prune_threshold,
+        prune_head=prune_head,
+        prune_tail=prune_tail,
     )
     # 「方案 B（纯文本收尾）」的例外标记：本块是否调用过 verify 元工具。
     # verify 属于 stop_tools，一调即结束本块。但它的语义是「请核对完成条件」，
@@ -1436,7 +1497,12 @@ def run_subtask_sdk(
             if state.steps == before:
                 # 本块未产生任何工具调用（如模型只回了文本）：记 1 步防记账停摆
                 state.steps += 1
-        except MaxTurnsExceeded:
+        except MaxTurnsExceeded as _mte:
+            # 回填本块已跑出的 items（挂在异常上的部分结果）：不回填会让下一块
+            # 拿「块前旧 items」重放，整块对话记录蒸发。
+            _partial = getattr(_mte, "partial_items", None)
+            if _partial:
+                items = list(_partial)
             # 本块步数用尽且未触发收尾工具。
             # T4.6（O5+）：步数以 Hook 计数为唯一权威，此处**不再批量累加 turns**
             # （此前会让步数虚高、与 Hook 记账不一致）；仅在 Hook 未记账时兜底
@@ -1471,7 +1537,7 @@ def run_subtask_sdk(
                     return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
                 if not overflow_retried:
                     overflow_retried = True
-                    keep_rounds = getattr(model, "_keep_rounds", 0) or compress_after or 8
+                    keep_rounds = getattr(model, "_keep_rounds", 0) or 8
                     items = _hard_keep(items, keep_rounds)
                     continue
                 # 上下文溢出重试仍失败 -> 落入下方原有失败逻辑（落 reason）
@@ -1485,7 +1551,7 @@ def run_subtask_sdk(
                         state.steps, True,
                         f"runner 异常: 输出多次被 max_tokens 截断(length x{length_retry})",
                         llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
-                keep_rounds = getattr(model, "_keep_rounds", 0) or compress_after or 8
+                keep_rounds = getattr(model, "_keep_rounds", 0) or 8
                 items = _hard_keep(items, keep_rounds)
                 items = _append_runtime_note(items, _LEN_TRUNC_MSG)
                 continue
@@ -1576,54 +1642,21 @@ def run_subtask_sdk(
         # 注：M8 的预算提示由 `_BudgetHintModel` 在 Model 适配层注入（见其文档字符串），
         # 不走块与块之间——本版 SDK 在 max_turns 用尽时拿不回历史，切块会丢上下文。
 
-        # 长任务上下文管理（N7 分层策略）：
-        # - worker（history_keep>0）：硬滑窗——无条件只留最近 N 轮，防本地小模型 ctx 溢出；
-        # - 大脑：token 占比触发压缩；有 compress_threshold 按占比（抢在 context rot 前），
-        #   hard_ceiling 占比则强制压缩（即便摘要失败也硬截断兜底）；无占比配置退化为轮数 compress_after。
-        # T3.2：启用 Model 适配层粘性压缩后，本段整体让位（新旧逻辑互斥），
-        # 压缩改由 _CompactionModel 在每次请求前于 Model 层执行。
+        # 长任务上下文管理：单一机制、两种实现，按模型能力二选一。
+        # - 粘性压缩（use_compaction）：每次模型请求前按 token 阈值把较早历史压成摘要，
+        #   由 _CompactionModel 在 Model 层执行（含 Prune-First 与硬上限兜底）；
+        # - 硬滑窗（history_keep>0）：无条件只留最近 N 轮，供无摘要能力的小上下文 worker。
         if use_compaction:
             pass
         elif history_keep and history_keep > 0:
             items = _hard_keep(items, history_keep)
-        elif ctx_window and ctx_window > 0:
-            ratio = _estimate_tokens(items) / float(ctx_window)
-            if hard_ceiling and ratio >= hard_ceiling:
-                # 压缩前先 Prune-First：修剪超长 tool 输出（仅作用后续请求输入）
-                items, _ = _prune_tool_results(items, prune_threshold, prune_head, prune_tail)
-                # 修剪后若已低于压缩阈值：纯截断已够，跳过摘要（不调 _maybe_compress）
-                if (not compress_threshold) or (_estimate_tokens(items) / float(ctx_window)) >= compress_threshold:
-                    items = _maybe_compress(items, compress_after or 8, summarize) \
-                        if summarize else _hard_keep(items, compress_after or 8)
-            elif compress_threshold and ratio >= compress_threshold and summarize:
-                items, _ = _prune_tool_results(items, prune_threshold, prune_head, prune_tail)
-                if _estimate_tokens(items) / float(ctx_window) >= compress_threshold:
-                    items = _maybe_compress(items, compress_after or 8, summarize)
-        elif compress_after and summarize:
-            # 退化为轮数压缩分支（无 ctx_window 占比概念）：先修剪超长 output，再按轮数压缩
-            items, _ = _prune_tool_results(items, prune_threshold, prune_head, prune_tail)
-            items = _maybe_compress(items, compress_after, summarize)
 
     # 走到这里 = 步数预算耗尽（未 task_done、未 verify 通过、未升级）。
     # 与旧循环一致：预算耗尽即失败，并写 budget_exhausted 供编排层终止。
     return _result(False, f"budget_exhausted: 已达步数上限 {max_steps}", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
 
 
-def _maybe_compress(items: List[Any], keep: int, summarize: Callable[[List[Any]], Optional[str]]) -> List[Any]:
-    """历史超过 keep 轮时，把较早轮次压成一条摘要消息（防上下文溢出）。"""
-    # “一轮” = 模型的一次动作（function_call）；超 keep 轮则压缩较早历史
-    user_idx = [i for i, it in enumerate(items) if _kind(it) == "function_call"]
-    if len(user_idx) <= keep:
-        return items
-    cut = user_idx[-keep]
-    old, recent = items[:cut], items[cut:]
-    try:
-        summary = summarize(old)
-    except Exception:
-        return items
-    if not summary:
-        return items
-    return [{"role": "user", "content": f"[历史压缩摘要] {summary}"}] + recent
+
 
 
 def _hard_keep(items: List[Any], keep: int) -> List[Any]:
@@ -1688,15 +1721,13 @@ def _prune_tool_results(items: List[Any], threshold: int, head: int, tail: int) 
 
 
 def _estimate_tokens(items: List[Any]) -> int:
-    """启发式 token 估算（N7 token 占比触发用）。
+    """启发式 token 估算（压缩阈值与占比判断共用）。
 
-    不依赖 tiktoken：按字符数 / 4 估算（中英文混排足够做占比判断）。
+    不依赖 tiktoken；CJK 与非 CJK 分开计数（见 `_text_tokens`）。
     SDK item 可能是 dict 或对象，兼容两者取文本内容。
 
     依次累加四类文本字段：message 的 content / name，工具调用的
-    function_call.arguments 与 function_call_output.output。原实现仅统计
-    content / name，漏算 arguments / output，导致工具参数或返回超长时
-    token 估算严重偏低、压缩阈值永不触发（上下文溢出风险）。
+    function_call.arguments 与 function_call_output.output。
     """
     total = 0
     for it in items:
@@ -1717,8 +1748,32 @@ def _estimate_tokens(items: List[Any]) -> int:
                 getattr(it, "output", None),
             )
         text = "".join(str(p) for p in parts if p)
-        total += max(1, len(text) // 4)
+        total += max(1, _text_tokens(text))
     return total
+
+
+# CJK 码点区间（含中日韩统一表意文字、兼容表意文字、CJK 标点与全角字符）
+_CJK_RANGES = (
+    (0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF),
+    (0x3000, 0x303F), (0xFF00, 0xFFEF),
+)
+
+
+def _text_tokens(text: str) -> int:
+    """按字符类别估算 token 数：CJK 每字记 1，其余每 4 字符记 1。
+
+    中文实际约 1 token/字；此前全量按「字符数 / 4」把中文低估约 4 倍，
+    使压缩阈值形同虚设（估算 22.5 万时实际已放行 60 万+ 真 token）。
+    """
+    cjk = 0
+    other = 0
+    for ch in text:
+        o = ord(ch)
+        if any(lo <= o <= hi for lo, hi in _CJK_RANGES):
+            cjk += 1
+        else:
+            other += 1
+    return cjk + other // 4
 
 
 def _kind(item: Any) -> str:

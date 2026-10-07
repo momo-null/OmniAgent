@@ -152,10 +152,4 @@ def build_system_prompt(capabilities: dict, tool_schemas: list, reasoning_mode: 
 SYSTEM_PROMPT = build_system_prompt({}, [])
 
 
-# ---------------------------------------------------------------------------
-# M3b 两层编排遗留的 plan 工具 schema 已删除（2026-09-24）：
-# 与 PLANNER_TEMPLATE / build_planner_prompt 同批的 M3b 规划者遗留，
-# M10 统一入口后全仓库零引用（P0 死代码清理时漏删，本次补删）。
-
-
 

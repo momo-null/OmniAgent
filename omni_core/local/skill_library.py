@@ -392,8 +392,7 @@ class SkillLibrary:
     def source_path(self, name: str) -> Optional[Path]:
         """按名定位技能文件：project 级优先，全局兜底。
 
-        先试两种精确文件名（legacy `<name>.md` 与带 entry8 后缀），再按解析出的
-        skill.name 全目录扫描（覆盖 rename / 手写文件名不一致）。
+        先按精确文件名 `<name>.md` 定位，再全目录扫描（覆盖 rename / 手写文件名不一致）。
         """
         base = _safe_filename(name)
         for d in (self._dir(), self._global_dir()):
@@ -520,7 +519,7 @@ class SkillLibrary:
     # --- 晋升判定 ------------------------------------------------------------
     def promote_or_insert(self, candidate: Skill) -> Dict[str, Any]:
         """身份优先合并：entry_id（同一动作序列）→ name → objective_pattern 全等
-        （legacy 兜底，命中即回填 entry_id）。累计成功满 3 → active。"""
+        （无 entry_id 兜底，命中即回填 entry_id）。累计成功满 3 → active。"""
         if not candidate.entry_id and candidate.substeps:
             candidate.entry_id = compute_entry_id(candidate.substeps)
         existing: Optional[Skill] = None

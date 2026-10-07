@@ -155,7 +155,6 @@ class SdkBridgeMixin:
         allow_escalate: bool = False,
         wallclock_sec: float = 0.0,
         traj: Optional[TrajectoryStore] = None,
-        compress_after: int = 0,
         allow_dispatch: bool = False,
         user_input: Optional[str] = None,
         is_sub: bool = False,
@@ -167,7 +166,6 @@ class SdkBridgeMixin:
         history_keep: int = 0,
         compress_threshold: float = 0.0,
         hard_ceiling: float = 0.0,
-        ctx_window: int = 0,
         prune_threshold: int = 0,
         prune_head: int = 0,
         prune_tail: int = 0,
@@ -200,7 +198,7 @@ class SdkBridgeMixin:
             except Exception:
                 todo_store = None
         # T2.4：绑定当前 task_id，供 load_skill「私有优先、全局兜底」定位任务私有技能；
-        # 技能目录消息始终生成（skill 属 core 常开；分组门禁已删）。
+        # 技能目录消息始终生成（skill 属 core 常开）。
         try:
             from omni_core.tools.skill_tool import set_skill_task_context
 
@@ -308,6 +306,10 @@ class SdkBridgeMixin:
                 try:
                     from omni_core.tools.base import TOOL_REGISTRY as _REG
                     _dk = getattr(_REG.get(tool_name), "meta", {}).get("debug_kind")
+                    # 注册表外工具（MCP / 其它动态工具）无静态 meta：给中性
+                    # debug_kind，使结果仍可在 Debug 面板按类过滤，而非完全静默。
+                    if not _dk and tool_name not in _REG:
+                        _dk = "external"
                     if _dk:
                         _dbg(_dk, {"title": tool_name, "tool": tool_name, "result": _s})
                 except Exception:
@@ -353,8 +355,11 @@ class SdkBridgeMixin:
                     pass
             if not isinstance(result, dict):
                 return
-            world.log_action({"tool": tool_name, "args": _args_payload_to_dict(args_raw)}, result)
+            world.log_action({"name": tool_name, "args": _args_payload_to_dict(args_raw)}, result)
             # 世界模型分发：按工具**自声明的 percept 元数据**，内核零工具名字面量。
+            # 注册表外工具（MCP 等动态工具）无静态 percept 声明，此处自然跳过——
+            # 其动作仍由下方 world.log_action 落盘，不丢可观测性（percept 需环境
+            # backend 的 text_of，MCP 不绑定 backend，故不强行富化）。
             from omni_core.tools.base import TOOL_REGISTRY
             _percept = getattr(TOOL_REGISTRY.get(tool_name), "meta", {}).get("percept")
             if _percept == "state":
@@ -451,16 +456,14 @@ class SdkBridgeMixin:
             on_step=_on_step,
             on_debug=self.on_debug,
             on_state=lambda s: self._set_state(AgentState(s)),
-            compress_after=compress_after,
-            # T3.2：粘性压缩（max_input_tokens>0）同样需要摘要回调，与旧 chunk 压缩共用
-            summarize=_summarize if (compress_after or max_input_tokens) else None,
+            # 摘要回调：粘性压缩（max_input_tokens>0）用它生成摘要
+            summarize=_summarize if max_input_tokens else None,
             allow_dispatch=allow_dispatch,
             available_slots=available_slots,
             budget_hint_ratio=budget_hint_ratio,
             history_keep=history_keep,
             compress_threshold=compress_threshold,
             hard_ceiling=hard_ceiling,
-            ctx_window=ctx_window,
             prune_threshold=prune_threshold,
             prune_head=prune_head,
             prune_tail=prune_tail,

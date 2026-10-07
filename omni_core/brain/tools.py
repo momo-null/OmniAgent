@@ -7,9 +7,7 @@ M3 之后（设计 §5.0 / §7-M3）：具体能力（设备 / 视觉 / 文件 /
 本模块**只**保留内核元工具的 schema 常量（plan / verify / escalate / task_done / record），
 由 tool_loop 门控处理，不属于任何后端能力。
 
-历史遗留的 ``TOOL_SCHEMAS`` / ``EMULATOR_TOOL_SCHEMAS`` / ``M3_TOOL_SCHEMAS``
-（硬编码的一整套设备工具 schema）已删除——能力暴露的唯一来源是工具注册表
-（``omni_core.tools.base.TOOL_REGISTRY``）。
+能力暴露的唯一来源是工具注册表（``omni_core.tools.base.TOOL_REGISTRY``）。
 """
 
 # 通用『采集记录』工具 schema（纯世界模型写入，无设备动作，由 tool_loop 拦截处理）
@@ -90,9 +88,4 @@ TASK_DONE_TOOL_SCHEMA = {
 WORKER_EXTRA_SCHEMAS = [ESCALATE_TOOL_SCHEMA, VERIFY_TOOL_SCHEMA]
 
 
-# ---------------------------------------------------------------------------
-# 派发：M3 起已移至 agent 外层 tool 插件层（omni_core.tools）
-# ---------------------------------------------------------------------------
-# 原 build_registry / dispatch_tool（Provider 聚合 + `if name==` 手搓派发）已删除：
-# 工具=插件，环境自带 / 插件 / builtin 在 omni_core.tools 平级注册、按名派发，
-# 内核零持有、零分支（设计 §5.0 / §7-M3）。本模块仅保留内核元工具的 schema 常量。
+

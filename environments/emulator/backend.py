@@ -500,7 +500,7 @@ class EmulatorBackend:
 
     @staticmethod
     def _shell_result(res: Any) -> tuple:
-        """归一 ``u2`` 的 shell 返回值（新版带 ``.output``/``.exit_code``，旧版为字符串）。"""
+        """归一 ``u2`` 的 shell 返回值（``.output``/``.exit_code``）。"""
         if isinstance(res, (tuple, list)) and len(res) == 2:
             return str(res[0]), res[1]
         out = getattr(res, "output", None)

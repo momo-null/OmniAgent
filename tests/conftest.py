@@ -193,7 +193,7 @@ def mock_model_hub():
     m.start_model_path.return_value = {"name": "x", "status": "ready", "port": 8085}
     m.stop_model.return_value = {"name": "m1", "status": "stopped"}
     m.get_model_logs.return_value = {"out": "log line", "err": ""}
-    m.scan_models_dir.return_value = []
+    m.scan_and_build_models.return_value = []
     m.stop_all.return_value = []
     m.save_model_meta.return_value = {"name": "m1", "status": "saved"}
     return m

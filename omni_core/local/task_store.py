@@ -525,7 +525,7 @@ class ProjectStore:
 
         背景：超长 run 的过程记录按 ~20 步增量落盘（partial），终态一次收口（final）。
         逐条原样返回会让前端把一个 run 渲染成 N 个碎轮、终态再整轮重复。按 run_key 分组：
-        - 无 ``extra.run_key`` 的历史记录原样透传（兼容旧数据）；
+        - 无 ``extra.run_key`` 的记录原样透传（非合并类，如系统 / 工具消息）；
         - 组内存在**带完整 steps 的 final** → 只保留该条（终态内容最全）；
         - 否则（无 final，或 final 因超长省略了 steps）→ 合并组内 partial：
           steps 按序拼接、content 取组内最后一条非空、meta 取最后一条——

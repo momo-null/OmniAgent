@@ -137,7 +137,7 @@ class EmitterMixin:
                     traj.log_think(reasoning, role, model)
                 except Exception:
                     pass
-            # 非流式回退：未启用增量回调时，仍把完整「推理+口播」推到对话区（兼容旧路径/测试）
+            # 非流式回退：未启用增量回调时，仍把完整「推理+口播」推到对话区。
             if not self.on_llm_delta and self.on_thinking:
                 full = (reasoning + "\n\n" if reasoning else "") + message
                 if full:

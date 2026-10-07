@@ -32,12 +32,12 @@ from omni_core.local.task_store import TaskStore, ProjectStore
 
 """主控制循环（tool_loop）：把控制流完全交给大脑，本地只做编排与派发。
 
-循环形态（单大脑 / 兼容旧行为）：
+循环形态（单大脑）：
     observe → 组 payload → brain.chat(tools) → 派发 tool 调用 → observe → ...
 
 M10 统一入口（run_task，见 doc/plans/multi-agent-redesign-2026-09-13.md）：
     主 agent 自己跑任务，默认跑到完成；需要并行时调 dispatch → Send 扇出子 agent
-    （旧的「单大脑直跑」与「两层编排」两条路径已合并）：
+
 
     main agent（主模型，可用全部工具 + dispatch）
       ├─ 不派发 → 自己做完 → task_done → 结束

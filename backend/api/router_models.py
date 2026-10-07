@@ -250,7 +250,7 @@ async def scan_models(
     mgr: ModelManager = Depends(get_model_hub),
 ) -> List[Dict[str, Any]]:
     """扫描本地 GGUF 文件（与 /api/models 相同的统一结果）"""
-    return mgr.scan_models_dir(models_dir)
+    return mgr.scan_and_build_models(models_dir)
 
 
 @router.get("/gpu")

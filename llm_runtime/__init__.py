@@ -5,8 +5,7 @@
 - ApiRuntime: OpenAI 兼容外部 API
 - LlamaServerRuntime: llama-server 常驻服务模式
 
-注意：模型生命周期管理（ModelManager）已迁移至独立的 ``model_hub`` 模块，
-本包仅保留推理后端。
+本包仅保留推理后端（模型生命周期管理见 ``model_hub`` 模块）。
 """
 from .base import LLMRuntime
 from .llama_backend import LlamaRuntime

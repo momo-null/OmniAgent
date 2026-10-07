@@ -198,7 +198,7 @@ async def put_settings(req: Request) -> JSONResponse:
             )
 
     # 密钥"保持不变"逻辑：空字符串 api_key → 从现有配置恢复原值。
-    # brain 现在只承载引擎参数（无端点键），此处保留以防历史配置回写时丢密钥。
+    # brain 只承载引擎参数（无端点键），此处保留以防回写时丢密钥。
     existing_cfg = config.load_config()
     for section in ("brain",):
         if section in patch:

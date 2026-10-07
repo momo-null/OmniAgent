@@ -95,12 +95,6 @@ class ScanMixin:
         """列出所有模型（扫描 + 侧注合并结果）"""
         return self.scan_and_build_models(models_dir)
 
-    def scan_models_dir(
-        self, models_dir: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """扫描目录（兼容旧接口，返回统一模型信息）"""
-        return self.scan_and_build_models(models_dir)
-
     def _find_model_by_name(
         self, name: str, models_dir: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:

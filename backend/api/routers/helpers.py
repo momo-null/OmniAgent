@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import config  # 全局配置（config.yaml + ~/.omniagent/config.yaml 合并）
-from omni_core.tools.base import TOOL_REGISTRY  # 运行体携带的工具 registry
 from backend.api.runtime_manager import manager, AGENT_MAIN
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -180,7 +179,7 @@ def _config() -> dict:
 def _trajectory_dir(task_id: str) -> Path:
     """Plan C：轨迹按 task 维度存放（agents/local/runtime_paths.task_trajectory）。
 
-    与内核 tool_loop 落盘路径一致，不再使用已废弃的 project_trajectory / data/ 布局。
+    与内核 tool_loop 落盘路径一致，统一用 task 维度布局。
     """
     try:
         from omni_core.local.runtime_paths import tasks_root, task_trajectory
@@ -353,47 +352,64 @@ def _append_task_name(task_id: str, name: str):
     except Exception:
         pass
 
-def _steps_to_text(steps: List[Dict[str, Any]]) -> str:
-    """把结构化执行步骤压成紧凑文本，回填进模型上下文（供其回答「你做了什么」）。"""
-    lines = []
-    for s in steps or []:
-        t = s.get("type")
-        if t == "thinking":
-            c = (s.get("content") or "").strip()
-            if c:
-                lines.append(f"[思考] {c[:500]}")
-        elif t == "tool_call":
-            name = s.get("name", "")
-            args = (s.get("arguments") or "").strip()
-            res = (s.get("result") or "").strip()
-            head = f"[工具] {name}" + (f"({args[:200]})" if args else "")
-            lines.append(head + (f" -> {res[:500]}" if res else ""))
-    return "\n".join(lines)
+_RECAP_STEPS = 12   # 跨轮回填的工具调用上限（防单轮历史撑爆上下文）
 
-def _session_records_to_model_messages(records: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """会话记录 -> OpenAI 风格 messages；agent 轮附带执行步骤 recap，根治跨轮失忆。"""
-    out: List[Dict[str, str]] = []
+
+def _session_records_to_model_messages(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """会话记录 -> OpenAI 风格 messages（跨轮记忆）。
+
+    agent 轮的历史工具调用以**结构化 tool_calls + 成对 tool 结果消息**回填，
+    与 run 内 SDK 累积的 items 形态保持一致。
+
+    此前此处把工具调用压成 `[工具] name(args) -> result` 的纯文本 recap 塞进
+    assistant content——等于给模型示范「工具调用是用文本写的」，导致跨轮续跑时
+    模型改用 DSML / `<tool_code>` 之类文本模仿、真实工具调用归零（0 action）。
+    结构化回填消除该诱因：不针对任何具体退化格式做清洗，故格式换马甲也不会复发。
+    """
+    out: List[Dict[str, Any]] = []
     for r in records or []:
         role = r.get("role")
         if role == "user":
-            out.append({"role": "user", "content": r.get("content", "")})
+            # 空文本不入上下文：历史里存在 content="" 的合法记录（增量 partial 落盘
+            # 见 _maybe_flush_partial），原样喂给端点会被拒（空 user 消息），故跳过。
+            _uc = (r.get("content") or "").strip()
+            if _uc:
+                out.append({"role": "user", "content": _uc})
         elif role in ("agent", "assistant"):
-            # 会话落库写 "assistant"、SSE 写 "agent"——同一发送者，recap 两边都要认
-            parts = [r.get("content") or ""]
+            # 会话落库写 "assistant"、SSE 写 "agent"——同一发送者，两边都要认
+            content = (r.get("content") or "").strip()
             steps = (r.get("extra") or {}).get("steps") or []
-            if steps:
-                # recap 上限：超长 run（压缩检查点增量落库可拼出上千步）只回填最近段，
-                # 防模型上下文被单轮 recap 撑爆；总数说明保留可观测性
-                _RECAP_STEPS = 12
-                shown = steps[-_RECAP_STEPS:]
-                head = f"（上一轮 agent 的执行记录，共 {len(steps)} 步，显示最近 {len(shown)} 步）\n" \
-                    if len(steps) > _RECAP_STEPS else "（上一轮 agent 的执行记录）\n"
-                parts.append(head + _steps_to_text(shown))
-            text = "\n\n".join(p for p in parts if p)
-            if text:
-                out.append({"role": "assistant", "content": text})
+            calls = [s for s in steps if s.get("type") == "tool_call" and s.get("name")]
+            if len(calls) > _RECAP_STEPS:
+                calls = calls[-_RECAP_STEPS:]
+            if calls:
+                base = len(out)
+                tool_calls = []
+                for i, s in enumerate(calls):
+                    args_raw = (s.get("arguments") or "").strip()
+                    try:
+                        json.loads(args_raw)      # 仅校验可解析，非法参数退化为 {}
+                        args = args_raw
+                    except Exception:
+                        args = "{}"
+                    tool_calls.append({
+                        "id": f"hist_{base}_{i}",
+                        "type": "function",
+                        "function": {"name": s.get("name", ""), "arguments": args},
+                    })
+                out.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
+                for i, s in enumerate(calls):
+                    out.append({
+                        "role": "tool",
+                        "tool_call_id": tool_calls[i]["id"],
+                        "content": (s.get("result") or "").strip()[:2000] or "(无结果)",
+                    })
+            elif content:
+                out.append({"role": "assistant", "content": content})
         elif role == "system":
-            out.append({"role": "system", "content": r.get("content", "")})
+            _sc = (r.get("content") or "").strip()
+            if _sc:
+                out.append({"role": "system", "content": _sc})
     return out
 
 def _merge_thinking_step(steps, block_id, model, content):

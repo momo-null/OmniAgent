@@ -1,17 +1,6 @@
 """大模型调用入口 `LLMClient` —— 走 OpenAI Agents SDK 的 Model 抽象。
 
-M4d：`omni_core/brain/client.py` 中手搓的 OpenAI 协议层（httpx 请求、payload 组装、
-tool_calls JSON 解析、HTTP 错误处理）**已删除**，改由 SDK 的 `Model` 实现负责：
-
-    手搓态（已删）                     框架态（当前）
-    -------------------------         ------------------------------------------
-    httpx.Client.post(...)            Model.get_response(...)   # SDK 负责 request
-    payload["tools"] = schemas        tools=[Tool]              # SDK 负责转换
-    payload["tool_choice"]            ModelSettings.tool_choice # SDK 负责下发
-    json.loads(fn["arguments"])       ToolCall 直接来自 SDK      # SDK 负责解析
-    resp.json() -> choices[0]         ModelResponse.output      # SDK 负责解析
-
-本模块只剩两件框架集成必需的事（不是协议实现）：
+本模块负责两件框架集成必需的事（不是协议实现）：
 1. OpenAI chat 消息 <-> SDK Responses input items 的**类型映射**（用 SDK 原生 item 形）；
 2. 同步调用方 <-> SDK 异步 Model 的**线程桥**（常驻后台 loop）。
 

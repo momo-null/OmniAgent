@@ -75,7 +75,7 @@ def save_settings(settings: Dict[str, Any]) -> None:
 def load_mcp_config() -> Dict[str, Any]:
     """读取外部 MCP 配置（独立存储于 ~/.omniagent/mcp.json）。
 
-    优先读 mcp.json；缺失时回退 config.runtime.mcp（兼容旧位置，后续清理）。
+    优先读 mcp.json；旧位置 config.runtime.mcp 不再读取。
     返回形如 ``{"enabled": bool, "servers": [...]}`` 的 dict，缺失则为空 dict。
     """
     global _mcp_cache
@@ -90,7 +90,7 @@ def load_mcp_config() -> Dict[str, Any]:
                     return _mcp_cache
     except Exception:
         pass
-    # 只认 ~/.omniagent/mcp.json（旧位置 config.runtime.mcp 已废弃，不读）
+    # 只认 ~/.omniagent/mcp.json（旧位置 config.runtime.mcp 不再读取）
     _mcp_cache = {}
     return _mcp_cache
 
@@ -192,14 +192,14 @@ def load_base_config() -> Dict[str, Any]:
     避免把项目默认值整份快照进 ~/.omniagent/config.yaml（否则项目侧后续改动
     会被这份旧快照盖住，表现为「配置变回默认」）。
 
-    注：项目级 config.yaml 已废弃（缺省值全部下沉到代码 CONTEXT_DEFAULTS，
+    注：项目级 config.yaml 不再生效（缺省值全部下沉到代码 CONTEXT_DEFAULTS，
     可调项一律走 Web 写入 ~/.omniagent）。文件存在时只 WARN 一次，不做报错。
     """
     global _base_warned
     if os.path.exists(CONFIG_PATH) and not _base_warned:
         _base_warned = True
         _logger.warning(
-            "检测到项目级 %s —— 该文件已废弃：缺省值在代码里（config.CONTEXT_DEFAULTS），"
+            "检测到项目级 %s —— 该文件不再生效：缺省值在代码里（config.CONTEXT_DEFAULTS），"
             "可调项请走 Web 设置面板（写入 %s）。它若含旧默认值会盖住代码缺省，建议删除。",
             CONFIG_PATH, SETTINGS_PATH,
         )
