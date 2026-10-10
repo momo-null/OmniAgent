@@ -16,6 +16,7 @@ import copy
 import json
 import re
 import time
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -35,10 +36,13 @@ from omni_core.brain.errors import (  # noqa: F401
     _NETWORK_ERROR_CLASSES,
     _extract_missing_tool,
     _is_context_overflow,
+    _is_empty_choices,  # U3 扩展：空 choices 瞬时重试判定
     _is_length_truncation,
     _is_tool_not_found,
     _provider_status_code,
     classify_provider_error,
+    is_transient_network_error,  # 3.6：网络/超时瞬时重试判定
+    is_retryable_provider_glitch,  # U3 扩展：网络/超时 + 空 choices 退避重试
 )
 
 
@@ -514,6 +518,62 @@ class _RepeatGuardModel(Model):
         msg = self._guard.take_message()
         if msg:
             args, kwargs = self._inject(args, kwargs, msg)
+        async for chunk in self._inner.stream_response(*args, **kwargs):
+            yield chunk
+
+
+class _HumanInjection:
+    """运行期人类软注入通道（M8 修复）：人类消息作为 user 消息，在下一请求边界被取走。
+
+    与 ``_RepeatGuard`` 同一「请求级注入」范式，区别：
+    - 存多条（人类可能连发），每次取走全部；
+    - 落为 ``role=user`` 的消息（人类身份），而非系统提醒；
+    - 由运行中的 SDK 主循环每请求消费，不依赖 LangGraph checkpoint（后者在单次
+      ``ainvoke`` 期间不被回读，导致注入丢失——本次修复的根因）。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pending: List[Dict[str, Any]] = []
+
+    def push(self, text: str) -> None:
+        text = (text or "").strip()
+        if not text:
+            return
+        with self._lock:
+            self._pending.append({"role": "user", "content": text})
+
+    def take_messages(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            msgs, self._pending = self._pending, []
+        return msgs
+
+
+class _HumanInjectionModel(Model):
+    """M8：把待投递的人类 user 消息注入**下一次**模型请求（与 _RepeatGuardModel 同范式）。"""
+
+    def __init__(self, inner: Model, channel: _HumanInjection):
+        self._inner = inner
+        self._channel = channel
+
+    @staticmethod
+    def _inject(args: tuple, kwargs: Dict[str, Any], msgs: List[Dict[str, Any]]):
+        if "input" in kwargs:
+            return args, {**kwargs, "input": list(kwargs["input"]) + msgs}
+        if len(args) >= 2:
+            return (args[0], list(args[1]) + msgs) + tuple(args[2:]), kwargs
+        return args, kwargs
+
+    async def get_response(self, *args: Any, **kwargs: Any) -> Any:
+        msgs = self._channel.take_messages()
+        if msgs:
+            args, kwargs = self._inject(args, kwargs, msgs)
+        return await self._inner.get_response(*args, **kwargs)
+
+    async def stream_response(self, *args: Any, **kwargs: Any) -> Any:
+        msgs = self._channel.take_messages()
+        if msgs:
+            args, kwargs = self._inject(args, kwargs, msgs)
         async for chunk in self._inner.stream_response(*args, **kwargs):
             yield chunk
 
@@ -1167,6 +1227,8 @@ def _assemble_agent_stack(
     prune_threshold: int = 0,
     prune_head: int = 0,
     prune_tail: int = 0,
+    # M8（修复）：运行期人类软注入通道——人类 user 消息在下一请求边界注入（不依赖 checkpoint）
+    human_injection: Optional[_HumanInjection] = None,
 ) -> Tuple[SubtaskState, Any, Any, bool, Optional[_RepeatGuard]]:
     """装配子任务的模型包装链 + `Agent` 实例，并连接 MCP（由 run_subtask_sdk 抽出，零逻辑改动）。
 
@@ -1190,6 +1252,11 @@ def _assemble_agent_stack(
     if _rg > 0:
         _repeat_guard = _RepeatGuard(_rg)
         model = _RepeatGuardModel(model, _repeat_guard)
+    # M8（修复）：人类软注入——放在压缩**之前**包装，使人类 user 消息在压缩产物之后
+    # 才被追加（不被粘性压缩吃掉），且每个模型请求边界都能被取走（不依赖 LangGraph
+    # checkpoint，后者单次 ainvoke 不回读）。仅当通道非空时包装。
+    if human_injection is not None:
+        model = _HumanInjectionModel(model, human_injection)
     use_compaction = bool(max_input_tokens and max_input_tokens > 0 and summarize is not None)
     if use_compaction:
         _thr = int(max_input_tokens * compress_threshold) if compress_threshold and compress_threshold > 0 \
@@ -1296,6 +1363,8 @@ def run_subtask_sdk(
     # 压缩检查点回调：_CompactionModel 每产出一次新摘要触发（中途蒸馏挂点）；
     # 回调异常由 _safe_on_compact 吞掉，绝不影响模型请求。
     on_compaction: Optional[Callable[[], None]] = None,
+    # M8（修复）：运行期人类软注入通道（透传给 _assemble_agent_stack）
+    human_injection: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """用 SDK Runner 跑一个子任务，返回与旧 `_run_inner` 相同的结果形状。
 
@@ -1330,6 +1399,7 @@ def run_subtask_sdk(
         prune_threshold=prune_threshold,
         prune_head=prune_head,
         prune_tail=prune_tail,
+        human_injection=human_injection,
     )
     # 「方案 B（纯文本收尾）」的例外标记：本块是否调用过 verify 元工具。
     # verify 属于 stop_tools，一调即结束本块。但它的语义是「请核对完成条件」，
@@ -1389,6 +1459,8 @@ def run_subtask_sdk(
     length_retry = 0
     # A1（2026-09-21 崩溃自愈）：工具不存在自愈重试计数器（< TOOL_NOT_FOUND_RETRY_LIMIT，双保险）
     tool_not_found_retry = 0
+    # 3.6：模型服务网络/超时异常退避重试计数器（< PROVIDER_RETRY_LIMIT，耗尽才暂停）
+    provider_retry = 0
     # F4.1b：纪律文件 run 级快照已在 run 起始锁定（system 逐字节稳定 → 前缀缓存命中）。
     # 这里只做**只读比对**：run 中途文件被改动 → 告警（沿用快照，改动自下个 run 生效）。
     # 已告警过的变更集合只报一次，避免逐块刷屏。
@@ -1474,14 +1546,15 @@ def run_subtask_sdk(
             # 仅单块回合跑满、全局仍有预算：跨块续跑下一块（有限块数内必抵终态，无死循环）
             continue
         except Exception as e:
-            # T3.3（U1d）/ F3.2（P4）/ A1+A2（2026-09-21 崩溃自愈增强）：
-            # 分类型自愈，避免弱模型的 ModelBehaviorError 两变体（工具不存在 / 输出 length 截断）
-            # 一次性致命终止子任务。主动停止优先于一切重试（禁止无效重试）。
+            # T3.3（U1d）/ F3.2（P4）/ A1+A2（2026-09-21 崩溃自愈增强）/ U3 扩展：
+            # 分类型自愈，避免弱模型的 ModelBehaviorError 三变体（工具不存在 / 输出 length 截断
+            # / 空 choices 无响应）一次性致命终止子任务。主动停止优先于一切重试（禁止无效重试）。
             # - 上下文溢出（_is_context_overflow）：维持原单次硬截历史后重试（overflow_retried 防死循环）。
             # - 输出 length 截断（_is_length_truncation）：计数器重试（< LENGTH_RETRY_LIMIT），
             #   截断历史减压 + 追加纠正提示，让弱模型跳出「反复空转」。
             # - 工具不存在（_is_tool_not_found）：官方通道已默认 return_error_to_model 不抛异常，
             #   此处仅作双保险（仍可能由其他路径抛出），限次追加纠正提示。
+            # - 空 choices（_is_empty_choices）：provider 偶发空响应，归入可退避重试的瞬时抖动。
             if _is_context_overflow(e):
                 if should_stop():
                     return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
@@ -1522,9 +1595,28 @@ def run_subtask_sdk(
             # 大脑/工具链路异常 -> 升级（与旧循环一致：不崩溃，交回上级）
             provider_msg = classify_provider_error(e)
             if provider_msg is not None:
-                # U3：服务侧错误友好降级——escalated 保持 true，替换原生报错文案
+                # 3.6 / U3：服务侧错误友好降级。网络/超时类与空 choices 型 ModelBehaviorError
+                # （无状态码、瞬时 provider 抖动）先做有限次指数退避重试，期间任务保持 running
+                # （进度不丢）；重试耗尽才暂停。
+                if is_retryable_provider_glitch(e):
+                    enabled = bool(config.get_config("brain.provider_retry.enabled", True))
+                    max_attempts = int(config.get_config("brain.provider_retry.max_attempts", PROVIDER_RETRY_LIMIT))
+                    if enabled and provider_retry < max_attempts:
+                        provider_retry += 1
+                        delay = _provider_backoff_delay(provider_retry)
+                        try:
+                            _PROVIDER_SLEEP(delay)
+                        except Exception:
+                            pass
+                        if should_stop():
+                            return _result(False, "用户主动停止", state.steps, False, "",
+                                           llm_calls=state.llm_calls,
+                                           repeat_failures=state.repeat_failures + provider_retry)
+                        continue  # 同批模型调用重试（items 不变，进度不丢）
+                # 服务侧错误：暂停交回上级（绝静默 success）
                 return _result(False, provider_msg, state.steps, True, provider_msg,
-                               provider_error=True, llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                               provider_error=True, llm_calls=state.llm_calls,
+                               repeat_failures=state.repeat_failures + provider_retry)
             _err_first = str(e).splitlines()[0] if str(e).strip() else type(e).__name__
             return _result(False, f"runner 异常: {type(e).__name__}: {_err_first}", state.steps, True,
                            f"runner 异常: {type(e).__name__}: {_err_first}", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
@@ -1765,6 +1857,27 @@ def _kind(item: Any) -> str:
 # 重试上限：防弱模型陷入无效重试死循环。
 LENGTH_RETRY_LIMIT = 3
 TOOL_NOT_FOUND_RETRY_LIMIT = 3
+
+
+# --- 3.6 模型服务不可用自愈（网络/超时退避重试）--------------------------------
+# 命中网络/超时分支（无 HTTP 状态码、纯连接/超时抖动）后、暂停之前，做有限次指数
+# 退避重试，期间任务保持 running（进度不丢）；重试耗尽才暂停（与 3.4 安全停靠衔接，
+# 绝静默 success）。默认开启，可由配置关闭或调次数/退避：
+#   brain.provider_retry.enabled      (bool,   默认 True)
+#   brain.provider_retry.max_attempts(int,    默认 PROVIDER_RETRY_LIMIT)
+#   brain.provider_retry.base_sec     (float, 默认 _PROVIDER_RETRY_BASE_SEC)
+#   brain.provider_retry.max_sec      (float, 默认 _PROVIDER_RETRY_MAX_SEC)
+PROVIDER_RETRY_LIMIT = 3
+_PROVIDER_RETRY_BASE_SEC = 2.0
+_PROVIDER_RETRY_MAX_SEC = 15.0
+_PROVIDER_SLEEP = time.sleep  # 可注入（测试无需真等）
+
+
+def _provider_backoff_delay(attempt: int) -> float:
+    """指数退避：base_sec 起、max_sec 封顶。"""
+    base = float(config.get_config("brain.provider_retry.base_sec", _PROVIDER_RETRY_BASE_SEC))
+    cap = float(config.get_config("brain.provider_retry.max_sec", _PROVIDER_RETRY_MAX_SEC))
+    return min(base * (2 ** max(0, attempt - 1)), cap)
 
 # A1 主修复：官方自愈通道——把「工具不存在」作为 function_call_output 回给模型，run 不中断、
 # 模型在 run 内自纠（替代 SDK 默认 raise_error 直接抛 ModelBehaviorError 崩子任务）。

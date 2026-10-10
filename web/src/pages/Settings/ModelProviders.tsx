@@ -62,6 +62,8 @@ export default function ModelProviders() {
               label: p.label,
               base_url: p.base_url,
               api_key: "", // 明文不回传；留空 = 保持不变
+              api_key_env: p.api_key_env ?? "",
+              proxy: p.proxy ?? "",
               models: p.models.map((m) => ({ ...m })),
             },
           ]),
@@ -192,6 +194,9 @@ export default function ModelProviders() {
                 <TextField label="环境变量名（可选，无明文 key 时使用）" size="small" fullWidth
                   placeholder="OMNI_BRAIN_API_KEY" value={cur.api_key_env ?? ""}
                   onChange={(e) => patch(sel, { api_key_env: e.target.value })} />
+                <TextField label="代理（可选，留空=直连）" size="small" fullWidth
+                  placeholder="http://127.0.0.1:7890" value={cur.proxy ?? ""}
+                  onChange={(e) => patch(sel, { proxy: e.target.value })} />
 
                 <Divider />
                 <Typography variant="body2">模型清单</Typography>

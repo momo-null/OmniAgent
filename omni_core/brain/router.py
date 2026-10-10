@@ -100,6 +100,7 @@ def _endpoint_of(pid: str, prov: Dict[str, Any], model_id: str) -> Dict[str, Any
         "model": model_id,
         "api_key": api_key,
         "api_key_env": env_key,
+        "proxy": str(prov.get("proxy") or "").strip(),
         "capabilities": {"vision": bool(model.get("vision"))},
         "request": dict(prov.get("request") or {}),
         "model_provider_id": pid,
@@ -144,6 +145,8 @@ def list_models() -> Dict[str, Any]:
             "id": pid,
             "label": str(p.get("label") or pid),
             "base_url": str(p.get("base_url") or ""),
+            "api_key_env": str(p.get("api_key_env") or "").strip(),
+            "proxy": str(p.get("proxy") or "").strip(),
             "api_key_set": bool(str(p.get("api_key") or "").strip())
             or bool(str(p.get("api_key_env") or "").strip()),
             "models": [
@@ -180,6 +183,7 @@ def _clean_provider(node: Dict[str, Any], existing: Dict[str, Any]) -> Dict[str,
         "base_url": str(node.get("base_url") or "").strip(),
         "api_key": str(node.get("api_key") or "").strip(),
         "api_key_env": str(node.get("api_key_env") or "").strip(),
+        "proxy": str(node.get("proxy") or "").strip(),
     }
     # 空字符串 api_key = 保持不变（与 /api/settings 一致，避免前端 GET 脱敏视图回传清空密钥）
     if not out["api_key"]:

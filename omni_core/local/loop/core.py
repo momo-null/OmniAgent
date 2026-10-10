@@ -251,6 +251,8 @@ class ToolLoop(
         # M8：待投递的人类注入（运行期通道，见 inject_message 文档）
         self._injections: List[str] = []
         self._injections_lock = threading.Lock()
+        # M8（修复）：SDK 请求级人类注入通道（运行期投递主通道；见 inject_message / _human_channel）
+        self._human_inj_channel = None
         self.traj_cfg = _traj_cfg
 
 
@@ -326,38 +328,45 @@ class ToolLoop(
         """S1：接收 run_subtask_sdk 回传的当前 chunk Task 句柄（request_stop 硬取消用）。"""
         self._sdk_task = task
 
+    def _human_channel(self) -> Any:
+        """惰性创建并复用人类注入通道（避免模块加载期循环导入）。
+
+        通道对象存活于 AgentCore 实例上，跨图回合 / 暂停恢复持续有效——
+        人类消息在下一模型请求边界被取走，不依赖 LangGraph checkpoint。
+        """
+        if self._human_inj_channel is None:
+            from omni_core.brain.sdk_loop import _HumanInjection
+            self._human_inj_channel = _HumanInjection()
+        return self._human_inj_channel
+
     def inject_message(self, text: str) -> bool:
-        """M8 软注入：运行中插入人类纠偏，**不打断当前 turn**。
+        """M8 软注入（修复）：运行中插入人类纠偏，**不打断当前 turn**，下一请求即见。
 
-        双写（两者缺一不可，原因见下）：
-        1. LangGraph `update_state` → 写进 checkpoint（`injected` 通道）：
-           持久化、可观测，暂停/恢复场景由框架投递；
-        2. 运行期投递队列 → 主 agent 下一轮开始时取走。
+        实现从「LangGraph checkpoint 双写」改为「SDK 请求级用户消息通道」：
+        旧方案把消息写进 checkpoint，但单次 ``ainvoke`` 期间框架不回读新 checkpoint，
+        导致长任务（单图回合内跑完）永远看不到注入——即「发送后模型不回应」。
 
-        为什么还要 2：本版本的 Pregel 在一次 `ainvoke` 期间沿用自己的内存态，
-        外部 `update_state` 写的新 checkpoint 不会被这次正在跑的调用读到
-        （已实测：只写 update_state 时主 agent 看不到注入）。因此运行期投递
-        是必需的补充；checkpoint 侧仍保留，作为持久记录与恢复通道。
+        新方案：消息进入 ``_HumanInjection`` 通道，由运行中的 SDK 主循环在**下一次
+        模型请求前**取走并作为 ``role=user`` 消息拼进输入；不打断当前工具链，与主流
+        agent 的请求级注入范式一致。主 agent 路径（``_run_main``）透传该通道；子 agent
+        路径不传，避免重复消费。
 
         Args:
             text: 人类指示原文。
 
         Returns:
-            是否注入成功（图未运行 / 无 checkpointer 时返回 False）。
+            是否注入成功（图未运行 / 空消息 / 投递失败时返回 False）。
         """
         if not text or not text.strip():
             return False
         if self._graph is None or self._graph_config is None:
             return False
         note = text.strip()
-        with self._injections_lock:
-            self._injections.append(note)
         try:
-            from omni_core.async_bridge import run_async
-            run_async(self._graph.aupdate_state(self._graph_config, {"injected": [note]}))
+            self._human_channel().push(note)
         except Exception as e:
-            # 写 checkpoint 失败不影响运行期投递（主 agent 仍会收到）
-            self._log(f"[inject] 写入图状态失败（运行期投递仍生效）: {type(e).__name__}: {e}")
+            self._log(f"[inject] 投递失败: {type(e).__name__}: {e}")
+            return False
         return True
 
     def _drain_injections(self) -> List[str]:
@@ -373,6 +382,8 @@ class ToolLoop(
         self._graph_config = None
         self._run_task = None
         self._sdk_task = None
+        # M8（修复）：丢弃上一任务滞留的人类注入，避免泄漏到下一任务
+        self._human_inj_channel = None
 
     def _is_stop_requested(self) -> bool:
         return self._stop_requested

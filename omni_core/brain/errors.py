@@ -47,15 +47,62 @@ def classify_provider_error(e: Exception) -> Optional[str]:
         if status == 402:
             return ("模型服务配额/余额不足，任务已暂停；"
                     "请检查服务配额后重新发送消息继续。")
+        # 431 = 请求头字段过大：上游偶发或请求体积过大，归「服务侧可恢复」并给明确提示
+        if status == 431:
+            return ("模型服务请求头过大(431)，任务已暂停；"
+                    "请检查请求体积（系统提示/工具列表/历史）或稍后重试。")
         # 其余「服务侧可恢复」状态码统一归「暂时不可用」
         if status in (401, 403, 408, 429) or 500 <= status <= 599:
             return "模型服务暂时不可用（限流/网络/认证），任务已暂停；请稍后重试。"
         # 其他状态码（如 400 请求错误）不视为可降级的服务异常
         return None
-    # 无状态码：网络/超时层兜底
+    # 无状态码：网络/超时层兜底；空 choices 型 ModelBehaviorError 也归此类（瞬时 provider 抖动）
     if type(e).__name__ in _NETWORK_ERROR_CLASSES:
         return "模型服务暂时不可用（网络/超时），任务已暂停；请稍后重试。"
+    if _is_empty_choices(e):
+        return "模型服务返回空响应(no choices)，任务已暂停；请稍后重试。"
     return None
+
+
+def is_transient_network_error(e: Exception) -> bool:
+    """3.6：判定异常是否为「网络/超时」类（无 HTTP 状态码、纯连接/超时抖动），可瞬时重试。
+
+    与 ``classify_provider_error`` 区分：本函数只认无状态码的网络层异常
+    （``APIConnectionError`` / ``APITimeoutError`` / ``APIConnectionTimeoutError``），
+    命中后由 Runner 外层做有限次指数退避重试，期间任务保持 running；重试耗尽才暂停。
+    带 HTTP 状态码的「服务侧可恢复」错误（429/5xx 等）不在此范围，走原分支直接暂停。
+    仅依赖通用类名兜底，不绑定任何厂商文案（内核零领域逻辑）。
+    """
+    if e is None:
+        return False
+    if _provider_status_code(e) is not None:
+        return False
+    return type(e).__name__ in _NETWORK_ERROR_CLASSES
+
+
+def _is_empty_choices(e: Exception) -> bool:
+    """U3 扩展：判定「provider 返回空 choices」型 ModelBehaviorError。
+
+    SDK 在 ChatCompletion 响应无 ``choices``（上游网关偶发返回空体/空数组）时抛此异常，
+    属瞬时 provider 抖动，可退避重试恢复。仅依赖通用类名 + 消息关键字，不绑厂商文案
+    （内核零领域逻辑）。
+    """
+    if e is None:
+        return False
+    if type(e).__name__ != "ModelBehaviorError":
+        return False
+    return "no choices" in str(e).lower()
+
+
+def is_retryable_provider_glitch(e: Exception) -> bool:
+    """U3 扩展：可退避重试的瞬时 provider 抖动——网络/超时层 + 空 choices。
+
+    与 ``is_transient_network_error`` 区分：本函数在其基础上额外纳入「空 choices」
+    （``ModelBehaviorError`` 子类、无 HTTP 状态码、纯 provider 侧偶发空响应）。
+    命中后由 Runner 外层做有限次指数退避重试，期间任务保持 running；重试耗尽才暂停。
+    仅依赖通用协议语义，不绑定任何厂商文案（内核零领域逻辑）。
+    """
+    return is_transient_network_error(e) or _is_empty_choices(e)
 
 
 def _is_context_overflow(e: Exception) -> bool:

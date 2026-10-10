@@ -499,7 +499,19 @@ async def api_inject(request: Request):
     if not ok:
         return JSONResponse({"ok": False, "error": "注入失败（编排未运行或无 checkpointer）"},
                             status_code=409)
-    push_chat("system", f"💬 已注入指示：{text}", task_id=task_id)
+    # 作为用户消息落入对话区（与正常聊天同一 user 气泡样式），而非 system 提示
+    push_chat("user", text, task_id=task_id)
+    # 落库到会话历史（与 /chat、/wake 同链路），刷新后仍在
+    try:
+        TaskStore = _task_store()
+        ProjectStore = _project_store()
+        _meta = TaskStore.get(task_id)
+        _pid = _meta.get("project_id", "") if _meta else ""
+        _sid = _meta.get("session_id", "") if _meta else ""
+        if _pid and _sid:
+            ProjectStore.append_message(_pid, _sid, "user", text, task_id=task_id)
+    except Exception:
+        pass
     return JSONResponse({"ok": True, "msg": "已注入"})
 
 @router.post("/chat")

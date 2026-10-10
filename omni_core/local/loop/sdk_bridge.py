@@ -180,6 +180,8 @@ class SdkBridgeMixin:
         todo_store: Any = None,
         available_slots: Optional[List[str]] = None,
         skill_catalog: Optional[str] = None,
+        # M8（修复）：运行期人类软注入通道（仅主 agent 路径传入；子 agent 不传，避免重复消费）
+        human_injection: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """用 Agents SDK 的 Runner 跑一个子任务（循环/FC/派发/回填全归框架）。
 
@@ -494,6 +496,7 @@ class SdkBridgeMixin:
             history_items=history_items,
             todo_store=todo_store,
             skill_catalog=skill_catalog,
+            human_injection=human_injection,
             on_llm=on_llm,
             on_llm_delta=on_llm_delta,
             on_turn_end=on_turn_end,

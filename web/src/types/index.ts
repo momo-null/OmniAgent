@@ -12,6 +12,8 @@ export interface ModelProvider {
   id: string; // 目录内唯一 key（selection 形如 `${id}/${model.id}`）
   label: string; // 分组显示名
   base_url: string;
+  api_key_env?: string; // 回显用（非密钥）；编辑时作为可选项
+  proxy?: string; // 代理地址（可选，留空=直连）
   api_key_set: boolean; // 明文不回传，仅表示已配置
   models: ModelEntry[];
 }
@@ -22,6 +24,7 @@ export interface ModelProviderDraft {
   base_url: string;
   api_key: string;
   api_key_env?: string;
+  proxy?: string; // 代理地址（可选，如 http://127.0.0.1:7890）；留空=直连。鉴权嵌进 URL
   models: ModelEntry[];
 }
 

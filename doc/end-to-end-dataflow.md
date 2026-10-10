@@ -12,21 +12,15 @@
 
 - `backend/api/router_runtime.py`：REST/SSE/会话线程
 
-- `omni_core/local/tool_loop.py`：L2 内核（编排注入 \+ 门控）
+- `omni_core/local/loop/`（core/parts/instructions/sdk_bridge/graph_runner/emitter/finish）：L2 内核 `ToolLoop`（编排注入 \+ 门控），主类位于 `core.py`
 
 - `omni_core/orchestration/graph.py`：LangGraph 编排图
 
 - `omni_core/brain/sdk_loop.py`：Agents SDK Runner 循环
 
-- `omni_core/brain/prompt.py`：提示词模板
+- `omni_core/brain/prompt.py`：提示词模板（`build_system_prompt`）
 
 - `omni_core/async_bridge.py`：同步线程 ↔ event loop 桥接
-
-## 版本基线
-
-- **2026\-09\-17**：chat 单链路统一，移除闲聊 probe 判断；结论统一为 LLM 口播；拆分 LLM\-as\-judge 能力
-
-- **2026\-09\-22 更新**：吸收 Batch\-1\~5（U2/U3、T2\.x\~T4\.x、T5\.1、F3\.x/F4\.x）与 B1/B2 修正，涵盖块循环续跑、run 登记、Model 适配层、注入形态、新端点等能力迭代
 
 # 1\. 组件与数据流总览
 
@@ -34,7 +28,7 @@
 
 - **一个会话 = 一个 task**：`api_chat` 首条消息自动执行 `TaskStore.create` 生成唯一 `task_id`，同会话后续消息统一复用该 `task_id`。
 
-- **单链路统一（2026\-09\-17）**：废弃首条消息轻量 probe 闲聊判断逻辑，所有用户消息直接进入 `run_task` 链路，由模型自主决策：纯文本直接回答（方案 B 收尾）或调用工具执行任务。
+- **单链路统一**：废弃首条消息轻量 probe 闲聊判断逻辑，所有用户消息直接进入 `run_task` 链路，由模型自主决策：纯文本直接回答（方案 B 收尾）或调用工具执行任务。
 
 - **双生命周期存储隔离**：会话历史持久化至 jsonl 文件（由 `project_id` \+ `session_id` 唯一定位），负责页面刷新恢复；内存 task outbox 为瞬态存储，仅用于支撑 SSE 实时流式推送，二者生命周期相互独立。
 
@@ -50,7 +44,7 @@
 
 - 恢复链路：历史 jsonl 文件中 `role=assistant` 的消息携带 steps 数据
 
-前端渲染规则统一：`Chat/index.tsx:353` 同时识别 `role==="agent" || role==="assistant"`，且判定 `extra.steps.length>0` 时，统一渲染为 `AgentTurn` 完整轨迹卡片。
+前端渲染规则统一：`Chat/index.tsx` 同时识别 `role==="agent" || role==="assistant"`，且判定 `extra.steps.length>0` 时，统一渲染为 `AgentTurn` 完整轨迹卡片。
 
 # 3\. LangGraph 编排层实际机制（`omni_core/orchestration/graph.py`）
 
@@ -72,7 +66,7 @@
 |真并发能力|\_sub 节点为 async 函数，内嵌 asyncio\.to\_thread 包装同步执行体|支持多子 agent 线程级并发，必须通过 graph\.ainvoke 驱动，否则并发会退化为串行执行|
 |轮次兜底|runtime\.dispatch\.max\_rounds 配置（默认3轮）|限制最大编排轮次，杜绝「派发→回收」无限循环问题|
 |单轮并发上限|runtime\.dispatch\.max\_parallel 配置（默认4个）|超长任务计划自动截断，避免并发数量过大导致资源耗尽|
-|检查点机制|MemorySaver 内存快照|仅用作软注入状态更新通道，不承担数据持久化职责（2026\-09\-17 决策：持久化交由 WorldModel/skill 实现）|
+|检查点机制|可选 checkpointer（update\_state 载体）|仅用作软注入状态更新通道，不承担数据持久化职责|
 |软注入机制|injected 聚合器 \+ injected\_seen 游标|主 agent 每轮自动消费未读注入消息，不打断当前执行回合，实现无感知动态注入|
 
 ## 3\.3 ToolLoop 注入执行体
@@ -87,7 +81,7 @@
 
 - **派发权限控制**：仅主模型可开启 dispatch 能力，executor 模式下自动关闭派发，防止无效空派发。
 
-- **收尾全流程能力**：完成轨迹记录、遥测上报、任务状态更新；新增 B2 版本 run 登记能力，通过 `TaskStore.add_run` 追加记录，保证 run\_id 在 run\.json、task\.json、world\_model 三处唯一一致，替代原有整体覆盖逻辑。
+- **收尾全流程能力**：完成轨迹记录、遥测上报、任务状态更新；run 登记能力通过 `TaskStore.add_run` 追加记录，保证 run\_id 在 run\.json、task\.json、world\_model 三处唯一一致，替代原有整体覆盖逻辑。
 
 ## 3\.4 知识层回流机制
 
@@ -95,13 +89,13 @@
   TencentDB Agent Memory 移植，随任务收尾触发，失败静默降级、不阻断主流程；
   分层机制与注入面见 `doc/plans/memory-architecture.md`。
 
-## 3\.5 多层注入形态（2026\-09\-20\~21 迭代）
+## 3\.5 多层注入形态
 
-- **技能注入（T2\.4）**：构建「任务私有技能 \> 全局技能」双层目录，通过固定 User 消息注入会话上下文，附带加载提示；模型可按需调用 `load_skill` 工具加载完整技能正文，设置8000字符截断兜底。
+- **技能注入**：构建「任务私有技能 \> 全局技能」双层目录，通过固定 User 消息注入会话上下文，附带加载提示；模型可按需调用 `load_skill` 工具加载完整技能正文，设置8000字符截断兜底。
 
-- **纪律注入（F4\.1b/F4\.2）**：加载全局 `AGENTS.md` \+ 任务私有`AGENTS.md` 纪律文件，在任务启动时读取快照并锁定至 system prompt 尾部，单次 run 周期内不重复读取，文件更新仅在下一轮任务生效，同时落盘轨迹日志。
+- **纪律注入**：加载全局 `AGENTS.md` \+ 任务私有`AGENTS.md` 纪律文件，在任务启动时读取快照并锁定至 system prompt 尾部，单次 run 周期内不重复读取，文件更新仅在下一轮任务生效，同时落盘轨迹日志。
 
-- **记忆注入**：默认通过 `_TailInjectModel` 在用户消息尾部增量插入记忆数据，仅修改请求副本、不污染原始会话历史；支持一键关闭，回退至传统 system 注入模式。
+- **记忆注入**：默认通过 `knowledge_inject.compose_injection_block` 在 run 起始以单条 user 消息（`lead_in_message`）注入 L1 检索记忆（TAM 动态段），每轮一次、不每步重发；仅注入起始 items，不污染后续 `to_input_list()` 继承的会话历史。
 
 # 4\. Agents SDK Runner 核心 API 与块循环机制（`omni_core/brain/sdk_loop.py`）
 
@@ -112,16 +106,16 @@
 |`agents.Agent`|定义独立 Agent 实例，绑定系统提示、能力工具、元工具、MCP 服务，通过 model\_settings 精准下发 temperature、max\_tokens 等模型参数|
 |`Runner.run_streamed`|核心执行路径，分块流式执行任务、实时返回增量输出；无流式能力时自动降级为同步 run 执行|
 |`StopAtTools`|框架原生块终止机制，调用 task\_done/verify/escalate/dispatch 元工具即停止当前块，交还 L2 内核做全局决策，todo\_write 不触发终止|
-|`RunHooks.on_tool_end`|唯一权威步数统计入口，同步完成世界模型更新、轨迹落盘、工具调用日志推送、失败次数统计|
+|`OmniHooks.on_tool_end`（RunHooks 派生）|唯一权威步数统计入口，同步完成世界模型更新、轨迹落盘、工具调用日志推送、失败次数统计|
 |`tool.function_tool`|构建各类元工具与能力工具，默认关闭严格参数校验模式，适配灵活推理场景|
 |`result.to_input_list()`|实现块间上下文无缝继承，下一轮块循环完整复用本轮执行结果与会话历史|
 
 ### 模型包装链（内→外逐层生效）
 
 所有包装层默认关闭，可按需启用，实现模型能力可配置化：
-`_TailInjectModel`（记忆尾部重插）→ `_BudgetHintModel`（预算提示注入）→ `_RepeatGuardModel`（重复失败纠错）→ `_CompactionModel`（上下文粘性压缩）→`_OutputTruncationModel`（输出超限告警）
+`_BudgetHintModel`（预算提示注入）→ `_RepeatGuardModel`（重复失败纠错）→ `_CompactionModel`（上下文粘性压缩）→`_OutputTruncationModel`（输出超限告警）
 
-### MCP 能力治理（T4\.1/T4\.2）
+### MCP 能力治理
 
 自动完成 MCP 服务连接探活、指数退避重连（0\.5s\~30s）、10次熔断保护；标准化工具名为 `mcp__服务名__工具名`，支持通配符黑白名单过滤、60s 可配置调用超时。
 
@@ -143,10 +137,6 @@
 
 7. **上下文治理**：以粘性压缩为核心，超大输出自动裁剪、结构化摘要压缩，超限场景支持单次重试兜底，避免单次异常直接终止任务。
 
-### B1 版本关键修复（2026\-09\-22）
-
-步数统计完全以 Hook 回调为唯一权威，取消批量累加逻辑；Hook 未记账时自动兜底步数\+1，杜绝死循环；区分「无步数上限长任务续跑」和「硬预算耗尽终止」，修复50步边界误判预算耗尽的问题。
-
 ## 4\.3 元工具与 L2 门控体系
 
 元工具与普通能力工具平级下发，执行结果写入 SubtaskState，作为块循环核心决策依据：
@@ -159,10 +149,6 @@
 |`record(text)`|记录核心事实与结论至世界模型，持久化任务关键轨迹|
 |`dispatch(items)`|主 agent 专属工具，归一化拆解子任务计划，写入调度状态，触发 LangGraph 扇出并发执行|
 |`todo_write(items_json)`|主 agent 专属待办管理工具，结构化读写、替换待办列表，持久化至本地文件，调用后**不终止**当前块循环|
-
-### 校验体系迭代说明
-
-2026\-09\-17 完全移除 LLM\-as\-judge 外部评审机制，保留四层原生校验体系：提示纪律约束、verify 工具主动校验、done\_when 字面条件匹配、方案 B 自动收尾校验，规避外部评审失真问题。
 
 ## 4\.4 LLM 回合埋点体系
 
@@ -217,7 +203,7 @@ reasoning\_mode 为 think\-tag 时自动追加，强制模型通过 `<think></th
 
 ## 5\.5 废弃模板说明
 
-`PLANNER_TEMPLATE`、`build_planner_prompt`、手搓 ReAct 循环 `tool_loop._run_inner` 已全部废弃，当前统一使用 `build_system_prompt` \+ SDK 块循环架构，仅保留代码用于历史测试兼容。
+`PLANNER_TEMPLATE`、`build_planner_prompt` 已删除；手搓 ReAct 循环 `_run_inner` 已移除（不再有 `tool_loop` 模块）。当前统一使用 `build_system_prompt` \+ SDK 块循环架构。
 
 # 6\. 关键数据结构
 
@@ -272,9 +258,9 @@ type Step =
 
 角色区分：实时 SSE 推送为 `agent` 角色，持久化文件为 `assistant` 角色，前端统一兼容识别，保障刷新后轨迹完整。
 
-## 6\.4 结论直取规则（B10 最终方案）
+## 6\.4 结论直取规则
 
-废弃旧版多源合成结论逻辑，采用优先级兜底机制，杜绝垃圾推理内容输出：
+采用优先级兜底机制，杜绝垃圾推理内容输出：
 
 1. 最高优先级：模型收尾轮真实口播文本（方案 B 纯文本收尾）
 
@@ -282,15 +268,7 @@ type Step =
 
 3. 兜底优先级：中性标准化提示（展示任务执行步数，无模型推理冗余内容）
 
-# 7\. 历史问题复盘与修复（刷新丢步骤问题）
-
-|问题现象|根因分析|最终修复方案|
-|---|---|---|
-|页面刷新后全部会话数据丢失|task\_id 仅通过 SSE 异步更新，运行中任务不持久化至 localStorage，刷新后加载旧ID/空ID|新增前端监听，currentTaskId 变更即时写入 localStorage，同步 SSE 推送的最新任务ID|
-|刷新后仅保留结论，思考/工具轨迹丢失|渲染层仅识别 agent 角色，持久化 jsonl 为 assistant 角色，导致轨迹数据不渲染|前端渲染规则兼容双角色，同时识别 agent/assistant 且校验 steps 字段，完整恢复轨迹|
-|结论框展示无效推理内容|旧逻辑从模型顶层推理字段提取结论，混入思考冗余内容|单链路统一结论来源，严格区分推理通道与结论通道，仅取标准化口播内容收尾|
-
-# 8\. 后端接口清单（前缀 /api/runtime）
+# 7\. 后端接口清单（前缀 /api/runtime）
 
 |请求方法|接口路径|核心能力|
 |---|---|---|
@@ -308,8 +286,6 @@ type Step =
 |POST|/skill/run /skill/delete|技能回放执行、技能删除管理|
 |GET|/projects 系列接口<br>|项目元数据、会话列表、单会话详情查询|
 
-# 9\. 全链路极简总结
+# 8\. 全链路极简总结
 
 用户输入 → 前端发送消息 → POST /chat 创建/复用 task、持久化用户消息 → 后台独立线程重建会话历史、启动 ToolLoop 内核 → 构建 LangGraph 编排图并异步驱动执行 → 主 agent 分轮规划，通过 SDK 块循环执行推理与工具调用 → 满足派发条件则扇出子 agent 并发执行，结果聚合回灌主流程 → 单块执行完成后推送实时流式数据至前端 → 任务达成后通过标准化规则提取最终结论、汇总完整执行轨迹 → 双写实时 outbox（即时渲染）与持久化 jsonl（刷新恢复）→ 更新任务运行状态、完成知识蒸馏与信号采集 → 前端接收 SSE 事件，渲染完整 Agent 轨迹卡片，会话闭环。
-
-> （注：部分内容可能由 AI 生成）

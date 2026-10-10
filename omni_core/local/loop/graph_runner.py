@@ -218,6 +218,10 @@ class GraphRunnerMixin:
             retain_ratio=retain_ratio,
             history_items=list(getattr(spec, "history", None) or []),
             on_llm=_on_llm, on_llm_delta=_on_llm_delta, on_turn_end=_on_llm_turn_end,
+            # M8（修复）：把人类注入通道透传给 SDK（每请求作为 user 消息投递），子 agent 路径不传。
+            # 用 _human_channel() 而非属性直读：确保 run 启动时通道已就绪，避免「首次注入发生在
+            # run 已开始后、该 run 未包入注入包装」而收不到的问题。
+            human_injection=self._human_channel(),
         )
         return {
             "done": bool(res.get("success")),

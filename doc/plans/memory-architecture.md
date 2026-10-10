@@ -214,3 +214,91 @@ agent(大脑)──通过──→ 任务执行 → 轨迹落盘 → 蒸馏/整�
 - 每步尾部重发记忆的任何变体。
 - rowfs/对象存储双路、存量迁移、heat 工程侧自增(L2 治理机制天然不需要)。
 - skill 跨域自动晋升、知识型技能机械转录、词面打分/语义规则化(相关性判断全 LLM)。
+
+## 11. 端到端注入示例(看真实拼出来长啥样)
+
+> 配套 §4 注入面全景:下面用一条假想任务演示「注入」到底把什么文本拼进了发给大模型的
+> prompt。所有格式串均来自代码(`instructions.py` 的 `_memory_stable_block` / `_memory_lead_in`、
+> `memory_tam.inject_text`),非示意杜撰。
+> **脱敏声明:本节示例均为演示数据,不含任何真实用户/项目信息,仅用于说明注入形态。**
+
+### 11.1 一句话说清"注入"是什么
+
+内核在**任务开始那一刻**,把磁盘上沉淀的记忆读出来,拼成几段文本塞进发给大模型的 prompt
+(system 段 + 一条起始 user 消息)。模型"看到"这些文本 ≈ 拥有长期记忆。**只注入一次**,
+后面每个块靠 `to_input_list()` 自然继承,不会每步重发(§5 不变量 1)。
+
+### 11.2 第 0 步:磁盘上已经沉淀了什么(原料)
+
+- **L1 原子记忆**(`projects/<pid>/memory/index.db` SQLite,FTS 检索):
+  ```
+  content 表:
+    - "adb 在 Windows 上需指定完整路径 C:\...\platform-tools\adb.exe"
+    - "用户曾在历史任务中运行过无人值守长任务"
+    - ...(两库合计 ≥20 条才触发注入,_INJECT_TRIGGER)
+  ```
+- **L2 场景块**(`projects/<pid>/memory/scene_blocks/windows-环境事实.md`,只存摘要+全文,
+  注入只放摘要):
+  ```
+  META: heat=12, summary="Windows 下 adb 路径在 C:\...\platform-tools,需加 exe 后缀"
+  正文: <完整环境事实...>
+  ```
+- **L3 用户画像**(`~/.omniagent/memory/user_profile.md`):
+  ```
+  用户偏好命令行操作;习惯先确认方案再执行;对代码注释风格有特定偏好。
+  ```
+
+### 11.3 第 1 步:组装 system prompt(稳定段,run 开始读一次、锁到任务结束)
+
+`_memory_stable_block` 吐出这两段,拼进 system(`instructions.py:168` / `:182` 真实格式):
+
+```
+<scene-navigation>
+以下是场景记忆索引（摘要）。需要某场景的完整环境事实时，调用 read_scene 工具（scene_name=文件名）读取全文；摘要与实际观测冲突时以观测为准。
+- windows-环境事实.md（热度 12）：Windows 下 adb 路径在 C:\...\platform-tools，需加 exe 后缀
+- 项目构建.md（热度 5）：npm run build 产出 dist/，先 tsc 再 vite
+</scene-navigation>
+
+<user-persona>
+用户偏好命令行操作；习惯先确认方案再执行；对代码注释风格有特定偏好。
+</user-persona>
+```
+
+> 注意:**L2 只放摘要索引**,不放大段正文(§5 不变量 2)。
+
+### 11.4 第 2 步:起始 user 消息(L1 检索,run 开始注入一次)
+
+`memory_tam.inject_text` 把「项目库 + 全局库」两路 FTS 检索 top-5,**拼成一条 user 消息**
+插在历史之后、任务输入之前(`memory_tam.py:442` 真实格式):
+
+```
+<relevant-memories>以下是按当前任务检索到的相关记忆,仅作参考,不代表当前任务进程;
+与实际观测不一致处以观测为准。
+- adb 在 Windows 上需指定完整路径 C:\...\platform-tools\adb.exe
+- 用户曾在历史任务中运行过无人值守长任务
+</relevant-memories>
+```
+
+### 11.5 第 3 步:模型按需拉 L2 全文(不是注入,是工具调用)
+
+模型看到 11.3 的摘要索引,觉得要用,就调 `read_scene` 工具:
+
+```
+模型: read_scene(scene_name="windows-环境事实.md")
+→ 工具返回该 .md 的完整正文(由 scene_executor.read_scene_block 读,仅此一个入口)
+```
+
+这就是「渐进披露」——摘要常驻、全文按需,避免 prompt 被塞爆。
+
+### 11.6 第 4 步:任务收尾 flush → 写回(闭环)
+
+任务结束后 `capture` / `flush` 触发:会话要点经 LLM 提炼成新 atoms 落 L1;场景 agent 循环
+UPDATE/MERGE L2 块;新 atoms 攒够 `knowledge.profile.trigger_every_n`(20)条或带外信号 →
+重写 L3 画像。下次任务开始,11.3~11.4 就能读到这些新记忆。
+
+### 11.7 注入顺序速记
+
+- **system prompt** = base system + AGENTS.md(纪律) + character.md(角色卡) +
+  `<scene-navigation>`(L2 摘要) + `<user-persona>`(L3 画像)
+- **起始 items** = 历史 → 技能目录 top-3 → `<relevant-memories>`(L1 检索) → 任务输入
+- 子任务(`is_sub`)零记忆注入(`_memory_stable_block` / `_memory_lead_in` 首行 `if is_sub` 即返回)。

@@ -12,12 +12,14 @@ from openai import AsyncOpenAI
 
 from agents import OpenAIChatCompletionsModel
 
+import httpx
+
 
 def build_sdk_model(brain_cfg: dict, timeout: float | None = None) -> OpenAIChatCompletionsModel:
     """由 LLMClient 风格的 cfg 构造 SDK Model。
 
     Args:
-        brain_cfg: 含 base_url / model / api_key（或 api_key_env）/ request 的 dict。
+        brain_cfg: 含 base_url / model / api_key（或 api_key_env）/ proxy 的 dict。
         timeout: 单次请求超时（秒）；None 则用 openai 默认。
     """
     base_url = str(brain_cfg["base_url"]).rstrip("/")
@@ -36,5 +38,10 @@ def build_sdk_model(brain_cfg: dict, timeout: float | None = None) -> OpenAIChat
     kwargs = {"base_url": base_url, "api_key": api_key}
     if timeout:
         kwargs["timeout"] = timeout
+    # 代理：每个提供方可独立配置；留空/缺失 = 直连。鉴权按通用写法嵌进 URL
+    # （http://user:pass@host:port），由 httpx 原生解析，无需单独字段。
+    proxy = str(brain_cfg.get("proxy") or "").strip()
+    if proxy:
+        kwargs["http_client"] = httpx.AsyncClient(proxy=proxy)
     client = AsyncOpenAI(**kwargs)
     return OpenAIChatCompletionsModel(model=model, openai_client=client)
