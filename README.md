@@ -8,7 +8,7 @@
 >
 > **构建方式（诚实说明）**：ReAct 循环与 function-call 协议由 **OpenAI Agents SDK**（`Runner`）承载，多 agent 状态机编排由 **LangGraph** 承载。本项目自研的是 **L2 编排层**（收尾门控 / 升级判定 / 预算与墙钟 / 上下文管理）、**工具运行时与插件层**、**知识层**（世界模型 / 技能 / 全局记忆）与 **执行后端**（设备 / GUI）。因此本项目的贡献是「编排 + 工具 + 知识层」，**不是 agent 循环本身**。
 >
-> **技术底座**：`OpenAI Agents SDK` · `LangGraph` · `MCP` · 本地模型生命周期管理 · 知识层（技能库 / 用户画像；记忆轴按 TencentDB Agent Memory 移植重建中）。
+> **技术底座**：`OpenAI Agents SDK` · `LangGraph` · `MCP` · 本地模型生命周期管理 · 知识层（技能库 / 用户画像；记忆轴按 TencentDB Agent Memory 移植重建，机制已真机验证）。
 >
 > **版本 X3**：主 agent 规划并执行；可按槽位为子 agent 配置不同模型（含本地快模型做执行与视觉感知）。
 > ⚠️ 免责声明：个人学习项目，不保证稳定性与体验，使用产生的一切后果自行承担。
