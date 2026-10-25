@@ -169,3 +169,56 @@ def test_run_subtask_disabled_by_config(monkeypatch):
         max_steps=1, chunk_turns=1, should_stop=lambda: False,
     )
     assert created == [], "配置关闭时不应构造重复失败守卫"
+
+
+# --- T4.5b：无进展防护（同名工具连续返回完全相同结果，不论成败） ------------------
+def test_no_progress_injects_reminder_once():
+    inner = _InnerModel()
+    guard = _RepeatGuard(3, no_progress=3)
+    model = _RepeatGuardModel(inner, guard)
+    base = [{"role": "user", "content": "开始"}]
+
+    _invoke(model, base)            # 未达阈值：零干预
+    assert inner.calls[0] == base
+
+    for _ in range(3):
+        guard.on_step("query", False, {"ok": True, "rows": []})
+    _invoke(model, base)
+    sent = inner.calls[1]
+    assert len(sent) == len(base) + 1, "达阈值后应注入提醒"
+    assert "query" in sent[-1]["content"] and "完全相同" in sent[-1]["content"]
+
+    _invoke(model, base)
+    assert inner.calls[2] == base, "提醒只注入一次，避免刷屏"
+
+
+def test_no_progress_counts_business_failure_too():
+    """不论成败：业务报错（ok:false，非协议层失败）的重复同样计入无进展。
+
+    这是原失败维度的盲区——``_is_tool_failure`` 对 ok:false 返回 False。
+    """
+    guard = _RepeatGuard(3, no_progress=2)
+    for _ in range(2):
+        guard.on_step("click", False, {"ok": False, "error": "未命中"})
+    msg = guard.take_message()
+    assert msg is not None and "完全相同" in msg["content"]
+
+
+def test_no_progress_resets_when_result_changes():
+    guard = _RepeatGuard(3, no_progress=3)
+    guard.on_step("query", False, {"rows": [1]})
+    guard.on_step("query", False, {"rows": [2]})
+    guard.on_step("query", False, {"rows": [1]})
+    assert guard.take_message() is None, "结果变化应重置无进展计数"
+
+
+def test_no_progress_disabled_by_default():
+    """no_progress 缺省 0 -> 完全零干预（旧行为保持不变）。"""
+    inner = _InnerModel()
+    guard = _RepeatGuard(3)
+    model = _RepeatGuardModel(inner, guard)
+    base = [{"role": "user", "content": "x"}]
+    for _ in range(10):
+        guard.on_step("query", False, {"rows": []})
+    _invoke(model, base)
+    assert inner.calls[0] == base, "未开启无进展维度时不应注入"

@@ -13,6 +13,7 @@
 模型无关：Model 由 `sdk_model` / `chat_bridge` 提供（openai-compatible 端点）。
 """
 import copy
+import hashlib
 import json
 import re
 import time
@@ -447,26 +448,69 @@ def _is_tool_failure(result: Any) -> bool:
     return False
 
 
+#: ``on_step`` 的 result 缺省哨兵——区分「调用方未传 result」与「result 就是 None」。
+_UNSET = object()
+
+#: 结果指纹取样的字符上限（超长结果先截断再哈希，避免大输出拖慢每步记账）。
+_NO_PROGRESS_FP_CHARS = 4000
+
+
+def _result_fingerprint(result: Any) -> str:
+    """工具结果的稳定指纹（供「无进展」判定：同名工具连续产出完全相同结果 = 空转）。
+
+    序列化失败 / 不可序列化对象一律退化为 ``str(result)``——指纹只服务于空转判定，
+    绝不影响主流程。
+    """
+    try:
+        raw = json.dumps(result, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        raw = str(result)
+    if len(raw) > _NO_PROGRESS_FP_CHARS:
+        raw = raw[:_NO_PROGRESS_FP_CHARS]
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()
+
+
 class _RepeatGuard:
     """T4.5：同名工具**连续**失败计数（步骤回调写入，Model 层消费）。
 
     - 成功 -> 计数清零；换工具名 -> 重新开始计数（只统计同名连续失败）；
     - 连续失败达阈值 -> 生成一条待注入提醒（只生成一次），随后计数清零避免刷屏；
     - 本期不校验参数一致性（同一工具不同参数也算同名连续）。
+
+    T4.5b（对齐 Hermes ``agent/tool_guardrails.py`` 的 ``idempotent_no_progress``）：
+    新增**无进展**维度——同名工具**连续产出完全相同的结果**即判空转，**不论成败**。
+    补的是原维度的盲区：原维度只看协议层失败（``_is_tool_failure``），而业务成功 /
+    业务报错的重复调用（实测重复里的大多数）完全不触发。
+      * 结果指纹与上一跳（同名工具）相同 -> 累加；不同 -> 重置为 1；
+      * 达 ``no_progress`` 阈值 -> 注入一条提醒（只注入一次，随后清零避免刷屏）；
+      * ``no_progress <= 0`` -> 该维度完全关闭，行为与旧实现逐字节一致。
+
+    提醒只注入、从不否决——与 Hermes guardrail 的 ``warnings_enabled`` 同语义
+    （它的 ``hard_stop_enabled`` 默认也是关的）。
     """
 
-    def __init__(self, threshold: int = 3):
+    def __init__(self, threshold: int = 3, no_progress: int = 0):
         self.threshold = int(threshold or 0)
+        self.no_progress = int(no_progress or 0)
         self._name = ""
         self._count = 0
-        self.pending: Optional[Dict[str, Any]] = None
+        self._pending: List[Dict[str, Any]] = []
         # F1.2：累计失败次数（与连续计数解耦——连续计数达阈值清零，累计计数只增不减）
         self.total_failures: int = 0
+        # 无进展维度状态（同名工具 + 结果指纹）
+        self._np_name = ""
+        self._np_key = ""
+        self._np_count = 0
 
-    def on_step(self, tool_name: str, failed: bool) -> None:
-        if self.threshold <= 0:
-            return
+    def on_step(self, tool_name: str, failed: bool, result: Any = _UNSET) -> None:
+        """记录一跳工具结果。``result`` 省略（或仍用两参旧调用）时只走失败维度。"""
         name = str(tool_name or "?")
+        if self.threshold > 0:
+            self._track_failure(name, bool(failed))
+        if self.no_progress > 0 and result is not _UNSET:
+            self._track_no_progress(name, result)
+
+    def _track_failure(self, name: str, failed: bool) -> None:
         if not failed:
             self._name = ""
             self._count = 0
@@ -477,20 +521,41 @@ class _RepeatGuard:
         else:
             self._name = name
             self._count = 1
-        if self._count >= self.threshold and self.pending is None:
-            self.pending = {
+        if self._count >= self.threshold:
+            self._pending.append({
                 "role": "user",
                 "content": (
                     f"[执行提醒] 工具 {name} 已连续失败 {self._count} 次。"
                     f"请更换执行方案（换别的工具、换参数或换路径），"
                     f"不要继续重复同一失败调用。"
                 ),
-            }
+            })
             self._count = 0      # 注入一次后计数清零，避免重复刷屏
 
+    def _track_no_progress(self, name: str, result: Any) -> None:
+        key = _result_fingerprint(result)
+        if name == self._np_name and key == self._np_key:
+            self._np_count += 1
+        else:
+            self._np_name = name
+            self._np_key = key
+            self._np_count = 1
+        if self._np_count >= self.no_progress:
+            self._pending.append({
+                "role": "user",
+                "content": (
+                    f"[执行提醒] 工具 {name} 已连续 {self._np_count} 次返回完全相同的结果，"
+                    f"没有产生任何新信息，这是在原地打转。"
+                    f"请换参数、换工具或换路径推进；不要继续重复同一调用，"
+                    f"也不要改成只用文字描述而不实际调用工具。"
+                ),
+            })
+            self._np_count = 0   # 注入一次后清零，避免刷屏
+
     def take_message(self) -> Optional[Dict[str, Any]]:
-        msg, self.pending = self.pending, None
-        return msg
+        if not self._pending:
+            return None
+        return self._pending.pop(0)
 
 
 class _RepeatGuardModel(Model):
@@ -1244,13 +1309,19 @@ def _assemble_agent_stack(
     if budget_hint_ratio > 0:
         model = _BudgetHintModel(model, state, max_steps, budget_hint_ratio)
     # T4.5（RG-1）：工具重复失败防护（默认 3 次，配置 0 = 关闭）
+    # T4.5b：无进展防护（同名工具连续返回完全相同结果，不论成败；默认 3 次，
+    # 配置 0 = 关闭）。受主开关约束：repeat_guard=0 时整体不构造守卫。
     _repeat_guard: Optional[_RepeatGuard] = None
     try:
         _rg = int(config.get_config("runtime.long_task.repeat_guard", 3) or 0)
     except Exception:
         _rg = 0
+    try:
+        _npg = int(config.get_config("runtime.long_task.no_progress_guard", 3) or 0)
+    except Exception:
+        _npg = 0
     if _rg > 0:
-        _repeat_guard = _RepeatGuard(_rg)
+        _repeat_guard = _RepeatGuard(_rg, no_progress=_npg)
         model = _RepeatGuardModel(model, _repeat_guard)
     # M8（修复）：人类软注入——放在压缩**之前**包装，使人类 user 消息在压缩产物之后
     # 才被追加（不被粘性压缩吃掉），且每个模型请求边界都能被取走（不依赖 LangGraph
@@ -1414,10 +1485,11 @@ def run_subtask_sdk(
             verify_stopped = True
         # 步数以「实际发生的工具调用」记账（比 new_items 计数更可靠）
         state.steps += 1
-        # T4.5：同名工具连续失败统计（供下一次请求注入换方案提醒）
+        # T4.5 / T4.5b：同名工具连续失败统计 + 无进展统计
+        # （结果透传给守卫，供「连续产出完全相同结果」的空转判定；两参旧调用不受影响）
         if _repeat_guard is not None:
             try:
-                _repeat_guard.on_step(str(tool), _is_tool_failure(result))
+                _repeat_guard.on_step(str(tool), _is_tool_failure(result), result)
                 state.repeat_failures = _repeat_guard.total_failures
             except Exception:
                 pass

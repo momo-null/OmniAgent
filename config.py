@@ -256,6 +256,9 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
         },
         "long_task": {
             "repeat_guard": 3,
+            # T4.5b 无进展防护：同名工具连续返回**完全相同结果**达此次数即注入换方案提醒
+            # （不论成败；0 = 关闭）。受 repeat_guard 主开关约束：主开关为 0 时整体不构造守卫。
+            "no_progress_guard": 3,
             # F2.4 主链墙钟（秒）：0 = 不检查（大步数预算下默认不检查，避免被 120s 子任务墙钟腰斩）
             "wallclock_sec": 0,
             # F4.1b 纪律文件（AGENTS.md）：run 起始读一次并锁进 system prompt；false = 零注入

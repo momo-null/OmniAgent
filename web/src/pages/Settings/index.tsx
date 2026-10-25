@@ -36,6 +36,7 @@ const CTX_RECOMMENDED = {
   pruneHead: 4096,
   pruneTail: 1024,
   repeatGuard: 3,
+  noProgressGuard: 3,
 };
 import { modelApi, llmApi, systemApi, settingsApi } from "../../api/client";
 import type {
@@ -400,6 +401,7 @@ function OrchestrationTab() {
   const [retainRatio, setRetainRatio] = useState<number>(CTX_RECOMMENDED.retainRatio);
   const [compressThreshold, setCompressThreshold] = useState<number>(0);
   const [repeatGuard, setRepeatGuard] = useState<number>(CTX_RECOMMENDED.repeatGuard);
+  const [noProgressGuard, setNoProgressGuard] = useState<number>(CTX_RECOMMENDED.noProgressGuard);
   const [saved, setSaved] = useState("");
   const [error, setError] = useState("");
   useEffect(() => {
@@ -422,6 +424,7 @@ function OrchestrationTab() {
       if (typeof blt.retain_ratio === "number") setRetainRatio(blt.retain_ratio);
       if (typeof blt.compress_threshold === "number") setCompressThreshold(blt.compress_threshold);
       if (typeof lt.repeat_guard === "number") setRepeatGuard(lt.repeat_guard);
+      if (typeof lt.no_progress_guard === "number") setNoProgressGuard(lt.no_progress_guard);
       // 旧通道：输入预算挂在 brain.maxInputTokens（新 schema 在 provider 上配）
       const mit = d?.brain?.maxInputTokens ?? d?.brain?.max_input_tokens;
       if (typeof mit === "number") setMaxInputTokens(mit);
@@ -438,7 +441,11 @@ function OrchestrationTab() {
       await settingsApi.put({
         runtime: {
           dispatch: { max_rounds: maxRounds || 3, max_parallel: maxParallel || 4 },
-          long_task: { budget_hint_ratio: budgetRatio, repeat_guard: repeatGuard || 0 },
+          long_task: {
+            budget_hint_ratio: budgetRatio,
+            repeat_guard: repeatGuard || 0,
+            no_progress_guard: noProgressGuard || 0,
+          },
           chunk_turns: chunkTurns || 50,
         },
         brain: {
@@ -504,6 +511,9 @@ function OrchestrationTab() {
           onBlur={() => void saveAll()} />
         <TextField label={<LabelWithTip text="重复失败提醒次数 (runtime.long_task.repeat_guard)" desc="同一工具连续失败达该次数后，下一次请求自动注入一条「换个方案」的提醒（只注入一次）。0 = 关闭，默认 3。" />} type="number" value={repeatGuard}
           onChange={(e) => { dirtyRef.current = true; setRepeatGuard(Number(e.target.value) || 0); }}
+          onBlur={() => void saveAll()} />
+        <TextField label={<LabelWithTip text="无进展提醒次数 (runtime.long_task.no_progress_guard)" desc="同一工具连续返回完全相同结果达该次数后，自动注入一条「换参数 / 换工具 / 换路径」的提醒（不论成败，只注入一次）。受「重复失败提醒次数」主开关约束：该项为 0 时本项一并失效。0 = 关闭，默认 3。" />} type="number" value={noProgressGuard}
+          onChange={(e) => { dirtyRef.current = true; setNoProgressGuard(Number(e.target.value) || 0); }}
           onBlur={() => void saveAll()} />
 
         {saved && <Alert severity="success" onClose={() => setSaved("")}>{saved}</Alert>}
