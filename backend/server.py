@@ -27,6 +27,7 @@ from backend.api.router_llm import router as llm_router
 from backend.api.router_system import router as system_router
 from backend.api.routers.debug_api import router as debug_router
 from backend.api.router_settings import router as settings_router
+from backend.api.router_cron import router as cron_router
 
 # ── 服务配置 ──────────────────────────────────────────────
 _server_cfg = (config.load_config() or {}).get("server", {}) or {}
@@ -129,6 +130,7 @@ app.include_router(runtime_router)
 app.include_router(llm_router)
 app.include_router(system_router)
 app.include_router(settings_router)
+app.include_router(cron_router)
 # ── Debug 模块挂载（可整体删除：删本行 + backend/api/routers/debug_api.py +
 #    前端 web/src/components/DebugPanel.tsx 与 web/src/api/debugApi.ts） ──
 app.include_router(debug_router)

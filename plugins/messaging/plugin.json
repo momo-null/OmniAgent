@@ -1,0 +1,8 @@
+{
+  "name": "messaging",
+  "version": "1.0.0",
+  "title": "消息通道",
+  "description": "通用消息发送：msg_send_text / msg_send_card。工具按行为命名，通道（飞书/企微…）作为参数，由 gateway/channels 注册表解析——新增通道本插件零改动。",
+  "enabled": true,
+  "permissions": ["msg_send"]
+}

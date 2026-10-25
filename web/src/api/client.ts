@@ -187,3 +187,11 @@ export const runtimeApi = {
 };
 
 export default http;
+
+// ── 定时任务（GET/PUT /api/cron/jobs；jobs.json 热加载） ───────────
+export const cronApi = {
+  list: () => http.get("/api/cron/jobs"),
+  save: (jobs: Record<string, unknown>[]) => http.put("/api/cron/jobs", { jobs }),
+  run: (id: string) => http.post(`/api/cron/jobs/${encodeURIComponent(id)}/run`),
+  projects: () => http.get("/api/cron/projects"),
+};
