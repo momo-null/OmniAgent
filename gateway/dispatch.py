@@ -57,6 +57,8 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
     reply: Optional[ReplyChannel] = item.get("reply")
     notify_channel: Optional[str] = item.get("notify_channel")
     job_id: str = item.get("job_id", "")
+    real_task_id = ""      # TaskStore 登记后的正式 ID（异常路径未创建时保持空）
+    temp_task = False      # 无关联项目的临时任务：完成即删
 
     # 回发工具函数：优先消息来源句柄；cron 则用 notify 通道的默认会话
     def _send(text: str) -> None:
@@ -73,18 +75,33 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
     try:
         import config
         from omni_core.local.loop import ToolLoop, TaskSpec
+        from omni_core.local.task_store import TaskStore
 
         brain_cfg = (config.load_config() or {}).get("brain", {})
         if not (brain_cfg.get("api_key") or brain_cfg.get("api_key_env")):
             raise RuntimeError("大脑未配置（config.brain 或环境变量），无法派发任务")
+
+        # ── 任务落 TaskStore（UI 项目/会话列表实时可见过程）──
+        # 有关联项目 → 任务持久留在项目下；无项目 → 临时任务，跑完即删（结果留 runs.jsonl）。
+        project_id = item.get("project_id") or None
+        temp_task = project_id is None
+        if temp_task:
+            project_id = None  # TaskStore.create 缺省归 default 项目
+        meta = TaskStore.create(objective=item["objective"], done_when=item.get("done_when", ""),
+                                project_id=project_id)
+        real_task_id = meta["task_id"]
+        TaskStore.update(real_task_id, state="running")
+        if job_id:  # 派发即落 running 记录（详情页秒见反馈）
+            from .scheduler import record_run
+            record_run(job_id, real_task_id, "running")
 
         loop = ToolLoop(brain_cfg, verbose=False)
         spec = TaskSpec(
             objective=item["objective"],
             done_when=item.get("done_when", ""),
             max_steps=item.get("max_steps") or 40,
-            task_id=task_id,
-            project_id=item.get("project_id") or None,   # ← project 关联核心
+            task_id=real_task_id,
+            project_id=meta.get("project_id"),
         )
         # 当前任务回发句柄（线程绑定）→ msg_send_* 工具缺省发回来源会话
         context.set_current_reply(reply)
@@ -96,18 +113,39 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         summary = _extract_summary(result)
         # run_task 真实返回：success / escalated / steps / trajectory_file …
         ok = bool(result.get("success", True)) and not result.get("escalated") if isinstance(result, dict) else True
-        dr = DispatchResult(task_id=task_id, ok=ok, summary=summary, result=result if isinstance(result, dict) else {"raw": str(result)})
+        try:
+            TaskStore.update(real_task_id, state="done" if ok else "failed", success=ok)
+        except Exception:
+            pass
+        if temp_task:  # 临时任务：结果已记 runs.jsonl，索引即删（列表不再显示）
+            try:
+                TaskStore.remove(real_task_id)
+            except Exception:
+                pass
+        dr = DispatchResult(task_id=real_task_id, ok=ok, summary=summary, result=result if isinstance(result, dict) else {"raw": str(result)})
         if job_id:
             from .scheduler import record_run
-            record_run(job_id, task_id, "ok" if ok else "error", summary=summary)
-        _send(f"{'✅' if ok else '⚠️'} [{item.get('source', 'task')} {task_id[:8]}] {summary or '(无摘要)'}")
+            record_run(job_id, real_task_id, "ok" if ok else "error", summary=summary)
+        _send(f"{'✅' if ok else '⚠️'} [{item.get('source', 'task')} {real_task_id[:8]}] {summary or '(无摘要)'}")
         return dr
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
         print(f"[dispatch] 任务失败 {task_id}: {err}\n{traceback.format_exc()[-800:]}")
+        # 失败也必须有结果：task 状态落库（若已创建）+ runs 记录
+        try:
+            from omni_core.local.task_store import TaskStore
+            if real_task_id:
+                TaskStore.update(real_task_id, state="failed", success=False)
+                if temp_task:
+                    TaskStore.remove(real_task_id)
+        except Exception:
+            pass
+        if job_id:
+            from .scheduler import record_run
+            record_run(job_id, real_task_id or task_id, "error", error=err)
         # 失败直推（不经 agent——它可能正是死因）
         _send(f"🚨 任务失败 [{item.get('source', 'task')} {task_id[:8]}]: {err}（由网关直发，agent 可能已死）")
-        return DispatchResult(task_id=task_id, ok=False, error=err)
+        return DispatchResult(task_id=real_task_id or task_id, ok=False, error=err)
 
 
 def _worker_loop() -> None:
@@ -138,9 +176,6 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
     """异步提交（网关消息/cron 用）。返回 task_id。"""
     ensure_worker()
     task_id = uuid.uuid4().hex[:16]
-    if job_id:  # 立即落"执行中"记录——详情页秒见反馈，完成后再补 ok/error
-        from .scheduler import record_run
-        record_run(job_id, task_id, "running")
     _QUEUE.put({"task_id": task_id, "objective": objective, "done_when": done_when,
                 "max_steps": max_steps, "source": source, "project_id": project_id,
                 "reply": reply, "notify_channel": notify_channel, "job_id": job_id or ""})

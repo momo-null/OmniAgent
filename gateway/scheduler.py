@@ -27,7 +27,7 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "name": "ETF盘前分析",
         "cron": "0 8 * * 1-5",
         "objective": "执行ETF盘前分析",
-        "done_when": "报告已通过 etf_save_report 落盘",
+        "done_when": "",  # 空：finish验证器感知不到MCP副作用，完成判据由objective内工具返回自证（勿填"已落盘"类条件，agent会耗尽步数自证）
         "max_steps": 40,
         "project_id": "etf-analysis",
         "notify_channel": "feishu",
@@ -40,7 +40,7 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "name": "ETF午盘简报",
         "cron": "35 11 * * 1-5",
         "objective": "执行ETF午盘分析",
-        "done_when": "报告已通过 etf_save_report 落盘",
+        "done_when": "",  # 空：finish验证器感知不到MCP副作用，完成判据由objective内工具返回自证（勿填"已落盘"类条件，agent会耗尽步数自证）
         "max_steps": 30,
         "project_id": "etf-analysis",
         "notify_channel": "feishu",
@@ -53,7 +53,7 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "name": "ETF收盘分析",
         "cron": "35 15 * * 1-5",
         "objective": "执行ETF收盘分析",
-        "done_when": "报告已通过 etf_save_report 落盘",
+        "done_when": "",  # 空：finish验证器感知不到MCP副作用，完成判据由objective内工具返回自证（勿填"已落盘"类条件，agent会耗尽步数自证）
         "max_steps": 40,
         "project_id": "etf-analysis",
         "notify_channel": "feishu",

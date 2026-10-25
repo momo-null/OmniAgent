@@ -38,7 +38,7 @@ def _resolve(channel: str, target: str):
         ch_name = _CFG.get("default_channel", "")
     adapter = context.get_adapter(ch_name) if ch_name else None
     if adapter is None:
-        return None, None, f"无可用通道（channel={ch_name or '未指定'，''}；网关未运行或通道未启用）"
+        return None, None, f"无可用通道（channel={ch_name or '未指定'}；网关未运行或通道未启用）"
 
     # 目标：显式 > 当前来源会话
     chat_id = target or ""
