@@ -71,3 +71,19 @@ server:
   # 改这两项需要重启后端才生效。
   host: 127.0.0.1
   port: 8000
+
+# 桌面应用（desktop/ Electron 壳）可选项；不写则全部用壳内置默认值。
+# 深合并语义同后端：项目根 config.yaml ← ~/.omniagent/config.yaml 覆盖。
+desktop:
+  # 全局呼出/隐藏主窗口快捷键；置空串 "" 禁用
+  hotkey: "Ctrl+Shift+O"
+  # true：关闭窗口缩到系统托盘，托盘菜单退出；false：关窗即退出（同时停后端）
+  show_tray: true
+  # true：无边框窗口（Windows 原生三键 + 顶部拖拽区）；false：系统默认边框
+  frameless: true
+  window:
+    width: 1440
+    height: 900
+    min_width: 960
+    min_height: 600
+

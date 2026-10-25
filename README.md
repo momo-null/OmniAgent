@@ -90,8 +90,9 @@
 | `devices/` | 执行后端 L1（EmulatorBackend u2/ADB · HostBackend pyautogui），已从内核迁出 |
 | `llm_runtime/` | 模型无关推理后端（server / llama / api） |
 | `model_hub/` | 模型元数据 + llama-server 启停 / 端口 / `--mmproj` 探测 |
-| `backend/` | 后端 HTTP 服务 + API 路由（`api/routers/` 按域拆分） |
+| `backend/` | 后端 HTTP 服务 + API 路由（`api/routers/` 按域拆分）；`web/dist` 存在时同源承载前端（桌面壳/直连模式） |
 | `web/` | 前端（Chat / SkillsAndTools / Settings 三页，自研 store） |
+| `desktop/` | 桌面壳（Electron）：自动拉起后端 + 系统托盘，窗口加载后端同源 UI |
 | `tests/` | 测试 + 红线守护 |
 
 ## 快速开始
@@ -107,6 +108,21 @@ cd web && npm install && cd ..    # 前端依赖需手动装一次（脚本只�
 - 默认 `runtime.backend: host`（宿主机屏幕）；emulator 需自备 `adb_serial`。
 - 派发（dispatch）默认开启，单模型即可用（主 agent 自派发，并发与上下文隔离仍有价值）；要分层就两步：在 `~/.omniagent/models.json` 的 `defaults` 里声明槽位（如 `worker` / `researcher`），再在 `~/.omniagent/config.yaml` 的 `runtime.dispatch.agents` 里显式列出参与派发的槽（首个为默认槽）。
 - 前端访问用 `http://localhost:5173`（dev server 监听 IPv6 `::1`，`127.0.0.1` 可能连不上）；后端无窗口运行是刻意的（日志见 `backend.log` / `backend.err`），且**不要给 uvicorn 加 `--reload`**（Windows 下双进程抢绑端口会随机挂起）。
+
+### 桌面应用（可选）
+
+不想开两个终端 + 浏览器，可以用 Electron 桌面壳：双击启动 → 自动拉起 `.venv` 后端 → 健康检查通过后加载 UI；关窗口缩到系统托盘（托盘可重启后端/看日志/退出，退出会杀整个后端进程树）。
+
+```bash
+cd desktop
+npm install            # 首次；.npmrc 已配国内 CDN 镜像
+npm run dev            # 开发模式：vite + 后端 + Electron 三件套一键起
+npm run dist           # 打包：NSIS 安装包 + 免安装 portable exe（desktop/dist/）
+```
+
+- 打包产物是**壳**（几 MB），后端代码与 `.venv` 仍指向本仓库（默认向上两级找，可用环境变量 `OMNIAGENT_HOME` 或 `omniagent.home` 文件指定仓库路径：portable 放 exe 同目录，安装版放 `<安装目录>\resources\`）——换机器需先按上文配好仓库。
+- `web/dist` 存在时后端直接同源 serve 前端（`http://127.0.0.1:8000` 可直开）；改动前端后需 `cd web && npm run build` 刷新。
+- 桌面壳可选项在 `config.yaml` 的 `desktop:` 段（热键 / 托盘开关 / 无边框 / 窗口尺寸），见 `config.example.yaml`。
 
 ## 红线守护
 
@@ -206,8 +222,9 @@ A two-tier + Escalation general-purpose agent runtime: `Brain (online planning)`
 | `devices/` | Execution backend L1 (EmulatorBackend u2/ADB · HostBackend pyautogui), moved out of the kernel |
 | `llm_runtime/` | Model-agnostic inference backend (server / llama / api) |
 | `model_hub/` | Model metadata + llama-server start/stop / ports / `--mmproj` detection |
-| `backend/` | Backend HTTP service + API routes (`api/routers/`, split by domain) |
+| `backend/` | Backend HTTP service + API routes (`api/routers/`, split by domain); serves `web/dist` same-origin when present (desktop shell / direct-access mode) |
 | `web/` | Frontend (Chat / SkillsAndTools / Settings pages, hand-rolled store) |
+| `desktop/` | Electron shell: auto-spawns the backend + system tray, loads the same-origin UI |
 | `tests/` | Tests + red-line guards |
 
 ## Quick Start
@@ -223,6 +240,10 @@ cd web && npm install && cd ..    # frontend deps must be installed once (the sc
 - Default `runtime.backend: host` (host machine screen); emulator mode requires your own `adb_serial`.
 - Dispatch is enabled by default and works with a single model (the main agent self-dispatches; concurrency and context isolation still add value). To tier it up: declare slots in the `defaults` section of `~/.omniagent/models.json` (e.g. `worker` / `researcher`), then explicitly list the dispatch-enabled slots in `runtime.dispatch.agents` of `~/.omniagent/config.yaml` (the first one is the default slot).
 - Open the frontend at `http://localhost:5173` (the dev server listens on IPv6 `::1`; `127.0.0.1` may not connect). The backend intentionally runs windowless (see `backend.log` / `backend.err`), and **do not add `--reload` to uvicorn** (on Windows the reloader double-binds the port and connections randomly hang).
+
+### Desktop app (optional)
+
+An Electron shell is available under `desktop/`: one click starts the app, auto-spawns the `.venv` backend, waits for health, then loads the UI; closing the window minimizes to the tray (restart backend / open logs / quit from the tray menu; quitting kills the backend process tree). Run `cd desktop && npm install`, then `npm run dev` (dev) or `npm run dist` (NSIS installer + portable exe into `desktop/dist/`). The packaged shell points at this repo (override with `OMNIAGENT_HOME` or an `omniagent.home` file next to the exe). When `web/dist` exists, the backend serves the frontend same-origin at `http://127.0.0.1:8000`.
 
 ## Red-Line Guard
 

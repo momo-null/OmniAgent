@@ -41,6 +41,9 @@ data/
 *.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts
+# 桌面壳（desktop/）：esbuild 产物与 electron-builder 输出
+dist-electron/
+desktop/dist-*/
 
 # 本机配置（含明文 api key，勿提交）
 # 项目根 config.yaml 只保留「Web 无入口」的少量项，需与 config.example.yaml 同步；

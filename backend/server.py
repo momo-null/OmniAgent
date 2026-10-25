@@ -7,11 +7,12 @@
 因后端异常退出而残留的 llama-server 孤儿进程（见 lifespan）。
 """
 from contextlib import asynccontextmanager
-from typing import Dict, Any
+from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 import config
 from utils import get_logger
@@ -136,10 +137,46 @@ app.include_router(cron_router)
 app.include_router(debug_router)
 
 
-@app.get("/")
-async def root() -> Dict[str, Any]:
-    """根路径信息"""
+@app.get("/", include_in_schema=False)
+async def root():
+    """根路径：有前端构建产物（web/dist）时直接出 UI（桌面壳/直连模式）；
+    否则返回服务信息（纯 dev 模式，前端走 vite 5173）。"""
+    index = _WEB_DIST / "index.html"
+    if index.is_file():
+        return FileResponse(index)
     return {"service": "OmniAgent Backend", "version": "1.0.0", "status": "ok"}
+
+
+# ── 桌面/直连模式：serve 前端构建产物 ──────────────────────
+# Electron 壳与浏览器直连时由本服务承载 web/dist（同源，前端全是相对路径 API，
+# SSE 也不经任何代理）。dist 不存在时以下挂载全部跳过，dev 模式行为不变。
+_WEB_DIST = Path(__file__).resolve().parents[1] / "web" / "dist"
+_API_PREFIXES = ("/api", "/v1", "/diagnostics", "/health", "/live")
+
+
+def _is_api_path(path: str) -> bool:
+    return any(path == p or path.startswith(p + "/") for p in _API_PREFIXES)
+
+
+if _WEB_DIST.is_dir():
+    _assets = _WEB_DIST / "assets"
+    if _assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=_assets), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def static_fallback(full_path: str):
+        """静态兜底：dist 内存在该文件则返回文件，否则回落 index.html。
+
+        注册在所有 router 之后，API 路径不兜底（保持 404 语义）。"""
+        if _is_api_path("/" + full_path):
+            raise HTTPException(status_code=404)
+        candidate = (_WEB_DIST / full_path).resolve()
+        if candidate.is_file() and _WEB_DIST.resolve() in candidate.parents:
+            return FileResponse(candidate)
+        index = _WEB_DIST / "index.html"
+        if index.is_file():
+            return FileResponse(index)
+        raise HTTPException(status_code=404)
 
 
 if __name__ == "__main__":

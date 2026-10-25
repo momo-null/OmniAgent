@@ -1,0 +1,54 @@
+{
+  "name": "omniagent-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OmniAgent 桌面壳：自动拉起本地后端并承载 Web UI",
+  "type": "module",
+  "main": "dist-electron/main.mjs",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "npm run build && node scripts/dev.mjs",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --win",
+    "dist:nsis": "npm run build && electron-builder --win nsis",
+    "dist:portable": "npm run build && electron-builder --win portable"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.2",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.2",
+    "js-yaml": "^4.1.0",
+    "typescript": "^5.4.5"
+  },
+  "build": {
+    "appId": "com.omniagent.desktop",
+    "productName": "OmniAgent",
+    "directories": {
+      "output": "dist",
+      "buildResources": "icons"
+    },
+    "files": [
+      "dist-electron/**/*",
+      "resources/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "OmniAgent"
+    },
+    "portable": {
+      "artifactName": "OmniAgent-Portable-${version}.exe"
+    }
+  }
+}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'" />
+  <title>OmniAgent</title>
+  <style>
+    html, body {
+      height: 100%; margin: 0;
+    }
+    body {
+      display: flex; align-items: center; justify-content: center;
+      background: #2e2e2e; color: #c8d3de; /* 与无边框顶栏/侧栏同色，启动全程无色差 */
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    .wrap { text-align: center; max-width: 640px; padding: 24px; }
+    .logo { font-size: 28px; font-weight: 600; letter-spacing: 1px; color: #e8eef4; margin-bottom: 28px; }
+    .logo span { color: #2ed0ff; }
+    .spinner {
+      width: 36px; height: 36px; margin: 0 auto 20px;
+      border: 3px solid #26313c; border-top-color: #2ed0ff; border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #status { font-size: 14px; color: #8fa3b5; line-height: 1.6; }
+    #error {
+      display: none; white-space: pre-wrap; text-align: left;
+      background: #1a1114; border: 1px solid #5c2b33; border-radius: 8px;
+      padding: 14px 16px; font-size: 13px; color: #f0a4ad; max-height: 300px; overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo">Omni<span>Agent</span></div>
+    <div class="spinner" id="spinner"></div>
+    <div id="status">正在启动后端…</div>
+    <pre id="error"></pre>
+  </div>
+  <script>
+    window.setStatus = function (t) {
+      document.getElementById("status").textContent = t;
+    };
+    window.showError = function (t) {
+      document.getElementById("spinner").style.display = "none";
+      var e = document.getElementById("error");
+      e.textContent = t;
+      e.style.display = "block";
+    };
+  </script>
+</body>
+</html>
