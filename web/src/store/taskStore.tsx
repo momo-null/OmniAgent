@@ -13,7 +13,7 @@ export interface DebugLog {
   payload: Record<string, unknown>;
 }
 
-export type MainView = "chat" | "skills" | "settings";
+export type MainView = "chat" | "skills" | "cron" | "settings";
 
 interface TaskStoreValue {
   view: MainView;

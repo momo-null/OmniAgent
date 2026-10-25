@@ -56,6 +56,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
     task_id = item["task_id"]
     reply: Optional[ReplyChannel] = item.get("reply")
     notify_channel: Optional[str] = item.get("notify_channel")
+    job_id: str = item.get("job_id", "")
 
     # 回发工具函数：优先消息来源句柄；cron 则用 notify 通道的默认会话
     def _send(text: str) -> None:
@@ -96,6 +97,9 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         # run_task 真实返回：success / escalated / steps / trajectory_file …
         ok = bool(result.get("success", True)) and not result.get("escalated") if isinstance(result, dict) else True
         dr = DispatchResult(task_id=task_id, ok=ok, summary=summary, result=result if isinstance(result, dict) else {"raw": str(result)})
+        if job_id:
+            from .scheduler import record_run
+            record_run(job_id, task_id, "ok" if ok else "error", summary=summary)
         _send(f"{'✅' if ok else '⚠️'} [{item.get('source', 'task')} {task_id[:8]}] {summary or '(无摘要)'}")
         return dr
     except Exception as e:
@@ -130,24 +134,25 @@ def ensure_worker() -> None:
 def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
            source: str = "manual", project_id: Optional[str] = None,
            reply: Optional[ReplyChannel] = None,
-           notify_channel: Optional[str] = None) -> str:
+           notify_channel: Optional[str] = None, job_id: Optional[str] = None) -> str:
     """异步提交（网关消息/cron 用）。返回 task_id。"""
     ensure_worker()
     task_id = uuid.uuid4().hex[:16]
     _QUEUE.put({"task_id": task_id, "objective": objective, "done_when": done_when,
                 "max_steps": max_steps, "source": source, "project_id": project_id,
-                "reply": reply, "notify_channel": notify_channel})
+                "reply": reply, "notify_channel": notify_channel, "job_id": job_id or ""})
     return task_id
 
 
 def dispatch_sync(objective: str, done_when: str = "", max_steps: int = 40, *,
                   source: str = "manual", project_id: Optional[str] = None,
                   reply: Optional[ReplyChannel] = None,
-                  notify_channel: Optional[str] = None) -> DispatchResult:
+                  notify_channel: Optional[str] = None, job_id: Optional[str] = None) -> DispatchResult:
     """同步执行（CLI/测试/「立即运行」用）。"""
     return _run_task_once({"task_id": uuid.uuid4().hex[:16], "objective": objective,
                            "done_when": done_when, "max_steps": max_steps, "source": source,
-                           "project_id": project_id, "reply": reply, "notify_channel": notify_channel})
+                           "project_id": project_id, "reply": reply, "notify_channel": notify_channel,
+                           "job_id": job_id or ""})
 
 
 def queue_size() -> int:

@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 _JOBS_FILE = Path.home() / ".omniagent" / "cron" / "jobs.json"
 _STATE_FILE = Path.home() / ".omniagent" / "cron" / "state.json"
+_RUNS_FILE = Path.home() / ".omniagent" / "cron" / "runs.jsonl"
 
 DEFAULT_JOBS: List[Dict[str, Any]] = [
     {
@@ -173,6 +174,74 @@ def last_fire_before(expr: str, now: datetime, scan_hours: int = 36) -> Optional
     return None
 
 
+def next_fire_after(expr: str, now: datetime, scan_hours: int = 36) -> Optional[datetime]:
+    """前扫下一次应触发时刻（前端「N 分钟后执行」用）。"""
+    t = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    for _ in range(scan_hours * 60):
+        try:
+            if cron_match(expr, t):
+                return t
+        except ValueError:
+            return None
+        t += timedelta(minutes=1)
+    return None
+
+
+def cron_describe(expr: str) -> str:
+    """cron → 人话（卡片展示用；识别不了的回原文）。"""
+    try:
+        f = expr.split()
+        if len(f) != 5:
+            return expr
+        mi, h, dom, mon, dow = f
+        hm = f"{int(h):02d}:{int(mi):02d}" if h != "*" and mi != "*" else ""
+        if dom == "*" and mon == "*" and dow == "*" and h == "*" and mi.startswith("*/"):
+            return f"每 {mi[2:]} 分钟"
+        if dom == "*" and mon == "*" and dow == "*" and h != "*" and mi == "*":
+            return f"每小时（第 {h} 分）"
+        if dom == "*" and mon == "*" and dow in ("1-5",):
+            return f"工作日 {hm}" if hm else expr
+        if dom == "*" and mon == "*" and dow == "*":
+            return f"每天 {hm}" if hm else expr
+        if dom == "*" and mon == "*" and dow == "0,6":
+            return f"每周末 {hm}" if hm else expr
+        return expr
+    except Exception:
+        return expr
+
+
+def record_run(job_id: str, task_id: str, status: str, summary: str = "", error: str = "") -> None:
+    """运行记录（前端「运行记录」时间线数据源）。追加式 jsonl。"""
+    rec = {"ts": datetime.now().isoformat(timespec="seconds"), "job_id": job_id,
+           "task_id": task_id, "status": status, "summary": summary[:800], "error": error[:300]}
+    try:
+        _RUNS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _RUNS_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def load_runs(job_id: str = "", limit: int = 100) -> List[Dict[str, Any]]:
+    if not _RUNS_FILE.exists():
+        return []
+    recs: List[Dict[str, Any]] = []
+    try:
+        for line in _RUNS_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if not job_id or r.get("job_id") == job_id:
+                recs.append(r)
+    except Exception:
+        pass
+    return recs[-limit:][::-1]  # 新→旧
+
+
 # ─────────────────────────── 调度主循环 ───────────────────────────
 
 class Scheduler:
@@ -255,5 +324,5 @@ def run_now(job_id: str) -> Optional[str]:
     return dispatch.submit(
         job["objective"], job.get("done_when", ""), int(job.get("max_steps", 40)),
         source=f"manual:{job_id}", project_id=job.get("project_id") or None,
-        notify_channel=job.get("notify_channel") or None,
+        notify_channel=job.get("notify_channel") or None, job_id=job_id,
     )

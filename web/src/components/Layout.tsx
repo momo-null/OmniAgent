@@ -26,7 +26,7 @@ import SettingsIcon from "@mui/icons-material/Settings";
 import ExpandLess from "@mui/icons-material/ExpandLess";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import ScheduleIcon from "@mui/icons-material/Schedule";
-import CronJobsDialog from "./CronJobsDialog";
+import CronJobs from "../pages/CronJobs";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
@@ -56,7 +56,6 @@ export default function Layout() {
   // 项目行的展开态（缺省展开）：保存到项目的任务嵌套挂在项目下
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [saveOpen, setSaveOpen] = useState(false);
-  const [cronOpen, setCronOpen] = useState(false);
   const [saveNewProject, setSaveNewProject] = useState("");
   const [projMenuAnchor, setProjMenuAnchor] = useState<null | HTMLElement>(null);
   const [projMenuId, setProjMenuId] = useState("");
@@ -164,6 +163,7 @@ ${assets}`)) {
   const renderMain = () => {
     switch (view) {
       case "skills": return <SkillsAndTools />;
+      case "cron": return <CronJobs />;
       case "settings": return <Settings />;
       case "chat":
       default: return <Chat />;
@@ -208,6 +208,7 @@ ${assets}`)) {
             <ListItemText primary="新建对话" primaryTypographyProps={{ fontSize: 14 }} />
           </ListItemButton>
           {sidebarEntry("skills", "技能与工具", <BuildIcon />)}
+          {sidebarEntry("cron", "定时任务", <ScheduleIcon />)}
         </List>
 
         {/* 项目分区（C4）：用户创建的项目（default 为内核缺省归属，不展示）+ 会话数；菜单支持删除（C5） */}
@@ -516,13 +517,6 @@ ${assets}`)) {
             <Button onClick={createAndSave} disabled={!saveNewProject.trim()}>新建并保存</Button>
           </DialogActions>
         </Dialog>
-
-        {/* 定时任务（gateway/scheduler.py + backend router_cron；jobs.json 热加载） */}
-        <ListItemButton sx={{ py: 0.5 }} onClick={() => setCronOpen(true)}>
-          <ListItemIcon sx={{ minWidth: 32 }}><ScheduleIcon /></ListItemIcon>
-          <ListItemText primary="定时任务" primaryTypographyProps={{ fontSize: 13 }} />
-        </ListItemButton>
-        <CronJobsDialog open={cronOpen} onClose={() => setCronOpen(false)} />
 
         {/* 隐藏分区：淡分隔线 + 正常大小设置入口（仅文字可点） */}
         <Divider sx={{ my: 0.25, borderColor: "divider" }} />

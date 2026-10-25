@@ -194,4 +194,6 @@ export const cronApi = {
   save: (jobs: Record<string, unknown>[]) => http.put("/api/cron/jobs", { jobs }),
   run: (id: string) => http.post(`/api/cron/jobs/${encodeURIComponent(id)}/run`),
   projects: () => http.get("/api/cron/projects"),
+  runs: (jobId = "", limit = 100) =>
+    http.get(`/api/cron/runs?job_id=${encodeURIComponent(jobId)}&limit=${limit}`),
 };

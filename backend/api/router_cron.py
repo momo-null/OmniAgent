@@ -8,6 +8,9 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException
 
+from datetime import datetime
+from typing import Optional
+
 from gateway import scheduler as cron_store
 
 router = APIRouter(tags=["cron"])
@@ -15,7 +18,17 @@ router = APIRouter(tags=["cron"])
 
 @router.get("/api/cron/jobs")
 async def list_jobs() -> Dict[str, Any]:
-    return {"ok": True, "jobs": cron_store.load_jobs()}
+    """jobs + 派生字段（人话 cron / 下次执行时间+倒计时秒）。"""
+    now = datetime.now()
+    out = []
+    for j in cron_store.load_jobs():
+        item = dict(j)
+        item["describe"] = cron_store.cron_describe(j.get("cron", ""))
+        nxt = cron_store.next_fire_after(j["cron"], now) if j.get("enabled") else None
+        item["next_run_at"] = nxt.isoformat(timespec="seconds") if nxt else None
+        item["next_in_seconds"] = int((nxt - now).total_seconds()) if nxt else None
+        out.append(item)
+    return {"ok": True, "jobs": out}
 
 
 @router.put("/api/cron/jobs")
@@ -49,6 +62,12 @@ async def run_job(job_id: str) -> Dict[str, Any]:
     if not task_id:
         raise HTTPException(404, f"job 不存在: {job_id}")
     return {"ok": True, "task_id": task_id}
+
+
+@router.get("/api/cron/runs")
+async def list_runs(job_id: str = "", limit: int = 100) -> Dict[str, Any]:
+    """运行记录（新→旧）。job_id 空则全部（「运行记录」总Tab用）。"""
+    return {"ok": True, "runs": cron_store.load_runs(job_id=job_id, limit=limit)}
 
 
 @router.get("/api/cron/projects")
