@@ -188,7 +188,8 @@ ${assets}`)) {
         sx={{
           width: DRAWER_WIDTH, flexShrink: 0,
           "& .MuiDrawer-paper": {
-            width: DRAWER_WIDTH, boxSizing: "border-box", overflowY: "auto",
+            width: DRAWER_WIDTH, boxSizing: "border-box",
+            display: "flex", flexDirection: "column", overflow: "hidden",
             // 侧栏比内容区亮一档但偏暗（#2e2e2e），层级靠亮度区分
             borderRight: "none", bgcolor: "#2e2e2e",
           },
@@ -198,6 +199,8 @@ ${assets}`)) {
           <Typography variant="subtitle1" noWrap sx={{ fontWeight: 600 }}>OmniAgent</Typography>
         </Toolbar>
 
+        {/* 中部滚动区：入口/项目/会话（设置钉在底部，不随内容滚动） */}
+        <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
         {/* 固定入口 */}
         <List sx={{ py: 0 }}>
           <ListItemButton
@@ -518,12 +521,13 @@ ${assets}`)) {
           </DialogActions>
         </Dialog>
 
-        {/* 隐藏分区：淡分隔线 + 正常大小设置入口（仅文字可点） */}
-        <Divider sx={{ my: 0.25, borderColor: "divider" }} />
+        </Box>
+
+        {/* 底部固定：设置入口（距底 20px） */}
         <Box
           sx={{
-            display: "flex", alignItems: "center", gap: 1,
-            px: 2, py: 0.5,
+            flexShrink: 0, display: "flex", alignItems: "center", gap: 1,
+            px: 2, pt: 0.5, pb: "20px",
           }}
         >
           <SettingsIcon fontSize="small" />
