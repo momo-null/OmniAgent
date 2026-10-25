@@ -97,6 +97,12 @@ export default function CronJobs() {
     } catch { setRuns([]); }
   }, []);
   useEffect(() => { if (detail) void loadRuns(detail); }, [detail, loadRuns]);
+  // 执行中的任务：详情页每 5s 轮询，跑完自动出现结果
+  useEffect(() => {
+    if (!detail) return;
+    const t = setInterval(() => void loadRuns(detail), 5000);
+    return () => clearInterval(t);
+  }, [detail, loadRuns]);
 
   const persist = async (next: CronJob[]) => {
     try {
@@ -161,9 +167,13 @@ export default function CronJobs() {
           <Box key={`${r.ts}-${i}`} sx={{ mb: 3 }}>
             <Typography sx={{ fontSize: 15, fontWeight: 600, mb: 1 }}>{fmtTs(r.ts)}</Typography>
             <Paper variant="outlined" sx={{ p: 2, bgcolor: "background.default" }}>
-              {r.status === "error"
-                ? <Typography sx={{ color: "error.main", fontSize: 14 }}>ⓘ {r.error || "任务执行失败"}</Typography>
-                : <Typography sx={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.7 }}>{r.summary || "（无摘要）"}</Typography>}
+              {r.status === "running" ? (
+                <Typography sx={{ color: "warning.main", fontSize: 14 }}>⏳ 任务执行中…（完成后此条自动更新）</Typography>
+              ) : r.status === "error" ? (
+                <Typography sx={{ color: "error.main", fontSize: 14 }}>ⓘ {r.error || "任务执行失败"}</Typography>
+              ) : (
+                <Typography sx={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.7 }}>{r.summary || "（无摘要）"}</Typography>
+              )}
             </Paper>
           </Box>
         ))}
@@ -301,9 +311,13 @@ function AllRuns() {
             {fmtTs(r.ts)}｜{r.job_id}
           </Typography>
           <Paper variant="outlined" sx={{ p: 1.5, bgcolor: "background.default" }}>
-            {r.status === "error"
-              ? <Typography sx={{ color: "error.main", fontSize: 13 }}>ⓘ {r.error || "执行失败"}</Typography>
-              : <Typography sx={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{r.summary || "（无摘要）"}</Typography>}
+            {r.status === "running" ? (
+              <Typography sx={{ color: "warning.main", fontSize: 13 }}>⏳ 执行中…</Typography>
+            ) : r.status === "error" ? (
+              <Typography sx={{ color: "error.main", fontSize: 13 }}>ⓘ {r.error || "执行失败"}</Typography>
+            ) : (
+              <Typography sx={{ fontSize: 13, whiteSpace: "pre-wrap" }}>{r.summary || "（无摘要）"}</Typography>
+            )}
           </Paper>
         </Box>
       ))}

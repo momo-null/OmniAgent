@@ -138,6 +138,9 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
     """异步提交（网关消息/cron 用）。返回 task_id。"""
     ensure_worker()
     task_id = uuid.uuid4().hex[:16]
+    if job_id:  # 立即落"执行中"记录——详情页秒见反馈，完成后再补 ok/error
+        from .scheduler import record_run
+        record_run(job_id, task_id, "running")
     _QUEUE.put({"task_id": task_id, "objective": objective, "done_when": done_when,
                 "max_steps": max_steps, "source": source, "project_id": project_id,
                 "reply": reply, "notify_channel": notify_channel, "job_id": job_id or ""})
