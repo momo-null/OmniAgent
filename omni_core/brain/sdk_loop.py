@@ -1115,6 +1115,12 @@ async def _run_loop_streamed(agent, items, turns, hooks, on_llm_delta, on_llm_fi
         _attach_partial_items(_mte, result)
         raise
     except Exception as e:
+        # 4xx（除 429）为确定性拒绝（内容过滤/参数不合法/鉴权）：同步重发同样
+        # 内容没有意义，直接上抛交 provider 错误分类（暂停 + 明确文案）；
+        # 其余（不支持流式 / 网络 / 瞬时 429、5xx）保持同步退回，行为不变。
+        _st = _provider_status_code(e)
+        if _st is not None and 400 <= _st < 500 and _st != 429:
+            raise
         # 不支持流式（如 chat_bridge 适配 / 离线端点）：退回同步跑，行为不变。
         # 必须留痕：此降级曾因静默吞异常掩盖 await 事故，绝不再无声失败。
         print(f"[sdk_loop] 流式不可用，退回同步 Runner.run: {type(e).__name__}: {e}", flush=True)

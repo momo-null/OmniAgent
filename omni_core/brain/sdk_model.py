@@ -10,12 +10,49 @@
 """
 from openai import AsyncOpenAI
 
-from agents import OpenAIChatCompletionsModel
+from agents import Model, OpenAIChatCompletionsModel
+from agents.exceptions import ModelBehaviorError
 
 import httpx
 
 
-def build_sdk_model(brain_cfg: dict, timeout: float | None = None) -> OpenAIChatCompletionsModel:
+class _MalformedResponseGuard(Model):
+    """协议层兜底：上游网关返回非标准响应体时给清晰错误，而不是崩成 AttributeError。
+
+    场景（通用协议问题，非厂商特有）：部分 openai-compatible 网关在软拦截
+    （如内容过滤）时返回 HTTP 200 + 非标准体（裸字符串等）。openai 客户端
+    原样透传，SDK ``_fetch_response`` 的 ``isinstance(ret, ChatCompletion)``
+    不成立即按流式分支返回 ``(Response, stream)`` 元组，随后 ``response.choices``
+    抛 ``AttributeError: 'tuple' object has no attribute 'choices'``——
+    既难排障又会被上层当成「runner 异常」升级。此处按 SDK 通用错误形态
+    （AttributeError + choices 属性名）识别并转成 ModelBehaviorError，
+    交由 errors.classify_provider_error 走「provider 拒绝、暂停」的既定降级链路。
+    """
+
+    def __init__(self, inner: Model) -> None:
+        self._inner = inner
+
+    @staticmethod
+    def _is_sdk_tuple_response(e: BaseException) -> bool:
+        return isinstance(e, AttributeError) and "has no attribute 'choices'" in str(e)
+
+    async def get_response(self, *args, **kwargs):
+        try:
+            return await self._inner.get_response(*args, **kwargs)
+        except AttributeError as e:
+            if self._is_sdk_tuple_response(e):
+                raise ModelBehaviorError(
+                    "模型服务返回非标准响应体（疑似网关/内容过滤软拦截，HTTP 200 但无 choices 结构），"
+                    "任务已暂停；请调整输入内容、缩小上下文或更换模型端点后重试。"
+                ) from e
+            raise
+
+    async def stream_response(self, *args, **kwargs):
+        async for chunk in self._inner.stream_response(*args, **kwargs):
+            yield chunk
+
+
+def build_sdk_model(brain_cfg: dict, timeout: float | None = None) -> Model:
     """由 LLMClient 风格的 cfg 构造 SDK Model。
 
     Args:
@@ -44,4 +81,4 @@ def build_sdk_model(brain_cfg: dict, timeout: float | None = None) -> OpenAIChat
     if proxy:
         kwargs["http_client"] = httpx.AsyncClient(proxy=proxy)
     client = AsyncOpenAI(**kwargs)
-    return OpenAIChatCompletionsModel(model=model, openai_client=client)
+    return _MalformedResponseGuard(OpenAIChatCompletionsModel(model=model, openai_client=client))

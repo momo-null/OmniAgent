@@ -61,6 +61,9 @@ def classify_provider_error(e: Exception) -> Optional[str]:
         return "模型服务暂时不可用（网络/超时），任务已暂停；请稍后重试。"
     if _is_empty_choices(e):
         return "模型服务返回空响应(no choices)，任务已暂停；请稍后重试。"
+    if _is_malformed_response(e):
+        return ("模型服务返回非标准响应体（疑似网关/内容过滤软拦截），任务已暂停；"
+                "请调整输入内容、缩小上下文或更换模型端点后重试。")
     return None
 
 
@@ -92,6 +95,20 @@ def _is_empty_choices(e: Exception) -> bool:
     if type(e).__name__ != "ModelBehaviorError":
         return False
     return "no choices" in str(e).lower()
+
+
+def _is_malformed_response(e: Exception) -> bool:
+    """网关软拦截型 ModelBehaviorError（sdk_model._MalformedResponseGuard 产出）。
+
+    上游网关 HTTP 200 但返回非标准体（裸字符串等，常见于内容过滤软拦截），
+    SDK 因此崩 AttributeError 被卫兵转换。属**确定性**拒绝（重发同样内容无意义），
+    不进入 is_retryable_provider_glitch 的退避重试集，直接按 provider 侧错误暂停。
+    """
+    if e is None:
+        return False
+    if type(e).__name__ != "ModelBehaviorError":
+        return False
+    return "非标准响应体" in str(e)
 
 
 def is_retryable_provider_glitch(e: Exception) -> bool:
