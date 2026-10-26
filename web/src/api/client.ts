@@ -3,6 +3,9 @@ import type {
   ProfileIndex,
   CharacterData,
   ModelsIndex,
+  GitDiffResp,
+  GitStatusResp,
+  TerminalResp,
 } from "../types";
 
 // 使用相对 baseURL，依赖 vite dev 代理将 /api 与 /v1 转发到后端 8000
@@ -187,6 +190,25 @@ export const runtimeApi = {
 };
 
 export default http;
+
+// ── 右侧栏工作区（产物 / 文件预览 / git 变更 / 终端） ─────────────
+export const workspaceApi = {
+  // 任务产物登记表（右侧栏「文件」页与结果卡「产物」同源）
+  artifacts: (taskId: string) =>
+    http.get("/api/runtime/artifacts", { params: { task_id: taskId } }),
+  // 产物文本预览（图片/二进制只回元信息，内容走 fileRawUrl）
+  readFile: (taskId: string, path: string) =>
+    http.get("/api/runtime/files/read", { params: { task_id: taskId, path }, timeout: 20000 }),
+  // 原文件流（<img> 预览 / 下载）；download=1 时以附件下发
+  fileRawUrl: (taskId: string, path: string, download?: boolean) =>
+    `/api/runtime/files/raw?task_id=${encodeURIComponent(taskId)}&path=${encodeURIComponent(path)}${download ? "&download=1" : ""}`,
+  gitStatus: (path: string) =>
+    http.get<GitStatusResp>("/api/runtime/git/status", { params: { path }, timeout: 30000 }),
+  gitDiff: (path: string, file: string) =>
+    http.get<GitDiffResp>("/api/runtime/git/diff", { params: { path, file }, timeout: 30000 }),
+  terminal: (body: { command: string; cwd?: string; shell?: string; timeout_sec?: number }) =>
+    http.post<TerminalResp>("/api/runtime/terminal", body, { timeout: 320000 }),
+};
 
 // ── 定时任务（GET/PUT /api/cron/jobs；jobs.json 热加载） ───────────
 export const cronApi = {

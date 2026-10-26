@@ -234,6 +234,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             "max_steps": max_steps,
         })
         result = None  # 防御：run_task 异常时 finally 仍能安全判 paused
+        _turn_ts0 = time.time()  # 本轮起点：产物登记表按 ts 过滤出本轮新增产物
         result = loop.run_task(spec)
         _reason = result.get("reason") or ""
         # TAM 记忆层:任务收尾触发提炼+判重+落库(buffer 里的本会话消息;异常静默)
@@ -274,8 +275,19 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         _steps_omitted = len(turn_steps) > _MAX_STEPS_IN_RECORD
         if _steps_omitted:
             _maybe_flush_partial(force=True)
+        # 本轮新增产物（登记表按 ts 过滤；tmp 已在 run_task 终态被抢救到持久 artifacts/）
+        _turn_artifacts: List[Dict[str, Any]] = []
+        try:
+            from omni_core.local.artifacts import load_artifacts
+            _turn_artifacts = [
+                a for a in load_artifacts(task_id)
+                if float(a.get("ts") or 0) >= _turn_ts0 - 1.0
+            ][-12:]
+        except Exception:
+            _turn_artifacts = []
         _extra = {"steps": [] if _steps_omitted else turn_steps, "meta": meta, "final": True,
-                  "run_key": run_key, **({"steps_omitted": True} if _steps_omitted else {})}
+                  "run_key": run_key, **({"steps_omitted": True} if _steps_omitted else {}),
+                  **({"artifacts": _turn_artifacts} if _turn_artifacts else {})}
         # 校验结论（如「无校验条件，信任大脑」）只进调试面板，不污染用户对话
         if _reason:
             _debug_push("verify", {"title": "完成校验", "reason": _reason})

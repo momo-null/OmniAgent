@@ -83,9 +83,16 @@ class GraphRunnerMixin:
         """任务终态：清理临时产物目录 ``tasks/<task_id>/tmp/``。
 
         只删 ``tmp/``，**绝不碰同目录的持久资产**（trajectory / world_model / skills…）。
+        清理前先把产物登记表（artifacts.json）里落在 tmp 的文件抢救复制到持久
+        ``tasks/<task_id>/artifacts/``——会话结束后右侧栏仍能预览这些产物。
         """
         if not task_id:
             return
+        try:
+            from omni_core.local.artifacts import preserve_tmp_artifacts
+            preserve_tmp_artifacts(task_id)
+        except Exception:
+            pass
         try:
             import shutil
             from omni_core.local.runtime_paths import task_tmp

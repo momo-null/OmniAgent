@@ -15,6 +15,13 @@ export interface DebugLog {
 
 export type MainView = "chat" | "skills" | "cron" | "settings";
 
+// 右侧栏（RightDock）页签：文件/产物 · 浏览器 · git 变更 · 终端 · Debug
+export type DockTab = "files" | "browser" | "git" | "terminal" | "debug";
+// dock 窗口内页签视图：home=主页（入口列表），其余为功能视图
+export type DockView = "home" | DockTab;
+// 浏览器式页签（每页签记住自己停在哪个视图）
+export interface DockTabItem { id: string; view: DockView; }
+
 interface TaskStoreValue {
   view: MainView;
   setView: (v: MainView) => void;
@@ -69,7 +76,28 @@ interface TaskStoreValue {
   pendingApprovals: ApprovalCardInfo[];
   decideApproval: (approvalId: string, action: "approve" | "deny", remember?: boolean) => Promise<void>;
 
+  // 右侧 dock 窗口：整体收起（宽度 0）/展开为固定 440px 窗口；浏览器式页签管理，
+  // 主页=入口列表（窗口居中），点入口当前页签跳转，+ 新建页签（默认主页）
+  dockOpen: boolean;
+  dockTabs: DockTabItem[];
+  dockActiveId: string;
+  dockPreviewPath: string; // files 页待预览文件（空 = 未选）
+  openDock: (tab: DockTab, previewPath?: string) => void; // 打开/聚焦某功能视图（产物卡等入口）
+  openDockMenu: () => void; // 打开窗口并停在主页
+  closeDock: () => void;
+  newDockTab: () => void; // + 新建页签（主页）
+  closeDockTab: (id: string) => void;
+  activateDockTab: (id: string) => void;
+  navigateDockTab: (view: DockTab) => void; // 当前页签跳到某功能视图
+  setDockPreviewPath: (path: string) => void;
+  // 文件页产物清单版本号：结果卡点击「查看所有产物」等入口触发文件页刷新
+  artifactsVersion: number;
+  bumpArtifactsVersion: () => void;
+
 }
+
+// dock 页签 id 自增序号（模块级，刷新页面重置无妨）
+let dockTabSeq = 0;
 
 const EMPTY_SNAPSHOT: RuntimeSnapshot = {
   skills: [],
@@ -109,6 +137,12 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   const [processLogs, setProcessLogs] = useState<ProcessItem[]>([]);
   // S2 审批：待批卡（SSE approval 事件 / live approvals 通道，按 approval_id upsert）
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalCardInfo[]>([]);
+
+  // 右侧 dock 窗口状态：默认整体收起；页签存于单个 state（tabs+activeId）便于原子更新
+  const [dockOpen, setDockOpen] = useState(false);
+  const [dockWin, setDockWin] = useState<{ tabs: DockTabItem[]; activeId: string }>({ tabs: [], activeId: "" });
+  const [dockPreviewPath, setDockPreviewPath] = useState("");
+  const [artifactsVersion, setArtifactsVersion] = useState(0);
 
   // 标题写入时同步持久化到 localStorage（纯前端，不进后端内核）
   const persistTitles = useCallback((next: Record<string, string>) => {
@@ -603,6 +637,46 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [pushMessage]);
 
+  // ── 右侧 dock 窗口动作（浏览器式页签） ──
+  const openDockView = useCallback((view: DockView) => {
+    setDockOpen(true);
+    setDockWin((w) => {
+      const exist = w.tabs.find((t) => t.view === view);
+      if (exist) return { ...w, activeId: exist.id };
+      const id = `dock-${++dockTabSeq}`;
+      return { tabs: [...w.tabs, { id, view }], activeId: id };
+    });
+  }, []);
+  const openDock = useCallback((tab: DockTab, previewPath?: string) => {
+    openDockView(tab);
+    setDockPreviewPath(previewPath || "");
+  }, [openDockView]);
+  // 打开窗口并停在主页（无主页页签则新建）
+  const openDockMenu = useCallback(() => openDockView("home"), [openDockView]);
+  const closeDock = useCallback(() => setDockOpen(false), []);
+  // + 新建页签：暂时默认主页
+  const newDockTab = useCallback(() => openDockView("home"), [openDockView]);
+  const activateDockTab = useCallback((id: string) => {
+    setDockWin((w) => ({ ...w, activeId: id }));
+  }, []);
+  const closeDockTab = useCallback((id: string) => {
+    setDockWin((w) => {
+      const tabs = w.tabs.filter((t) => t.id !== id);
+      if (!tabs.length) return { tabs: [], activeId: "" };
+      const activeId = w.activeId === id ? tabs[tabs.length - 1].id : w.activeId;
+      return { tabs, activeId };
+    });
+  }, []);
+  // 关掉最后一个页签 = 整窗收起（浏览器语义）
+  useEffect(() => {
+    if (dockOpen && dockWin.tabs.length === 0) setDockOpen(false);
+  }, [dockOpen, dockWin.tabs.length]);
+  // 主页点入口：当前页签原地跳转到功能视图
+  const navigateDockTab = useCallback((view: DockTab) => {
+    setDockWin((w) => ({ ...w, tabs: w.tabs.map((t) => (t.id === w.activeId ? { ...t, view } : t)) }));
+  }, []);
+  const bumpArtifactsVersion = useCallback(() => setArtifactsVersion((v) => v + 1), []);
+
   const deleteTask = useCallback(async (taskId: string) => {
     try {
       await taskApi.remove(taskId);
@@ -657,8 +731,11 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       debugLogs, pushDebugLog, clearDebugLogs,
       processLogs, pushProcessLog, clearProcessLogs,
       deleteTask, renameTask,
+      dockOpen, dockTabs: dockWin.tabs, dockActiveId: dockWin.activeId, dockPreviewPath,
+      openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath,
+      artifactsVersion, bumpArtifactsVersion,
     }),
-    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, taskProjects, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval]
+    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, taskProjects, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval, dockOpen, dockWin, dockPreviewPath, openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath, artifactsVersion, bumpArtifactsVersion]
   );
 
   return <TaskStoreContext.Provider value={value}>{children}</TaskStoreContext.Provider>;

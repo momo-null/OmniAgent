@@ -218,7 +218,62 @@ export interface ChatMsg {
     steps?: ProcessStep[];
     meta?: Record<string, unknown>;
     final?: boolean; // 是否为最终结论轮（前端以「最终结果」卡片独立呈现）
+    // 本轮 agent 实际写出的产物（后端 artifacts.json 按 ts 过滤；点卡片在右侧栏预览）
+    artifacts?: ArtifactInfo[];
   };
+}
+
+// ── 产物（agent 写出的文件；右侧栏「文件」页与结果卡同源） ──
+export interface ArtifactInfo {
+  path: string;
+  name: string;
+  bytes?: number;
+  tool?: string;
+  ts?: number;
+}
+
+// 文件预览（GET /api/runtime/files/read）
+export interface FilePreview {
+  ok: boolean;
+  path: string;
+  name: string;
+  size?: number;
+  mtime?: number;
+  kind: "text" | "image" | "binary";
+  content?: string;
+  truncated?: boolean;
+  error?: string;
+}
+
+// git 变更（GET /api/runtime/git/status | /git/diff）
+export interface GitStatusResp {
+  ok: boolean;
+  is_repo: boolean;
+  path?: string;
+  repo?: string;
+  branch?: string;
+  entries?: { x: string; y: string; file: string; label: string }[];
+  error?: string;
+}
+
+export interface GitDiffResp {
+  ok: boolean;
+  file: string;
+  untracked: boolean;
+  diff: string;
+  error?: string;
+}
+
+// 终端（POST /api/runtime/terminal）
+export interface TerminalResp {
+  ok: boolean;
+  returncode?: number;
+  stdout?: string;
+  stderr?: string;
+  output?: string;
+  cwd?: string;
+  elapsed_ms?: number;
+  error?: string;
 }
 
 // ── 对话区实时过程流（SSE `thinking` / `message` / `toolcall` 事件） ──

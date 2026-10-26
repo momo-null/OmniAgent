@@ -158,6 +158,12 @@ class HostBackend:
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             with mss.mss() as sct:
                 sct.shot(output=save_path)
+            # 产物登记：截图进 artifacts.json（右侧栏可预览）
+            try:
+                from omni_core.local.artifacts import record_artifact
+                record_artifact(save_path, tool="screenshot")
+            except Exception:
+                pass
             return {"ok": True, "path": save_path}
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}

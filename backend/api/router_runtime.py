@@ -10,6 +10,7 @@ from fastapi import APIRouter
 from backend.api.routers import (
     helpers, chat_runtime, tools_api, tasks_api, profile_api,
     snapshot_api, approvals_api, diagnostics_api, models_api,
+    workspace_api,
 )
 
 router = APIRouter(prefix="/api/runtime", tags=["runtime"])
@@ -21,6 +22,7 @@ router.include_router(tasks_api.router)
 router.include_router(snapshot_api.router)
 router.include_router(approvals_api.router)
 router.include_router(diagnostics_api.router)
+router.include_router(workspace_api.router)
 
 # 兼容 re-export：保留原模块暴露的全部模块级名（外部零改动）
 # TOOL_REGISTRY 经 omni_core.tools.base 直接导入（helpers 已不再 re-export，
@@ -59,4 +61,7 @@ from backend.api.routers.diagnostics_api import (  # noqa: F401
 )
 from backend.api.routers.models_api import (  # noqa: F401
     list_models, put_models, set_model_default,
+)
+from backend.api.routers.workspace_api import (  # noqa: F401
+    api_terminal, git_diff, git_status, list_artifacts, read_file_preview, read_file_raw,
 )

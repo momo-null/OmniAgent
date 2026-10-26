@@ -174,6 +174,16 @@ def task_tmp(task_id: str) -> Path:
     return task_dir(task_id) / "tmp"
 
 
+def task_artifacts_dir(task_id: str) -> Path:
+    """任务持久产物目录 ``tasks/<task_id>/artifacts/``（tmp 清理前由登记表抢救落位）。"""
+    return task_dir(task_id) / "artifacts"
+
+
+def task_artifacts_json(task_id: str) -> Path:
+    """产物登记表 ``tasks/<task_id>/artifacts.json``（登记 agent 实际写出的文件）。"""
+    return task_dir(task_id) / "artifacts.json"
+
+
 def task_agents_file(task_id: str) -> Path:
     """任务级纪律文件 ``tasks/<task_id>/AGENTS.md``（不存在则零注入）。"""
     return task_dir(task_id) / "AGENTS.md"

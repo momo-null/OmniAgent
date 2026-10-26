@@ -1,6 +1,7 @@
 // ── Debug 模块面板（可整体删除）：实时日志 + 记忆查看两个页签 ──────────────
-// 删除方式 = 删本文件 + api/debugApi.ts + Chat 页挂载 + 后端 debug_api.py。
+// 删除方式 = 删本文件 + api/debugApi.ts + 右侧栏挂载 + 后端 debug_api.py。
 // 实时日志流来自 taskStore 的 debugLogs（SSE `debug` 事件）。
+// 2026-10-26 起作为右侧栏（RightDock）的一个页签嵌入，不再自带外框/关闭按钮。
 import { useCallback, useEffect, useState } from "react";
 import {
   Box,
@@ -14,7 +15,6 @@ import {
   ToggleButtonGroup,
   Typography,
 } from "@mui/material";
-import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -122,10 +122,9 @@ function MemoryRow({ atom }: { atom: DebugMemoryAtom }) {
   );
 }
 
-export default function DebugPanel({ logs, onClear, onClose, taskId }: {
+export default function DebugPanel({ logs, onClear, taskId }: {
   logs: DebugLog[];
   onClear: () => void;
-  onClose: () => void;
   taskId: string;
 }) {
   const [tab, setTab] = useState<"log" | "memory">("log");
@@ -153,28 +152,24 @@ export default function DebugPanel({ logs, onClear, onClose, taskId }: {
   const count = mem ? mem.counts[scope] : 0;
 
   return (
-    <Box sx={{ width: 420, flexShrink: 0, borderLeft: "1px solid", borderColor: "divider", display: "flex", flexDirection: "column", minHeight: 0 }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ p: 1, pb: 0, flexShrink: 0 }}>
-        <Stack direction="row" spacing={0.5} alignItems="center">
-          <Typography variant="subtitle2">Debug</Typography>
-        </Stack>
-        <Stack direction="row" spacing={0.5} alignItems="center">
-          {tab === "log" ? (
-            <Button size="small" onClick={onClear}>清空</Button>
-          ) : (
+    <Box sx={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
+      <Stack direction="row" justifyContent="space-between" alignItems="center"
+        sx={{ px: 1, flexShrink: 0, borderBottom: "1px solid", borderColor: "divider" }}>
+        <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ minHeight: 34 }}>
+          <Tab value="log" label="实时日志" sx={{ minHeight: 34, py: 0 }} />
+          <Tab value="memory" label="记忆" sx={{ minHeight: 34, py: 0 }} />
+        </Tabs>
+        {tab === "log" ? (
+          <Button size="small" onClick={onClear}>清空</Button>
+        ) : (
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            {loading && <Typography variant="caption" color="text.secondary">加载中…</Typography>}
             <IconButton size="small" onClick={loadMemory} title="刷新">
               <RefreshIcon fontSize="small" />
             </IconButton>
-          )}
-          <IconButton size="small" onClick={onClose} title="收起面板">
-            <ChevronRightIcon fontSize="small" />
-          </IconButton>
-        </Stack>
+          </Stack>
+        )}
       </Stack>
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ px: 1, flexShrink: 0, minHeight: 34 }}>
-        <Tab value="log" label="实时日志" sx={{ minHeight: 34, py: 0 }} />
-        <Tab value="memory" label="记忆" sx={{ minHeight: 34, py: 0 }} />
-      </Tabs>
 
       {tab === "log" ? (
         <ScrollArea sx={{ flexGrow: 1, minHeight: 0 }}>

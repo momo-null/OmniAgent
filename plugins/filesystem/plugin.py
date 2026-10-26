@@ -118,6 +118,12 @@ def write_file(path: str, content: str) -> Dict[str, Any]:
         p.write_text(content, encoding="utf-8")
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    # 产物登记：写出的文件进 tasks/<task_id>/artifacts.json（右侧栏「产物」数据源）
+    try:
+        from omni_core.local.artifacts import record_artifact
+        record_artifact(str(p), tool="write_file")
+    except Exception:
+        pass
     return {"ok": True, "path": str(p), "bytes": len(content.encode("utf-8"))}
 
 
@@ -145,6 +151,12 @@ def edit_file(path: str, old_string: str, new_string: str) -> Dict[str, Any]:
     if text.count(old_string) > 1:
         return {"ok": False, "error": "old_string 出现多次，请提供更唯一的片段"}
     p.write_text(text.replace(old_string, new_string, 1), encoding="utf-8")
+    # 产物登记：编辑过的文件同样进登记表（保证预览与产物列表完整）
+    try:
+        from omni_core.local.artifacts import record_artifact
+        record_artifact(str(p), tool="edit_file")
+    except Exception:
+        pass
     return {"ok": True, "path": str(p)}
 
 

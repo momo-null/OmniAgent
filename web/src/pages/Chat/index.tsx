@@ -18,7 +18,6 @@ import SendIcon from "@mui/icons-material/Send";
 import StopIcon from "@mui/icons-material/Stop";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
-import BugReportIcon from "@mui/icons-material/BugReport";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import CheckIcon from "@mui/icons-material/Check";
 import PsychologyIcon from "@mui/icons-material/Psychology";
@@ -26,12 +25,16 @@ import TerminalIcon from "@mui/icons-material/Terminal";
 import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
 import FolderRounded from "@mui/icons-material/FolderRounded";
 import PublicRounded from "@mui/icons-material/PublicRounded";
+import DescriptionRounded from "@mui/icons-material/DescriptionRounded";
+import ImageIcon from "@mui/icons-material/ImageRounded";
+import InsertDriveFileRounded from "@mui/icons-material/InsertDriveFileRounded";
 import { useTaskStore } from "../../store/taskStore.tsx";
 import ScrollArea, { THUMB_RIGHT, THUMB_WIDTH } from "../../components/ScrollArea.tsx";
 import Markdown from "../../components/Markdown.tsx";
 import ModelPicker from "../../components/ModelPicker.tsx";
-import DebugPanel from "../../components/DebugPanel.tsx";
-import type { ChatMsg, ProcessItem, ApprovalCardInfo, ModelsIndex } from "../../types";
+import RightDock from "../../components/RightDock.tsx";
+import { fmtBytes } from "../../components/dock/FilesTab.tsx";
+import type { ArtifactInfo, ChatMsg, ProcessItem, ApprovalCardInfo, ModelsIndex } from "../../types";
 import { characterApi, modelCatalogApi, settingsApi } from "../../api/client";
 
 // 选中模型的本地兜底：后端目录为准，本地只用于首屏即时显示（切换后由后端 defaults 持久化）
@@ -351,6 +354,65 @@ const ToolCallCard = memo(function ToolCallCard({ item }: { item: ProcessItem })
   );
 });
 
+// 产物卡（结果里的「产物」区）：agent 本轮实际写出的文件，点卡片在右侧栏预览。
+// 数据源 = 后端把本轮新增产物登记挂在最终 agent 消息 extra.artifacts 上（与右侧栏文件页同源）。
+const IMAGE_ART_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".svg"]);
+
+function artifactIcon(name: string) {
+  const i = name.lastIndexOf(".");
+  const ext = i >= 0 ? name.slice(i).toLowerCase() : "";
+  if (IMAGE_ART_EXTS.has(ext)) return <ImageIcon fontSize="small" sx={{ color: "#42a5f5" }} />;
+  if (ext === ".md" || ext === ".markdown") return <DescriptionRounded fontSize="small" sx={{ color: "#26c6da" }} />;
+  return <InsertDriveFileRounded fontSize="small" sx={{ color: "text.disabled" }} />;
+}
+
+const ArtifactCards = memo(function ArtifactCards({ artifacts }: { artifacts: ArtifactInfo[] }) {
+  const { openDock, bumpArtifactsVersion } = useTaskStore();
+  if (!artifacts.length) return null;
+  const open = (path: string) => {
+    bumpArtifactsVersion();
+    openDock("files", path);
+  };
+  return (
+    <Box sx={{ mb: 1, display: "flex", flexDirection: "column", alignItems: "flex-start" }}>
+      <Paper
+        elevation={0}
+        sx={{
+          width: "92%", maxWidth: 480, px: 1.25, py: 0.75, borderRadius: 2,
+          bgcolor: "rgba(0,0,0,0.03)", boxShadow: "none",
+        }}
+      >
+        <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, display: "block", mb: 0.5 }}>
+          产物（{artifacts.length}）
+        </Typography>
+        {artifacts.map((a) => (
+          <Box
+            key={a.path}
+            onClick={() => open(a.path)}
+            sx={{
+              display: "flex", alignItems: "center", gap: 1, px: 0.75, py: 0.6,
+              borderRadius: 1, cursor: "pointer", "&:hover": { bgcolor: "action.hover" },
+            }}
+          >
+            {artifactIcon(a.name)}
+            <Box sx={{ flex: 1, minWidth: 0 }}>
+              <Typography variant="body2" noWrap sx={{ fontSize: 13, fontWeight: 500 }}>
+                {a.name}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block", fontSize: 11 }} title={a.path}>
+                {a.path}
+              </Typography>
+            </Box>
+            <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0, fontSize: 11 }}>
+              {fmtBytes(a.bytes)}
+            </Typography>
+          </Box>
+        ))}
+      </Paper>
+    </Box>
+  );
+});
+
 // 结构化 agent turn：把「思考 + 工具调用 + 结论」渲染为一个归属 agent 的整体，
 // 顺序固定为 思考/工具 在上、结论在中、状态脚注在下（绝不结论在最上）。
 const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false }: { m: ChatMsg; showRole?: boolean; copyable?: boolean }) {
@@ -381,6 +443,8 @@ const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false
           copyable={copyable}
         />
       ) : null}
+      {/* 产物卡：本轮 agent 实际写出的文件，点击在右侧栏「文件」页预览 */}
+      {(m.extra?.artifacts?.length ?? 0) > 0 && <ArtifactCards artifacts={m.extra!.artifacts!} />}
       {meta ? (
         <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
           ✅ 完成：success={meta.success ? "True" : "False"} steps={String(meta.steps)} escalated={String(meta.escalated)} collected={String(meta.collected)}
@@ -391,9 +455,8 @@ const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false
 });
 
 export default function Chat() {
-  const { messages, running, sendMessage, injectMessage, stopTask, debugLogs, clearDebugLogs, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval, taskObjectives } = useTaskStore();
+  const { messages, running, sendMessage, injectMessage, stopTask, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval, taskObjectives, dockOpen, openDockMenu, closeDock } = useTaskStore();
   const [draft, setDraft] = useState("");
-  const [logOpen, setLogOpen] = useState(false);
   // 助手名：从角色卡 frontmatter 解析（缺省 OmniAgent），用于顶栏与消息标签
   const [assistantName, setAssistantName] = useState("OmniAgent");
   useEffect(() => {
@@ -538,7 +601,27 @@ export default function Chat() {
           <Typography variant="subtitle1" noWrap sx={{ fontWeight: 600 }}>
             {currentTaskId ? (taskObjectives[currentTaskId] || "") : ""}
           </Typography>
-          {/* 顶栏右侧：预留模型切换等控制位 */}
+          {/* 顶栏右侧：dock 窗口开关（样式对齐 desktop 导航条 nav-btn：30x22/圆角4/panel-left 图标） */}
+          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
+            <IconButton
+              onClick={() => (dockOpen ? closeDock() : openDockMenu())}
+              aria-label={dockOpen ? "收起侧栏" : "展开侧栏"}
+              title={dockOpen ? "收起侧栏" : "展开侧栏"}
+              sx={{
+                width: 30, height: 22, borderRadius: "4px", p: 0,
+                color: dockOpen ? "#e0e0e0" : "#b1b1b1",
+                "&:hover": { bgcolor: "rgba(255,255,255,0.14)", color: "#e0e0e0" },
+                "&:active": { bgcolor: "rgba(255,255,255,0.2)" },
+              }}
+            >
+              {/* panel-left：矩形 + 左侧竖线（与 desktop/resources/titlebar.html 同源） */}
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
+                   strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <line x1="9" y1="4" x2="9" y2="20" />
+              </svg>
+            </IconButton>
+          </Stack>
         </Stack>
 
         <Paper
@@ -740,32 +823,10 @@ export default function Chat() {
         </Popover>
       </Box>
 
-      {/* 右：信息展示区（公共区域）。默认常驻 30px 纵向图标轨（Debug 置顶）；
-          点击展开为 420px 窗口面板，后续文件预览 / 可视化等展示窗口复用此格式。
-          Debug 面板是可整体删除的独立模块（components/DebugPanel.tsx + api/debugApi.ts） */}
-      {logOpen ? (
-        <DebugPanel
-          logs={debugLogs}
-          onClear={clearDebugLogs}
-          onClose={() => setLogOpen(false)}
-          taskId={currentTaskId}
-        />
-      ) : (
-        <Box
-          sx={{
-            width: 30, flexShrink: 0, borderLeft: "1px solid", borderColor: "divider",
-            display: "flex", flexDirection: "column", alignItems: "center", pt: 1, minHeight: 0,
-          }}
-        >
-          {/* 信息展示区（公共区域）：常驻纵向图标轨，后续文件预览 / 可视化等展示窗口图标按此格式追加 */}
-          <Stack direction="column" spacing={0.5} alignItems="center">
-            <IconButton onClick={() => setLogOpen(true)} title="Debug" size="small">
-              <BugReportIcon fontSize="small" />
-            </IconButton>
-            {/* 其它信息展示窗口（文件预览 / 可视化等）：在此追加 IconButton 即可 */}
-          </Stack>
-        </Box>
-      )}
+      {/* 右：完整侧栏（RightDock）。由顶栏右上角开关整体收起/展开；打开先显示入口菜单，
+          点入口/产物展开 440px 面板，页签：文件/产物 · 浏览器 · git 变更 · 终端 · Debug。
+          Debug 面板仍是可整体删除的独立模块（components/DebugPanel.tsx + api/debugApi.ts） */}
+      <RightDock />
     </Box>
   );
 }
