@@ -115,7 +115,8 @@ class FeishuAdapter:
                 import traceback
                 traceback.print_exc()
 
-        dispatcher = (lark.EventDispatcher.builder("", "")
+        # lark-oapi 1.7.5：dispatcher 叫 EventDispatcherHandler（旧示例的 EventDispatcher 已不存在）
+        dispatcher = (lark.EventDispatcherHandler.builder("", "")
                       .register_p2_im_message_receive_v1(_on_event).build())
         ws = lark.ws.Client(self.app_id, self.app_secret, event_handler=dispatcher, log_level=lark.LogLevel.INFO)
         threading.Thread(target=ws.start, name="feishu-ws", daemon=True).start()

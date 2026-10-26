@@ -31,7 +31,7 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "max_steps": 40,
         "project_id": "etf-analysis",
         "notify_channel": "feishu",
-        "enabled": False,   # 姐姐确认飞书通道跑通后自行启用
+        "enabled": False,   # 出厂默认关闭：jobs.json 是运行真源，装好后在 Web 定时任务页按需启用
         "miss_grace_minutes": 60,
         "note": "P0 三段之一；启用前确认 mcp.json 已注册 etf-analysis",
     },

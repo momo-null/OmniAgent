@@ -14,7 +14,8 @@ import signal
 import sys
 import time
 
-from . import context, dispatch
+from . import dispatch
+from .channels import context
 from .scheduler import Scheduler
 
 _ADAPTER_FACTORIES = {}  # name -> build(cfg)  惰性注册（避免 import 不必要 SDK）
@@ -52,7 +53,12 @@ def start_channels() -> int:
 
 
 def _on_message(msg) -> None:
-    """入站消息 → 打字机回执 → 派发（每消息=独立任务，上下文由 agent 调 MCP 现取）。"""
+    """入站消息 → 打字机回执 → 派发。
+
+    会话语义（对齐 hermes thread 绑定）：同一聊天窗口（channel:chat_id）固定绑定一个
+    项目会话——消息带完整上下文连续对话；不传项目则归 default 项目下的固定会话。
+    （旧语义「每消息=独立任务」改为固定会话，用户预期是与 agent 连续聊天。）
+    """
     dispatch.ensure_worker()
     preview = msg.text[:60].replace("\n", " ")
     print(f"[gateway] 收到消息 <{msg.channel}:{msg.chat_id}> {preview}")
@@ -61,7 +67,26 @@ def _on_message(msg) -> None:
             msg.reply.send_text(f"⏳ 处理中…（{preview[:30]}）")
     except Exception:
         pass
-    dispatch.submit(msg.text, source=f"msg:{msg.channel}", reply=msg.reply)
+    # 聊天路由：msg/<channel>/<chat_id> → 哪个项目 + 哪个会话（config.chat_routes 可覆盖）
+    project_id, session_id = _route_chat(msg)
+    dispatch.submit(msg.text, source=f"msg:{msg.channel}", reply=msg.reply,
+                    project_id=project_id or None, session_id=session_id or None)
+
+
+def _route_chat(msg) -> tuple:
+    """消息 → (project_id, session_id)。默认：default 项目 + 通道固定会话。"""
+    from . import config as _cfg_mod  # noqa: F401  (仅确保 config 已加载)
+    import config as _config
+    routes = (_config.load_config() or {}).get("chat_routes", {}) or {}
+    key = f"{msg.channel}:{msg.chat_id}"
+    rule = routes.get(key) or {}
+    project_id = rule.get("project_id") or ""
+    # 会话 ID：通道+聊天唯一，形如 s_feishu_<chat 哈希>（跨重启稳定）
+    import hashlib
+    h = hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
+    session_id = rule.get("session_id") or f"s_feishu_{h}" if msg.channel == "feishu" \
+        else (rule.get("session_id") or f"s_{msg.channel}_{h}")
+    return project_id, session_id
 
 
 def main() -> int:
