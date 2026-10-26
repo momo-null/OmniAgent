@@ -17,10 +17,13 @@ import {
   findFreePort,
   killBackendTree,
   logsDir,
+  shellLog,
   startBackend,
+  startGateway,
   waitForHealth,
   type BackendHandle,
 } from "./backend";
+import type { ChildProcess } from "node:child_process";
 import { projectRootError, resolveProjectRoot } from "./project";
 import { createTray, disposeTray, setTrayStatus } from "./tray";
 
@@ -55,6 +58,8 @@ let appView: WebContentsView | null = null;
 /** 侧栏收起态（导航条「收起侧边栏」按钮） */
 let sidebarCollapsed = false;
 let backend: BackendHandle | null = null;
+/** 网关进程（cron 调度 + 消息通道），随应用生命周期 */
+let gateway: ChildProcess | null = null;
 let quitting = false;
 let restarts = 0;
 let cfg: DesktopConfig;
@@ -129,17 +134,23 @@ async function createWindow(): Promise<void> {
   // 对 web UI 的全部微调（仅无边框模式，四条规则，其余零注入）：
   // 1) 侧栏 MUI Toolbar 默认 min-height 56/64px + 垂直居中 → 标题上方一大块空白；
   //    压成与导航条等高的一行（标题上方间距≈0）
-  // 2) 页面底色改导航条同色 #2e2e2e：内容区 <main>（Layout 的主区）顶部两角
-  //    圆角化后，露出的背景与导航条/侧栏连成一体——聊天区呈「圆角面板」卡片感
-  // 3) body.omni-sidebar-collapsed：导航条「收起侧边栏」按钮切换的隐藏态
+  // 2) 圆角面板：body 底色取导航条色 #2e2e2e（只在 main 顶部圆角缺口处露出）；
+  //    main 自身显式上 #121212（theme background.default，web 原生色）——
+  //    聊天/设置/技能等所有页面都在 main 内，底色与 web 版完全一致，
+  //    不会因全局底色被改而串色
+  // 3) 侧栏收起：宽度过渡动画（0.18s）而非 display:none 瞬间消失——
+  //    Drawer 根节点与 paper 都锁 260px 基准宽，收起态宽度归零 + overflow hidden 裁切
   appView.webContents.on("did-finish-load", () => {
     if (!cfg.frameless || !appView) return;
     void appView.webContents
       .insertCSS(
         `.MuiDrawer-paper .MuiToolbar-root{min-height:0!important;height:${TITLEBAR.height}px!important;}` +
           `body{background:#2e2e2e!important;}` +
-          `#root main{border-radius:12px 12px 0 0!important;}` +
-          `body.omni-sidebar-collapsed .MuiDrawer-root{display:none!important;}`,
+          `#root main{background:#121212!important;border-radius:12px 12px 0 0!important;}` +
+          `.MuiDrawer-root,.MuiDrawer-paper{transition:width .18s ease!important;` +
+          `width:260px!important;overflow:hidden!important;}` +
+          `body.omni-sidebar-collapsed .MuiDrawer-root,` +
+          `body.omni-sidebar-collapsed .MuiDrawer-paper{width:0!important;}`,
         { cssOrigin: "user" },
       )
       .catch(() => {});
@@ -172,6 +183,10 @@ ipcMain.handle("nav:toggle-sidebar", () => {
   appView?.webContents
     .executeJavaScript(`document.body.classList.toggle('omni-sidebar-collapsed', ${sidebarCollapsed})`)
     .catch(() => {});
+  // 同步导航条：「新建任务」按钮只在侧栏收起后出现（侧栏自带新建入口，避免双入口）
+  if (cfg?.frameless) {
+    execJs(win?.webContents, `window.setSidebarState && window.setSidebarState(${sidebarCollapsed})`);
+  }
   return sidebarCollapsed;
 });
 
@@ -223,6 +238,19 @@ function showErrorState(err: Error): void {
 
 // ── 后端生命周期 ──────────────────────────────────────────
 
+/** 拉起网关并挂自愈链：每次重启的实例都要重新挂 exit 监听（链才不断） */
+function spawnGatewayWithRestart(root: string): void {
+  if (quitting) return;
+  gateway = startGateway(root);
+  gateway.once("exit", (code) => {
+    if (quitting) return;
+    shellLog(`gateway 退出(code=${code})，5s 后自动重启`);
+    setTimeout(() => {
+      if (!quitting && backend) spawnGatewayWithRestart(root);
+    }, 5000);
+  });
+}
+
 async function ensureBackend(): Promise<void> {
   try {
     const root = resolveProjectRoot();
@@ -238,6 +266,11 @@ async function ensureBackend(): Promise<void> {
     const handle = startBackend(root, port);
     backend = handle;
     handle.process.once("exit", onBackendExit);
+    // 网关与后端并列常驻：cron 定时触发 + 飞书通道（凭据缺失时网关自身降级为只跑调度器）。
+    // 守卫：手动「重启后端」/ 崩溃自愈重入时避免拉出第二个网关（scheduler 会双触发）。
+    if (!gateway || gateway.exitCode !== null) {
+      spawnGatewayWithRestart(root);
+    }
     await waitForHealth(port, HEALTH_TIMEOUT_MS, (s) => setStatus(`正在启动后端… ${s}s`));
     setStatus("后端就绪，加载界面…");
     setTrayStatus(`运行中 :${port}`);
@@ -347,14 +380,26 @@ app.on("before-quit", (event) => {
   quitting = true;
   void (async () => {
     try {
+      const kills: Array<Promise<void>> = [];
       if (backend) {
         const pid = backend.process.pid;
         backend = null;
-        await Promise.race([
-          killBackendTree(pid),
-          new Promise((r) => setTimeout(r, 5000)),
-        ]);
+        kills.push(
+          Promise.race([
+            killBackendTree(pid),
+            new Promise<void>((r) => setTimeout(r, 5000)),
+          ]),
+        );
       }
+      if (gateway) {
+        const gpid = gateway.pid;
+        gateway = null;
+        if (gpid) kills.push(killBackendTree(gpid));
+      }
+      await Promise.race([
+        Promise.all(kills).then(() => undefined),
+        new Promise<void>((r) => setTimeout(r, 6000)),
+      ]);
     } finally {
       globalShortcut.unregisterAll();
       app.exit(0);

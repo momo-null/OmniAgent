@@ -1,6 +1,6 @@
 {
   "name": "omniagent-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "OmniAgent 桌面壳：自动拉起本地后端并承载 Web UI",
   "type": "module",
@@ -36,8 +36,18 @@
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "icons/icon.ico"
     },

@@ -73,9 +73,9 @@ function rotateLog(path: string, maxBytes = 5 * 1024 * 1024): void {
   }
 }
 
-function appendLog(line: string): void {
+function appendLog(line: string, name = "backend.log"): void {
   try {
-    const path = join(logsDir(), "backend.log");
+    const path = join(logsDir(), name);
     rotateLog(path);
     appendFileSync(path, line);
   } catch {
@@ -113,6 +113,30 @@ export function startBackend(root: string, port: number): BackendHandle {
   child.stdout?.on("data", pump);
   child.stderr?.on("data", pump);
   return { process: child, port, root };
+}
+
+/** 壳层事件日志（默认记网关侧；后端侧直接走 backend.log 的 pump） */
+export function shellLog(msg: string, name = "gateway.log"): void {
+  appendLog(`\n[shell] ${new Date().toISOString()} ${msg}\n`, name);
+}
+
+/**
+ * 网关常驻（定时任务调度 + 飞书/企微通道）：桌面应用作为日常宿主一并拉起。
+ * 凭据未配（如 FEISHU_APP_SECRET 缺失）时网关自身降级为只跑调度器，不影响使用；
+ * 配好后重启应用即可连上通道。
+ */
+export function startGateway(root: string): ChildProcess {
+  const child = spawn(projectPython(root), ["-m", "gateway.channel_gateway"], {
+    cwd: root,
+    env: cleanEnv(),
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  appendLog(`\n[shell] ${new Date().toISOString()} spawn gateway pid=${child.pid}\n`, "gateway.log");
+  const pump = (chunk: Buffer) => appendLog(chunk.toString("utf8"), "gateway.log");
+  child.stdout?.on("data", pump);
+  child.stderr?.on("data", pump);
+  return child;
 }
 
 // ── 健康检查 ──────────────────────────────────────────────
