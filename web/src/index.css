@@ -47,3 +47,12 @@ html {
   width: 0;
   height: 0;
 }
+
+/* 图标整体柔化（方案C）：保持 Outlined 空心字形不变，全站图标统一降不透明度，
+   弱化与深色背景的黑白对比。想更淡/更实只改这一个变量（0~1）。 */
+:root {
+  --omni-icon-opacity: 0.75;
+}
+.MuiSvgIcon-root {
+  opacity: var(--omni-icon-opacity);
+}

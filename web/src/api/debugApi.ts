@@ -27,4 +27,11 @@ export const debugApi = {
   // 记忆库只读转储（蒸馏结果）：项目库 + 全局库 atoms
   memory: (params: { task_id?: string; project_id?: string }) =>
     http.get<DebugMemoryResponse>("/api/debug/memory", { params }),
+  // 删除单条记忆 atom（scope=project|global；物理删除，不可恢复，无二次确认）
+  deleteMemory: (scope: "project" | "global", recordId: string, projectId?: string) =>
+    http.post<{ ok: boolean; error?: string }>("/api/debug/memory/delete", {
+      scope,
+      record_id: recordId,
+      project_id: projectId || "default",
+    }),
 };

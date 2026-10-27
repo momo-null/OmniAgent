@@ -6,13 +6,13 @@ import {
   FormControlLabel, IconButton, InputAdornment, MenuItem, Paper, Snackbar, Switch,
   TextField, Tooltip, Typography,
 } from "@mui/material";
-import AddIcon from "@mui/icons-material/Add";
-import ArrowBackIcon from "@mui/icons-material/ArrowBack";
-import DeleteIcon from "@mui/icons-material/Delete";
-import EditIcon from "@mui/icons-material/Edit";
-import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import SearchIcon from "@mui/icons-material/Search";
-import ScheduleIcon from "@mui/icons-material/Schedule";
+import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
+import ArrowBackOutlinedIcon from "@mui/icons-material/ArrowBackOutlined";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import PlayArrowOutlinedIcon from "@mui/icons-material/PlayArrowOutlined";
+import SearchOutlinedIcon from "@mui/icons-material/SearchOutlined";
+import ScheduleOutlinedIcon from "@mui/icons-material/ScheduleOutlined";
 import { cronApi } from "../../api/client";
 
 interface CronJob {
@@ -149,13 +149,13 @@ export default function CronJobs() {
     return (
       <Box sx={{ height: "100%", overflowY: "auto", p: { xs: 2, md: 3 } }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
-          <IconButton size="small" onClick={() => setDetail(null)}><ArrowBackIcon /></IconButton>
+          <IconButton size="small" onClick={() => setDetail(null)}><ArrowBackOutlinedIcon /></IconButton>
           <Typography variant="h6" sx={{ fontSize: 18 }}>{detailJob.name || detailJob.id}</Typography>
           <Typography variant="body2" color="text.secondary">{detailJob.describe ?? detailJob.cron}</Typography>
           <Box sx={{ flex: 1 }} />
           <Switch checked={!!detailJob.enabled} onChange={e => void persist(jobs.map(j => j.id === detailJob.id ? { ...j, enabled: e.target.checked } : j))} />
-          <Tooltip title="立即运行"><IconButton onClick={() => void runNow(detailJob.id)}><PlayArrowIcon /></IconButton></Tooltip>
-          <Tooltip title="编辑"><IconButton onClick={() => setEditing({ ...detailJob })}><EditIcon /></IconButton></Tooltip>
+          <Tooltip title="立即运行"><IconButton onClick={() => void runNow(detailJob.id)}><PlayArrowOutlinedIcon /></IconButton></Tooltip>
+          <Tooltip title="编辑"><IconButton onClick={() => setEditing({ ...detailJob })}><EditOutlinedIcon /></IconButton></Tooltip>
         </Box>
         {detailJob.next_run_at && (
           <Typography color="text.secondary" sx={{ mb: 2, fontSize: 13 }}>
@@ -185,11 +185,18 @@ export default function CronJobs() {
   return (
     <Box sx={{ height: "100%", overflowY: "auto", p: { xs: 2, md: 3 } }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 1 }}>
-        <Typography sx={{ fontSize: 20, fontWeight: 700 }}>定时任务</Typography>
-        <Typography onClick={() => setTab("runs")} sx={{ fontSize: 20, fontWeight: 700, color: "text.secondary", cursor: "pointer", "&:hover": { color: "primary.main" } }}>运行记录</Typography>
+        {/* 页签对：两个标题都可点，激活项高亮（修复：点过运行记录后切不回定时任务列表） */}
+        <Typography onClick={() => setTab("jobs")}
+          sx={{ fontSize: 20, fontWeight: 700, cursor: "pointer",
+                color: tab === "jobs" ? "text.primary" : "text.secondary",
+                "&:hover": { color: "primary.main" } }}>定时任务</Typography>
+        <Typography onClick={() => setTab("runs")}
+          sx={{ fontSize: 20, fontWeight: 700, cursor: "pointer",
+                color: tab === "runs" ? "text.primary" : "text.secondary",
+                "&:hover": { color: "primary.main" } }}>运行记录</Typography>
         <Box sx={{ flex: 1 }} />
-        <IconButton size="small" onClick={() => void loadJobs()}><SearchIcon fontSize="small" /></IconButton>
-        <Button variant="contained" size="small" startIcon={<AddIcon />} onClick={() => setEditing({ ...EMPTY_FORM })}>新建</Button>
+        <IconButton size="small" onClick={() => void loadJobs()}><SearchOutlinedIcon fontSize="small" /></IconButton>
+        <Button variant="contained" size="small" startIcon={<AddOutlinedIcon />} onClick={() => setEditing({ ...EMPTY_FORM })}>新建</Button>
       </Box>
 
       {tab === "jobs" ? (
@@ -204,7 +211,7 @@ export default function CronJobs() {
               <TextField size="small" autoFocus placeholder="搜索…" value={search}
                 onChange={e => setSearch(e.target.value)}
                 sx={{ width: 200 }}
-                InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }} />
+                InputProps={{ startAdornment: <InputAdornment position="start"><SearchOutlinedIcon fontSize="small" /></InputAdornment> }} />
             )}
           </Box>
 
@@ -229,18 +236,18 @@ export default function CronJobs() {
                   {j.objective}
                 </Typography>
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <ScheduleIcon sx={{ fontSize: 15, color: "text.secondary" }} />
+                  <ScheduleOutlinedIcon sx={{ fontSize: 15, color: "text.secondary" }} />
                   <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
                     {j.describe ?? j.cron}{j.enabled && j.next_run_at ? `　·　${fmtCountdown(j.next_in_seconds)}` : ""}
                   </Typography>
                   <Tooltip title="立即运行">
                     <IconButton size="small" onClick={e => { e.stopPropagation(); void runNow(j.id); }}>
-                      <PlayArrowIcon fontSize="small" />
+                      <PlayArrowOutlinedIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
                   <Tooltip title="删除">
                     <IconButton size="small" onClick={e => { e.stopPropagation(); void persist(jobs.filter(x => x.id !== j.id)); }}>
-                      <DeleteIcon fontSize="small" />
+                      <DeleteOutlinedIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
                 </Box>

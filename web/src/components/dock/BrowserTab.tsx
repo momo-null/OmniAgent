@@ -2,9 +2,9 @@
 // 部分站点通过 X-Frame-Options 拒绝被内嵌——提供「系统浏览器打开」兜底。
 import { useEffect, useState } from "react";
 import { Box, IconButton, InputBase, Stack, Tooltip, Typography } from "@mui/material";
-import OpenInNewRounded from "@mui/icons-material/OpenInNewRounded";
-import PlayArrowRounded from "@mui/icons-material/PlayArrowRounded";
-import RefreshRounded from "@mui/icons-material/RefreshRounded";
+import OpenInNewOutlined from "@mui/icons-material/OpenInNewOutlined";
+import PlayArrowOutlined from "@mui/icons-material/PlayArrowOutlined";
+import RefreshOutlined from "@mui/icons-material/RefreshOutlined";
 
 const URL_KEY = "omni.dock.browserUrl";
 
@@ -42,18 +42,18 @@ export default function BrowserTab() {
         />
         <Tooltip title="打开">
           <IconButton size="small" onClick={go} title="打开">
-            <PlayArrowRounded fontSize="small" />
+            <PlayArrowOutlined fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip title="刷新">
           <IconButton size="small" title="刷新" onClick={() => setUrl((u) => (u ? `${u.split("#")[0]}#${Date.now()}` : u))}>
-            <RefreshRounded fontSize="small" />
+            <RefreshOutlined fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip title="在系统浏览器打开">
           <IconButton size="small" title="在系统浏览器打开"
             onClick={() => url && window.open(url, "_blank")}>
-            <OpenInNewRounded fontSize="small" />
+            <OpenInNewOutlined fontSize="small" />
           </IconButton>
         </Tooltip>
       </Stack>

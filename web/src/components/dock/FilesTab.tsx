@@ -12,13 +12,13 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import ArrowBackRounded from "@mui/icons-material/ArrowBackRounded";
-import DescriptionRounded from "@mui/icons-material/DescriptionRounded";
-import ImageIcon from "@mui/icons-material/ImageRounded";
-import InsertDriveFileRounded from "@mui/icons-material/InsertDriveFileRounded";
-import OpenInNewRounded from "@mui/icons-material/OpenInNewRounded";
-import DownloadRounded from "@mui/icons-material/DownloadRounded";
-import RefreshRounded from "@mui/icons-material/RefreshRounded";
+import ArrowBackOutlined from "@mui/icons-material/ArrowBackOutlined";
+import DescriptionOutlined from "@mui/icons-material/DescriptionOutlined";
+import ImageOutlinedIcon from "@mui/icons-material/ImageOutlined";
+import InsertDriveFileOutlined from "@mui/icons-material/InsertDriveFileOutlined";
+import OpenInNewOutlined from "@mui/icons-material/OpenInNewOutlined";
+import DownloadOutlined from "@mui/icons-material/DownloadOutlined";
+import RefreshOutlined from "@mui/icons-material/RefreshOutlined";
 import ScrollArea from "../ScrollArea.tsx";
 import Markdown from "../Markdown.tsx";
 import { workspaceApi } from "../../api/client";
@@ -42,9 +42,9 @@ function extOf(name: string): string {
 
 function ArtifactIcon({ name }: { name: string }) {
   const ext = extOf(name);
-  if (IMAGE_EXTS.has(ext)) return <ImageIcon fontSize="small" sx={{ color: "#42a5f5" }} />;
-  if (MD_EXTS.has(ext)) return <DescriptionRounded fontSize="small" sx={{ color: "#26c6da" }} />;
-  return <InsertDriveFileRounded fontSize="small" sx={{ color: "text.disabled" }} />;
+  if (IMAGE_EXTS.has(ext)) return <ImageOutlinedIcon fontSize="small" sx={{ color: "#42a5f5" }} />;
+  if (MD_EXTS.has(ext)) return <DescriptionOutlined fontSize="small" sx={{ color: "#26c6da" }} />;
+  return <InsertDriveFileOutlined fontSize="small" sx={{ color: "text.disabled" }} />;
 }
 
 function PreviewBody({ taskId, p }: { taskId: string; p: FilePreview }) {
@@ -67,7 +67,7 @@ function PreviewBody({ taskId, p }: { taskId: string; p: FilePreview }) {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           二进制文件（{fmtBytes(p.size)}），暂不支持预览。
         </Typography>
-        <Button size="small" startIcon={<DownloadRounded />}
+        <Button size="small" startIcon={<DownloadOutlined />}
           href={workspaceApi.fileRawUrl(taskId, p.path, true)}>
           下载文件
         </Button>
@@ -166,7 +166,7 @@ export default function FilesTab() {
         <Stack direction="row" spacing={0.5} alignItems="center"
           sx={{ px: 1, py: 0.5, flexShrink: 0, borderBottom: "1px solid", borderColor: "divider" }}>
           <IconButton size="small" onClick={backToList} title="返回产物列表">
-            <ArrowBackRounded fontSize="small" />
+            <ArrowBackOutlined fontSize="small" />
           </IconButton>
           {preview && <ArtifactIcon name={preview.name} />}
           <Tooltip title={preview?.path || dockPreviewPath}>
@@ -183,7 +183,7 @@ export default function FilesTab() {
             <IconButton size="small" title="在系统浏览器打开"
               onClick={() => currentTaskId && window.open(
                 workspaceApi.fileRawUrl(currentTaskId, dockPreviewPath), "_blank")}>
-              <OpenInNewRounded fontSize="small" />
+              <OpenInNewOutlined fontSize="small" />
             </IconButton>
           </Tooltip>
         </Stack>
@@ -214,7 +214,7 @@ export default function FilesTab() {
         <Box sx={{ flex: 1 }} />
         {loading && <CircularProgress size={14} sx={{ mr: 0.5 }} />}
         <IconButton size="small" title="刷新" onClick={() => { loadArtifacts(); bumpArtifactsVersion(); }}>
-          <RefreshRounded fontSize="small" />
+          <RefreshOutlined fontSize="small" />
         </IconButton>
       </Stack>
       <ScrollArea sx={{ flexGrow: 1, minHeight: 0 }}>

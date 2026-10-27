@@ -7,7 +7,7 @@ import {
   MenuItem,
   Typography,
 } from "@mui/material";
-import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowDownOutlinedIcon from "@mui/icons-material/KeyboardArrowDownOutlined";
 import type { ModelProvider, ModelSlotCurrent } from "../types";
 
 /**
@@ -57,7 +57,7 @@ export default function ModelPicker({
         disabled={disabled}
         disableRipple
         onClick={(e) => setAnchorEl(e.currentTarget)}
-        endIcon={<KeyboardArrowDownIcon sx={{ fontSize: 16 }} />}
+        endIcon={<KeyboardArrowDownOutlinedIcon sx={{ fontSize: 16 }} />}
         sx={{
           color: "text.primary",
           textTransform: "none",

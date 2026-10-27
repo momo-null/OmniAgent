@@ -2,9 +2,9 @@
 // 会话 cwd 在多次执行间保持（后端回传实际 cwd），命令历史支持 ↑/↓。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Box, IconButton, InputBase, Stack, Tooltip, Typography } from "@mui/material";
-import StopCircleRounded from "@mui/icons-material/StopCircleRounded";
-import PlayArrowRounded from "@mui/icons-material/PlayArrowRounded";
-import DeleteSweepRounded from "@mui/icons-material/DeleteSweepRounded";
+import StopCircleOutlined from "@mui/icons-material/StopCircleOutlined";
+import PlayArrowOutlined from "@mui/icons-material/PlayArrowOutlined";
+import DeleteSweepOutlined from "@mui/icons-material/DeleteSweepOutlined";
 import ScrollArea from "../ScrollArea.tsx";
 import { workspaceApi } from "../../api/client";
 import type { TerminalResp } from "../../types";
@@ -98,7 +98,7 @@ export default function TerminalTab() {
           </Typography>
         </Tooltip>
         <IconButton size="small" title="清屏" onClick={() => setLines([])}>
-          <DeleteSweepRounded fontSize="small" />
+          <DeleteSweepOutlined fontSize="small" />
         </IconButton>
       </Stack>
       <ScrollArea sx={{ flexGrow: 1, minHeight: 0 }} viewportRef={viewportRef}>
@@ -134,7 +134,7 @@ export default function TerminalTab() {
           sx={{ flex: 1, minWidth: 0, fontSize: 13, px: 1, bgcolor: "action.hover", borderRadius: 1, height: 30, fontFamily: "monospace" }}
         />
         <IconButton size="small" title={busy ? "执行中" : "执行"} disabled={busy || !cmd.trim()} onClick={() => void run()}>
-          {busy ? <StopCircleRounded fontSize="small" /> : <PlayArrowRounded fontSize="small" />}
+          {busy ? <StopCircleOutlined fontSize="small" /> : <PlayArrowOutlined fontSize="small" />}
         </IconButton>
       </Stack>
     </Box>

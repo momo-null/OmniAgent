@@ -138,6 +138,27 @@ def count_global_atoms() -> int:
         return 0
 
 
+def delete_atom(record_id: str, project_id: str = "default", scope: str = "project") -> bool:
+    """物理删除单条记忆 atom（人工修正入口；同步清理 FTS 索引避免死条目命中）。
+
+    scope="global" 走全局库；否则按 project_id 打开项目库。
+    返回是否确有删除（record_id 不存在返回 False）。
+    """
+    rid = str(record_id or "").strip()
+    if not rid:
+        return False
+    conn = open_global_db() if scope == "global" else open_db(project_id or "default")
+    try:
+        cur = conn.execute("DELETE FROM atoms WHERE record_id=?", (rid,))
+        deleted = cur.rowcount > 0
+        if deleted:
+            _fts_sync(conn, rid, "", delete_only=True)
+        conn.commit()
+        return deleted
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------- 写链
 
 def capture(project_id: str, role: str, content: str) -> None:

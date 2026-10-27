@@ -20,20 +20,20 @@ import {
   Button,
   TextField,
 } from "@mui/material";
-import AddIcon from "@mui/icons-material/Add";
-import BuildIcon from "@mui/icons-material/Build";
-import SettingsIcon from "@mui/icons-material/Settings";
-import ExpandLess from "@mui/icons-material/ExpandLess";
-import ExpandMore from "@mui/icons-material/ExpandMore";
-import ScheduleIcon from "@mui/icons-material/Schedule";
+import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
+import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
+import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
+import ExpandLessOutlined from "@mui/icons-material/ExpandLessOutlined";
+import ExpandMoreOutlined from "@mui/icons-material/ExpandMoreOutlined";
+import ScheduleOutlinedIcon from "@mui/icons-material/ScheduleOutlined";
 import CronJobs from "../pages/CronJobs";
-import MoreVertIcon from "@mui/icons-material/MoreVert";
-import EditIcon from "@mui/icons-material/Edit";
-import DeleteIcon from "@mui/icons-material/Delete";
-import FolderOpenIcon from "@mui/icons-material/FolderOpen";
+import MoreVertOutlinedIcon from "@mui/icons-material/MoreVertOutlined";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
 import { taskApi, projectApi } from "../api/client";
-import SaveIcon from "@mui/icons-material/Save";
-import FolderIcon from "@mui/icons-material/Folder";
+import SaveOutlinedIcon from "@mui/icons-material/SaveOutlined";
+import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
 import { useTaskStore, type MainView } from "../store/taskStore.tsx";
 import Chat from "../pages/Chat";
 import SkillsAndTools from "../pages/SkillsAndTools";
@@ -207,11 +207,11 @@ ${assets}`)) {
             onClick={() => { selectTask(""); setView("chat"); }}
             sx={{ borderRadius: 1, py: 0.5 }}
           >
-            <ListItemIcon sx={{ minWidth: 32 }}><AddIcon /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32 }}><AddOutlinedIcon /></ListItemIcon>
             <ListItemText primary="新建对话" primaryTypographyProps={{ fontSize: 14 }} />
           </ListItemButton>
-          {sidebarEntry("skills", "技能与工具", <BuildIcon />)}
-          {sidebarEntry("cron", "定时任务", <ScheduleIcon />)}
+          {sidebarEntry("skills", "技能与工具", <BuildOutlinedIcon />)}
+          {sidebarEntry("cron", "定时任务", <ScheduleOutlinedIcon />)}
         </List>
 
         {/* 项目分区（C4）：用户创建的项目（default 为内核缺省归属，不展示）+ 会话数；菜单支持删除（C5） */}
@@ -226,7 +226,7 @@ ${assets}`)) {
             项目
           </Typography>
           <IconButton size="small" onClick={() => setProjectsOpen((o) => !o)} sx={{ p: 0.25 }}>
-            {projectsOpen ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
+            {projectsOpen ? <ExpandLessOutlined fontSize="small" /> : <ExpandMoreOutlined fontSize="small" />}
           </IconButton>
         </Box>
         <Collapse in={projectsOpen} timeout="auto" unmountOnExit>
@@ -239,7 +239,7 @@ ${assets}`)) {
             ) : (
               userProjects.map((p) => {
                 const projTasks = tasksOfProject(p.id);
-                const open = openProjects[p.id] ?? true;
+                const open = openProjects[p.id] ?? false; // 默认收起：项目下的会话列表展开与否由用户点击控制
                 return (
                   <Box key={p.id}>
                     <Box
@@ -250,7 +250,7 @@ ${assets}`)) {
                         sx={{ borderRadius: 1, py: 0.25, flexGrow: 1, minWidth: 0 }}
                       >
                         <ListItemIcon sx={{ minWidth: 28 }}>
-                          <FolderIcon fontSize="small" />
+                          <FolderOutlinedIcon fontSize="small" />
                         </ListItemIcon>
                         <ListItemText
                           primary={p.display_name || p.id}
@@ -269,7 +269,7 @@ ${assets}`)) {
                         }}
                         aria-label="项目操作"
                       >
-                        <MoreVertIcon fontSize="small" />
+                        <MoreVertOutlinedIcon fontSize="small" />
                       </IconButton>
                     </Box>
                     {/* 项目下的任务（保存到项目的任务挂在这里，点击打开会话） */}
@@ -301,7 +301,7 @@ ${assets}`)) {
                                 }}
                                 aria-label="任务操作"
                               >
-                                <MoreVertIcon fontSize="small" />
+                                <MoreVertOutlinedIcon fontSize="small" />
                               </IconButton>
                             </Box>
                           ))}
@@ -327,7 +327,7 @@ ${assets}`)) {
             任务
           </Typography>
           <IconButton size="small" onClick={() => setTasksOpen((o) => !o)} sx={{ p: 0.25 }}>
-            {tasksOpen ? <ExpandLess fontSize="small" /> : <ExpandMore fontSize="small" />}
+            {tasksOpen ? <ExpandLessOutlined fontSize="small" /> : <ExpandMoreOutlined fontSize="small" />}
           </IconButton>
         </Box>
         <Collapse in={tasksOpen} timeout="auto" unmountOnExit>
@@ -368,7 +368,7 @@ ${assets}`)) {
                     }}
                     aria-label="任务操作"
                   >
-                    <MoreVertIcon fontSize="small" />
+                    <MoreVertOutlinedIcon fontSize="small" />
                   </IconButton>
                 </Box>
               ))
@@ -397,7 +397,7 @@ ${assets}`)) {
               window.alert(`新建会话失败：${err?.response?.data?.error || err?.message || e}`);
             }
           }}>
-            <ListItemIcon sx={{ minWidth: 32 }}><AddIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32 }}><AddOutlinedIcon fontSize="small" /></ListItemIcon>
             新建会话
           </MenuItem>
           <MenuItem onClick={() => {
@@ -405,7 +405,7 @@ ${assets}`)) {
             setProjMenuAnchor(null);
             void deleteProject(pid);
           }} sx={{ color: "error.main" }}>
-            <ListItemIcon sx={{ minWidth: 32, color: "error.main" }}><DeleteIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32, color: "error.main" }}><DeleteOutlinedIcon fontSize="small" /></ListItemIcon>
             删除项目
           </MenuItem>
         </Menu>
@@ -421,7 +421,7 @@ ${assets}`)) {
             setRenameOpen(true);
             setMenuAnchor(null);
           }}>
-            <ListItemIcon sx={{ minWidth: 32 }}><EditIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32 }}><EditOutlinedIcon fontSize="small" /></ListItemIcon>
             改名
           </MenuItem>
           <MenuItem onClick={async () => {
@@ -435,7 +435,7 @@ ${assets}`)) {
               window.alert(`打开失败：${err?.response?.data?.error || err?.message || e}`);
             }
           }}>
-            <ListItemIcon sx={{ minWidth: 32 }}><FolderOpenIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32 }}><FolderOpenOutlinedIcon fontSize="small" /></ListItemIcon>
             打开文件夹
           </MenuItem>
           {/* 保存到项目：仅未归属用户项目的任务显示（已在项目里的任务无需再保存） */}
@@ -445,7 +445,7 @@ ${assets}`)) {
               setSaveOpen(true);
               setMenuAnchor(null);
             }}>
-              <ListItemIcon sx={{ minWidth: 32 }}><SaveIcon fontSize="small" /></ListItemIcon>
+              <ListItemIcon sx={{ minWidth: 32 }}><SaveOutlinedIcon fontSize="small" /></ListItemIcon>
               保存到项目…
             </MenuItem>
           )}
@@ -456,7 +456,7 @@ ${assets}`)) {
               deleteTask(id);
             }
           }} sx={{ color: "error.main" }}>
-            <ListItemIcon sx={{ minWidth: 32, color: "error.main" }}><DeleteIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32, color: "error.main" }}><DeleteOutlinedIcon fontSize="small" /></ListItemIcon>
             删除
           </MenuItem>
         </Menu>
@@ -497,7 +497,7 @@ ${assets}`)) {
                   onClick={() => { void saveToProject(p.id); }}
                   sx={{ borderRadius: 1, py: 0.5 }}
                 >
-                  <ListItemIcon sx={{ minWidth: 28 }}><FolderIcon fontSize="small" /></ListItemIcon>
+                  <ListItemIcon sx={{ minWidth: 28 }}><FolderOutlinedIcon fontSize="small" /></ListItemIcon>
                   <ListItemText
                     primary={p.display_name || p.id}
                     primaryTypographyProps={{ style: { fontSize: 13 } }}
@@ -530,7 +530,7 @@ ${assets}`)) {
             px: 2, pt: 0.5, pb: "20px",
           }}
         >
-          <SettingsIcon fontSize="small" />
+          <SettingsOutlinedIcon fontSize="small" />
           <Typography
             variant="body2"
             color="text.secondary"

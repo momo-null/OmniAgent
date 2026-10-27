@@ -9,19 +9,19 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import AddRounded from "@mui/icons-material/AddRounded";
-import BugReportRounded from "@mui/icons-material/BugReportRounded";
-import CloseRounded from "@mui/icons-material/CloseRounded";
-import DescriptionRounded from "@mui/icons-material/DescriptionRounded";
-import DifferenceRounded from "@mui/icons-material/DifferenceRounded";
-import ExpandLessRounded from "@mui/icons-material/ExpandLessRounded";
-import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
-import FolderRounded from "@mui/icons-material/FolderRounded";
-import HomeRounded from "@mui/icons-material/HomeRounded";
-import ImageRounded from "@mui/icons-material/ImageRounded";
-import InsertDriveFileRounded from "@mui/icons-material/InsertDriveFileRounded";
-import PublicRounded from "@mui/icons-material/PublicRounded";
-import TerminalRounded from "@mui/icons-material/TerminalRounded";
+import AddOutlined from "@mui/icons-material/AddOutlined";
+import BugReportOutlined from "@mui/icons-material/BugReportOutlined";
+import CloseOutlined from "@mui/icons-material/CloseOutlined";
+import DescriptionOutlined from "@mui/icons-material/DescriptionOutlined";
+import DifferenceOutlined from "@mui/icons-material/DifferenceOutlined";
+import ExpandLessOutlined from "@mui/icons-material/ExpandLessOutlined";
+import ExpandMoreOutlined from "@mui/icons-material/ExpandMoreOutlined";
+import FolderOutlined from "@mui/icons-material/FolderOutlined";
+import HomeOutlined from "@mui/icons-material/HomeOutlined";
+import ImageOutlined from "@mui/icons-material/ImageOutlined";
+import InsertDriveFileOutlined from "@mui/icons-material/InsertDriveFileOutlined";
+import PublicOutlined from "@mui/icons-material/PublicOutlined";
+import TerminalOutlined from "@mui/icons-material/TerminalOutlined";
 import FilesTab from "./dock/FilesTab.tsx";
 import BrowserTab from "./dock/BrowserTab.tsx";
 import GitTab from "./dock/GitTab.tsx";
@@ -38,12 +38,12 @@ const IMAGE_ART_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"
 
 // 各视图定义（主页 + 功能入口；顺序即主页展示顺序）
 const VIEWS: { key: DockView; label: string; icon: React.ReactNode }[] = [
-  { key: "home", label: "新标签页", icon: <HomeRounded fontSize="small" /> },
-  { key: "files", label: "查看产物", icon: <FolderRounded fontSize="small" /> },
-  { key: "browser", label: "打开浏览器", icon: <PublicRounded fontSize="small" /> },
-  { key: "git", label: "查看变更", icon: <DifferenceRounded fontSize="small" /> },
-  { key: "terminal", label: "打开终端", icon: <TerminalRounded fontSize="small" /> },
-  { key: "debug", label: "Debug", icon: <BugReportRounded fontSize="small" /> },
+  { key: "home", label: "新标签页", icon: <HomeOutlined fontSize="small" /> },
+  { key: "files", label: "查看产物", icon: <FolderOutlined fontSize="small" /> },
+  { key: "browser", label: "打开浏览器", icon: <PublicOutlined fontSize="small" /> },
+  { key: "git", label: "查看变更", icon: <DifferenceOutlined fontSize="small" /> },
+  { key: "terminal", label: "打开终端", icon: <TerminalOutlined fontSize="small" /> },
+  { key: "debug", label: "Debug", icon: <BugReportOutlined fontSize="small" /> },
 ];
 
 function viewMeta(view: DockView) {
@@ -53,9 +53,9 @@ function viewMeta(view: DockView) {
 function artifactIcon(name: string) {
   const i = name.lastIndexOf(".");
   const ext = i >= 0 ? name.slice(i).toLowerCase() : "";
-  if (IMAGE_ART_EXTS.has(ext)) return <ImageRounded fontSize="small" sx={{ color: "#42a5f5" }} />;
-  if (ext === ".md" || ext === ".markdown") return <DescriptionRounded fontSize="small" sx={{ color: "#26c6da" }} />;
-  return <InsertDriveFileRounded fontSize="small" sx={{ color: "text.disabled" }} />;
+  if (IMAGE_ART_EXTS.has(ext)) return <ImageOutlined fontSize="small" sx={{ color: "#42a5f5" }} />;
+  if (ext === ".md" || ext === ".markdown") return <DescriptionOutlined fontSize="small" sx={{ color: "#26c6da" }} />;
+  return <InsertDriveFileOutlined fontSize="small" sx={{ color: "text.disabled" }} />;
 }
 
 // 产物登记表轮询（主页清单与文件页同源；运行中 3s 轮询，新产物实时出现）
@@ -106,8 +106,8 @@ function HomeView({ onNavigate }: { onNavigate: (view: DockTab) => void }) {
         </Typography>
         <Box sx={{ flex: 1 }} />
         {listOpen
-          ? <ExpandLessRounded fontSize="small" sx={{ color: "text.disabled" }} />
-          : <ExpandMoreRounded fontSize="small" sx={{ color: "text.disabled" }} />}
+          ? <ExpandLessOutlined fontSize="small" sx={{ color: "text.disabled" }} />
+          : <ExpandMoreOutlined fontSize="small" sx={{ color: "text.disabled" }} />}
       </Box>
       {listOpen && (
         <Box sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 0.5 }}>
@@ -160,7 +160,7 @@ function DockBody({ view }: { view: DockTab }) {
 
 export default function RightDock() {
   const {
-    dockOpen, dockTabs, dockActiveId, openDockMenu,
+    dockOpen, dockTabs, dockActiveId,
     closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab,
   } = useTaskStore();
   const active = dockTabs.find((t) => t.id === dockActiveId);
@@ -221,7 +221,7 @@ export default function RightDock() {
                     aria-label={`关闭 ${meta.label}`}
                     sx={{ width: 16, height: 16, p: 0, ml: 0.25, color: "text.disabled", "&:hover": { color: "text.primary" } }}
                   >
-                    <CloseRounded sx={{ fontSize: 13 }} />
+                    <CloseOutlined sx={{ fontSize: 13 }} />
                   </IconButton>
                 </Stack>
               );
@@ -233,7 +233,7 @@ export default function RightDock() {
                 size="small"
                 sx={{ width: 26, height: 22, borderRadius: 1, color: "text.secondary", "&:hover": { bgcolor: "action.hover" } }}
               >
-                <AddRounded sx={{ fontSize: 16 }} />
+                <AddOutlined sx={{ fontSize: 16 }} />
               </IconButton>
             </Tooltip>
             <Box sx={{ flex: 1 }} />
@@ -244,7 +244,7 @@ export default function RightDock() {
               size="small"
               sx={{ width: 26, height: 22, borderRadius: 1, color: "text.secondary", "&:hover": { bgcolor: "action.hover" } }}
             >
-              <CloseRounded sx={{ fontSize: 16 }} />
+              <CloseOutlined sx={{ fontSize: 16 }} />
             </IconButton>
           </Stack>
           {/* 内容区：主页 = 入口 list；其余视图渲染对应功能面板 */}

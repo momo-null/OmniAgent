@@ -8,6 +8,9 @@ import {
   Button,
   Chip,
   IconButton,
+  ListItemIcon,
+  Menu,
+  MenuItem,
   Stack,
   Tab,
   Tabs,
@@ -15,9 +18,10 @@ import {
   ToggleButtonGroup,
   Typography,
 } from "@mui/material";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import ExpandLessIcon from "@mui/icons-material/ExpandLess";
-import RefreshIcon from "@mui/icons-material/Refresh";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import ExpandMoreOutlinedIcon from "@mui/icons-material/ExpandMoreOutlined";
+import ExpandLessOutlinedIcon from "@mui/icons-material/ExpandLessOutlined";
+import RefreshOutlinedIcon from "@mui/icons-material/RefreshOutlined";
 import ScrollArea from "./ScrollArea.tsx";
 import { debugApi, type DebugMemoryAtom, type DebugMemoryResponse } from "../api/debugApi";
 import type { DebugLog } from "../store/taskStore";
@@ -68,7 +72,7 @@ function LogRow({ log }: { log: DebugLog }) {
         {log.role && <Chip size="small" label={log.role} variant="outlined" />}
         <Typography variant="caption" color="text.secondary">{time}</Typography>
         <IconButton size="small" sx={{ ml: "auto", py: 0 }} onClick={() => setExpanded((v) => !v)}>
-          {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+          {expanded ? <ExpandLessOutlinedIcon /> : <ExpandMoreOutlinedIcon />}
         </IconButton>
       </Stack>
       <Typography variant="body2" sx={{ mt: 0.5 }}>{log.title}</Typography>
@@ -92,18 +96,42 @@ function LogRow({ log }: { log: DebugLog }) {
   );
 }
 
-function MemoryRow({ atom }: { atom: DebugMemoryAtom }) {
+function MemoryRow({ atom, onDelete }: { atom: DebugMemoryAtom; onDelete: (atom: DebugMemoryAtom) => void }) {
   const [expanded, setExpanded] = useState(false);
+  // 右键删除：菜单锚在鼠标位置，点「删除」直接物理删除（无二次确认，按用户定案）
+  const [menuPos, setMenuPos] = useState<{ mouseX: number; mouseY: number } | null>(null);
   const time = atom.updated ? new Date(atom.updated).toLocaleString() : "";
   return (
-    <Box sx={{ mb: 1, p: 1, borderRadius: 1, bgcolor: "background.paper" }}>
+    <Box
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setMenuPos({ mouseX: e.clientX - 2, mouseY: e.clientY - 4 });
+      }}
+      sx={{ mb: 1, p: 1, borderRadius: 1, bgcolor: "background.paper" }}
+    >
+      <Menu
+        open={menuPos !== null}
+        onClose={() => setMenuPos(null)}
+        anchorReference="anchorPosition"
+        anchorPosition={menuPos ? { top: menuPos.mouseY, left: menuPos.mouseX } : undefined}
+      >
+        <MenuItem
+          onClick={() => { setMenuPos(null); onDelete(atom); }}
+          sx={{ color: "error.main", fontSize: 13 }}
+        >
+          <ListItemIcon sx={{ minWidth: 28, color: "error.main" }}>
+            <DeleteOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          删除
+        </MenuItem>
+      </Menu>
       <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
         <Chip size="small" label={atom.kind || "fact"} variant="outlined" />
         {atom.version > 0 && <Chip size="small" label={`v${atom.version}`} variant="outlined" />}
         {atom.source_task && <Chip size="small" label={atom.source_task} variant="outlined" />}
         <Typography variant="caption" color="text.secondary" sx={{ ml: "auto" }}>{time}</Typography>
         <IconButton size="small" sx={{ py: 0 }} onClick={() => setExpanded((v) => !v)}>
-          {expanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+          {expanded ? <ExpandLessOutlinedIcon /> : <ExpandMoreOutlinedIcon />}
         </IconButton>
       </Stack>
       <Typography
@@ -151,6 +179,16 @@ export default function DebugPanel({ logs, onClear, taskId }: {
   const atoms = mem ? (scope === "project" ? mem.project.atoms : mem.global.atoms) : [];
   const count = mem ? mem.counts[scope] : 0;
 
+  // 右键删除单条记忆：成功后重新拉取（计数随刷新对齐）；失败弹提示
+  const handleDeleteAtom = useCallback((atom: DebugMemoryAtom) => {
+    debugApi.deleteMemory(scope, atom.record_id, taskId || undefined)
+      .then(() => loadMemory())
+      .catch((e: unknown) => {
+        const err = e as { response?: { data?: { error?: string } }; message?: string };
+        window.alert(`删除失败：${err?.response?.data?.error || err?.message || e}`);
+      });
+  }, [scope, taskId, loadMemory]);
+
   return (
     <Box sx={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center"
@@ -165,7 +203,7 @@ export default function DebugPanel({ logs, onClear, taskId }: {
           <Stack direction="row" spacing={0.5} alignItems="center">
             {loading && <Typography variant="caption" color="text.secondary">加载中…</Typography>}
             <IconButton size="small" onClick={loadMemory} title="刷新">
-              <RefreshIcon fontSize="small" />
+              <RefreshOutlinedIcon fontSize="small" />
             </IconButton>
           </Stack>
         )}
@@ -206,7 +244,7 @@ export default function DebugPanel({ logs, onClear, taskId }: {
                   {mem ? "暂无记忆 atoms——任务收尾蒸馏后落库（需 ≥1 条事实被提炼）。" : (loading ? "加载中…" : "加载失败")}
                 </Typography>
               ) : (
-                atoms.map((a) => <MemoryRow key={a.record_id} atom={a} />)
+                atoms.map((a) => <MemoryRow key={a.record_id} atom={a} onDelete={handleDeleteAtom} />)
               )}
             </Box>
           </ScrollArea>

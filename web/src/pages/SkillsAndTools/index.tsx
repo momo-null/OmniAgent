@@ -19,10 +19,10 @@ import {
   Paper,
   Tooltip,
 } from "@mui/material";
-import BoltIcon from "@mui/icons-material/Bolt";
-import DeleteIcon from "@mui/icons-material/Delete";
-import AddIcon from "@mui/icons-material/Add";
-import PublicIcon from "@mui/icons-material/Public";
+import BoltOutlinedIcon from "@mui/icons-material/BoltOutlined";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
+import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
 import { skillApi, runtimeApi, settingsApi } from "../../api/client";
 import { useTaskStore } from "../../store/taskStore.tsx";
 import type {
@@ -72,11 +72,11 @@ function SkillsTab() {
               key={s.name}
               secondaryAction={
                 <Stack direction="row" spacing={0.5}>
-                  <IconButton size="small" onClick={() => handleRun(s.name)} title="调用"><BoltIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" onClick={() => handleRun(s.name)} title="调用"><BoltOutlinedIcon fontSize="small" /></IconButton>
                   {s.scope === "project" && (
-                    <IconButton size="small" onClick={() => handlePromote(s.name)} title="设为全局"><PublicIcon fontSize="small" /></IconButton>
+                    <IconButton size="small" onClick={() => handlePromote(s.name)} title="设为全局"><PublicOutlinedIcon fontSize="small" /></IconButton>
                   )}
-                  <IconButton size="small" onClick={() => handleDelete(s.name)} title="删除"><DeleteIcon fontSize="small" /></IconButton>
+                  <IconButton size="small" onClick={() => handleDelete(s.name)} title="删除"><DeleteOutlinedIcon fontSize="small" /></IconButton>
                 </Stack>
               }
             >
@@ -320,7 +320,7 @@ function McpTab() {
               }}
               title="删除"
             >
-              <DeleteIcon fontSize="small" />
+              <DeleteOutlinedIcon fontSize="small" />
             </IconButton>
           </Stack>
           <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
@@ -352,7 +352,7 @@ function McpTab() {
       <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
         <Button
           size="small"
-          startIcon={<AddIcon />}
+          startIcon={<AddOutlinedIcon />}
           onClick={() =>
             setServers((prev) => [
               ...prev,

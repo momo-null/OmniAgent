@@ -46,3 +46,31 @@ async def debug_memory(request: Request):
         })
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@router.post("/memory/delete")
+async def debug_memory_delete(request: Request):
+    """人工删除单条记忆 atom（前端右键删除；物理删除，不可恢复）。
+
+    body: {scope: "project"|"global", record_id, project_id?}。
+    scope=global 走全局库；否则按 project_id（缺省 default）走项目库。
+    FTS 索引由 memory_tam.delete_atom 同步清理。
+    """
+    try:
+        from omni_core import memory_tam
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        payload = payload or {}
+        record_id = str(payload.get("record_id") or "").strip()
+        scope = str(payload.get("scope") or "project")
+        project_id = str(payload.get("project_id") or "default").strip()
+        if not record_id:
+            return JSONResponse({"ok": False, "error": "record_id 为空"}, status_code=422)
+        ok = memory_tam.delete_atom(record_id, project_id=project_id, scope=scope)
+        if not ok:
+            return JSONResponse({"ok": False, "error": "record_id 不存在"}, status_code=404)
+        return JSONResponse({"ok": True, "record_id": record_id, "scope": scope})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

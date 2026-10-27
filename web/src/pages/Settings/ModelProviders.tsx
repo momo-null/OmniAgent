@@ -19,8 +19,8 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import AddIcon from "@mui/icons-material/Add";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { modelCatalogApi } from "../../api/client";
 import type { ModelProviderDraft, ModelsIndex } from "../../types";
@@ -152,7 +152,7 @@ export default function ModelProviders() {
             label="新提供方标识（英文 key，如 online / local）" size="small" value={newId}
             onChange={(e) => setNewId(e.target.value)} sx={{ flex: 1 }}
           />
-          <Button variant="outlined" startIcon={<AddIcon />} onClick={addProvider} disabled={!newId.trim() || !!drafts[newId.trim()]}>
+          <Button variant="outlined" startIcon={<AddOutlinedIcon />} onClick={addProvider} disabled={!newId.trim() || !!drafts[newId.trim()]}>
             添加
           </Button>
         </Stack>
@@ -215,7 +215,7 @@ export default function ModelProviders() {
                         onClick={(e) => setSlotAnchor({ el: e.currentTarget, selection: `${sel}/${m.id}` })} />
                       <IconButton size="small"
                         onClick={() => patch(sel, { models: cur.models.filter((_, j) => j !== i) })}>
-                        <DeleteOutlineIcon fontSize="small" />
+                        <DeleteOutlinedIcon fontSize="small" />
                       </IconButton>
                     </Stack>
                   ))}
@@ -225,7 +225,7 @@ export default function ModelProviders() {
                   <Stack direction="row" spacing={1}>
                     <TextField label="新增模型 id" size="small" value={newModel}
                       onChange={(e) => setNewModel(e.target.value)} sx={{ flex: 1 }} />
-                    <Button size="small" variant="outlined" startIcon={<AddIcon />}
+                    <Button size="small" variant="outlined" startIcon={<AddOutlinedIcon />}
                       disabled={!newModel.trim()} onClick={() => addModel(sel)}>添加模型</Button>
                   </Stack>
                 </Stack>
