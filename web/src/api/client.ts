@@ -166,6 +166,8 @@ export const runtimeApi = {
     full_access?: boolean;
     // 模型路由：本次请求使用的 "<provider_id>/<model_id>"；空 = 用目录默认/配置
     model?: string;
+    // 立即发送（barge-in）：打断同一 task 的当前轮并立即发出；默认 false
+    force?: boolean;
   }) => http.post("/api/runtime/chat", payload),
   // M8 软注入：运行中向 agent 插话（不打断当前 turn，下一轮可见）
   inject: (payload: { text: string; task_id?: string; agent_id?: string }) =>

@@ -50,6 +50,14 @@ interface TaskStoreValue {
   disconnectStream: () => void;
   // 模型路由：model 为本次请求的选择 "<provider_id>/<model_id>"；空 = 用目录默认/配置
   sendMessage: (text: string, fullAccess?: boolean, model?: string) => Promise<void>;
+  // 立即发送（barge-in）：打断同一 task 的当前轮并立即发出（后端 /chat force=true）
+  forceSendMessage: (text: string, fullAccess?: boolean, model?: string) => Promise<void>;
+  // 排队消息：运行中发送 → 入队（UI 显示为输入框上方条目）；轮末自动接力发出队首
+  queuedMessages: string[];
+  enqueueMessage: (text: string) => void;
+  removeQueuedAt: (index: number) => void;
+  // 「立即」：指定排队条目移出队列并强制发出（打断当前轮）
+  sendQueuedNow: (index: number, fullAccess?: boolean, model?: string) => void;
   // M8 软注入：运行中向 agent 插话（不打断当前步骤，下一轮可见）；失败回显系统消息
   injectMessage: (text: string) => Promise<void>;
   stopTask: () => void;
@@ -117,6 +125,8 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   const [projects, setProjects] = useState<string[]>([]);
   const [currentTaskId, setCurrentTaskId] = useState("");
   const [running, setRunning] = useState(false);
+  // 排队消息（软注入的替代形态）：运行中发送 → 入队不打断；轮末自动接力，或点「立即」强制发出
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(EMPTY_SNAPSHOT);
   const [maxSteps, setMaxSteps] = useState<number>(40);
@@ -156,6 +166,10 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   const esRef = useRef<EventSource | null>(null);
   const runningRef = useRef(false);
   runningRef.current = running;
+  const queuedRef = useRef<string[]>([]);
+  queuedRef.current = queuedMessages;
+  // 「立即」防抖：打断性操作，连点只认第一次（否则第二次会把刚开的新轮也打断）
+  const lastSendNowAtRef = useRef(0);
   const messagesRef = useRef<ChatMsg[]>([]);
   messagesRef.current = messages;
   const currentTaskIdRef = useRef<string>("");
@@ -265,6 +279,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     try { localStorage.setItem("omniagent.currentTaskId", taskId); } catch { /* ignore */ }
     clearProcessLogs();
     setPendingApprovals([]);
+    setQueuedMessages([]); // 排队消息不跨会话携带
     loadHistory(taskId);
     // 回放进行中这一轮的实时过程（见 seedLiveLogs 注释）
     seedLiveLogs(taskId);
@@ -516,6 +531,8 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
           // 任务终态：不允许还有卡悬着（后端已置 cancelled，前端兜底清空）
           setPendingApprovals([]);
           refreshTasks();
+          // 排队条目 = 本轮注入列表：本轮结束即清空（已注入消费或已随会话历史落库）
+          setQueuedMessages([]);
         }
       } catch {
         /* ignore */
@@ -611,6 +628,33 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     setRunning(false);
   }, []);
 
+  // 立即发送（barge-in）：打断同一 task 的当前轮并立即发出。与 sendMessage 的差别：
+  // 允许在 running 时调用、带 force=true；乐观渲染一致。running 态由 SSE 驱动，这里不碰。
+  const forceSendMessage = useCallback(async (text: string, fullAccess?: boolean, model?: string) => {
+    const content = text.trim();
+    if (!content) return;
+    pushMessage({ role: "user", text: content, ts: Date.now() });
+    clearProcessLogs();
+    try {
+      const history = messagesRef.current.map((m) => ({ role: m.role, content: m.text }));
+      history.push({ role: "user", content });
+      const res = await runtimeApi.chat({
+        messages: history,
+        task_id: currentTaskIdRef.current,
+        max_steps: maxSteps,
+        full_access: fullAccess,
+        ...(model ? { model } : {}),
+        force: true,
+      });
+      const tid = (res.data as { task_id?: string })?.task_id;
+      if (tid) setCurrentTaskId(tid);
+    } catch (err) {
+      const _e = err as { response?: { data?: { error?: string } }; message?: string };
+      const _msg = _e?.response?.data?.error || _e?.message || "请求失败，请重试";
+      pushMessage({ role: "system", text: `（${_msg}）`, ts: Date.now() });
+    }
+  }, [maxSteps, pushMessage]);
+
   // M8 软注入：运行中插入人类纠偏，不打断当前 turn，主 agent 下一轮可见。
   // 成功后后端经 SSE 推一条 system 消息「💬 已注入指示：…」自动上屏；这里只负责发请求。
   const injectMessage = useCallback(async (text: string) => {
@@ -624,6 +668,32 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       pushMessage({ role: "system", text: `（注入失败：${msg}）`, ts: Date.now() });
     }
   }, [pushMessage]);
+
+  // 排队 = 注入本轮（M8 软注入）：入队展示 + 立即调 /inject，模型下一请求边界可见，不打断当前轮。
+  // （定义在 injectMessage 之后：useCallback deps 数组是即时求值的，前置引用会踩 TDZ）
+  const enqueueMessage = useCallback((text: string) => {
+    const content = text.trim();
+    if (!content) return;
+    setQueuedMessages((prev) => [...prev, content]);
+    injectMessage(content);
+  }, [injectMessage]);
+
+  const removeQueuedAt = useCallback((index: number) => {
+    // 仅移除条目展示——已注入本轮的指示无法撤回，会随下一请求边界/会话历史自然生效
+    setQueuedMessages((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  // 「立即」：该条移出队列并强制打断当前轮、作为新消息立即发出
+  // （已注入但未被消费的指示随旧轮作废；已消费的等于显式重发）
+  const sendQueuedNow = useCallback((index: number, fullAccess?: boolean, model?: string) => {
+    const item = queuedRef.current[index];
+    if (item == null) return;
+    const now = Date.now();
+    if (now - lastSendNowAtRef.current < 800) return;
+    lastSendNowAtRef.current = now;
+    setQueuedMessages((prev) => prev.filter((_, i) => i !== index));
+    forceSendMessage(item, fullAccess, model);
+  }, [forceSendMessage]);
 
   // S2 审批决议：REST 决议；乐观移卡（approval_resolved 事件与 /live 兜底对齐）
   const decideApproval = useCallback(async (approvalId: string, action: "approve" | "deny", remember?: boolean) => {
@@ -721,7 +791,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       running,
       messages, pushMessage, clearMessages,
       snapshot, setSnapshot,
-      connectStream, disconnectStream, sendMessage, injectMessage, stopTask,
+      connectStream, disconnectStream, sendMessage, forceSendMessage, enqueueMessage, removeQueuedAt, sendQueuedNow, queuedMessages, injectMessage, stopTask,
       maxSteps, setMaxSteps,
       fullAccessByTask, setFullAccessForTask,
       pendingApprovals, decideApproval,
@@ -735,7 +805,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath,
       artifactsVersion, bumpArtifactsVersion,
     }),
-    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, taskProjects, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval, dockOpen, dockWin, dockPreviewPath, openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath, artifactsVersion, bumpArtifactsVersion]
+    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, forceSendMessage, enqueueMessage, removeQueuedAt, sendQueuedNow, queuedMessages, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, taskProjects, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval, dockOpen, dockWin, dockPreviewPath, openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath, artifactsVersion, bumpArtifactsVersion]
   );
 
   return <TaskStoreContext.Provider value={value}>{children}</TaskStoreContext.Provider>;

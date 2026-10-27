@@ -14,20 +14,23 @@ import {
   Alert,
   Popover,
 } from "@mui/material";
-import SendIcon from "@mui/icons-material/Send";
-import StopIcon from "@mui/icons-material/Stop";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import ExpandLessIcon from "@mui/icons-material/ExpandLess";
-import ContentCopyIcon from "@mui/icons-material/ContentCopy";
-import CheckIcon from "@mui/icons-material/Check";
-import PsychologyIcon from "@mui/icons-material/Psychology";
-import TerminalIcon from "@mui/icons-material/Terminal";
-import WarningAmberRounded from "@mui/icons-material/WarningAmberRounded";
-import FolderRounded from "@mui/icons-material/FolderRounded";
-import PublicRounded from "@mui/icons-material/PublicRounded";
-import DescriptionRounded from "@mui/icons-material/DescriptionRounded";
-import ImageIcon from "@mui/icons-material/ImageRounded";
-import InsertDriveFileRounded from "@mui/icons-material/InsertDriveFileRounded";
+import SendOutlinedIcon from "@mui/icons-material/SendOutlined";
+import StopOutlinedIcon from "@mui/icons-material/StopOutlined";
+import ArrowUpwardOutlinedIcon from "@mui/icons-material/ArrowUpwardOutlined";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import ExpandMoreOutlinedIcon from "@mui/icons-material/ExpandMoreOutlined";
+import ExpandLessOutlinedIcon from "@mui/icons-material/ExpandLessOutlined";
+import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
+import CheckOutlinedIcon from "@mui/icons-material/CheckOutlined";
+import PsychologyOutlinedIcon from "@mui/icons-material/PsychologyOutlined";
+import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
+import WarningAmberOutlined from "@mui/icons-material/WarningAmberOutlined";
+import FolderOutlined from "@mui/icons-material/FolderOutlined";
+import PublicOutlined from "@mui/icons-material/PublicOutlined";
+import DescriptionOutlined from "@mui/icons-material/DescriptionOutlined";
+import ImageOutlinedIcon from "@mui/icons-material/ImageOutlined";
+import InsertDriveFileOutlined from "@mui/icons-material/InsertDriveFileOutlined";
 import { useTaskStore } from "../../store/taskStore.tsx";
 import ScrollArea, { THUMB_RIGHT, THUMB_WIDTH } from "../../components/ScrollArea.tsx";
 import Markdown from "../../components/Markdown.tsx";
@@ -66,7 +69,7 @@ function ApprovalCardView({ card, onDecide }: {
   return (
     <Alert
       severity="warning"
-      icon={<WarningAmberRounded fontSize="small" />}
+      icon={<WarningAmberOutlined fontSize="small" />}
       sx={{ mb: 1, flexShrink: 0, borderRadius: 2, alignItems: "flex-start" }}
     >
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
@@ -87,7 +90,7 @@ function ApprovalCardView({ card, onDecide }: {
       </Box>
       <Button size="small" sx={{ minWidth: 0, px: 0.5, mb: 0.5 }}
         onClick={() => setArgsOpen((v) => !v)}
-        startIcon={argsOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}>
+        startIcon={argsOpen ? <ExpandLessOutlinedIcon /> : <ExpandMoreOutlinedIcon />}>
         {argsOpen ? "收起参数" : "展开完整参数"}
       </Button>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ flexWrap: "wrap", gap: 0.5 }}>
@@ -233,7 +236,7 @@ function CopyButton({ text }: { text: string }) {
         "&:hover": { color: "text.primary", bgcolor: "transparent" },
       }}
     >
-      {done ? <CheckIcon sx={{ fontSize: 15 }} /> : <ContentCopyIcon sx={{ fontSize: 15 }} />}
+      {done ? <CheckOutlinedIcon sx={{ fontSize: 15 }} /> : <ContentCopyOutlinedIcon sx={{ fontSize: 15 }} />}
     </IconButton>
   );
 }
@@ -264,7 +267,7 @@ const ThinkBlock = memo(function ThinkBlock({ item, streaming }: { item: Process
       >
         <Stack direction="row" spacing={0.5} alignItems="center" onClick={() => setOpen((o) => !o)}
                sx={{ cursor: "pointer" }}>
-          <PsychologyIcon fontSize="small" sx={{ color: "text.disabled" }} />
+          <PsychologyOutlinedIcon fontSize="small" sx={{ color: "text.disabled" }} />
           <Typography variant="caption" sx={{ fontWeight: 500, color: "text.disabled", letterSpacing: 0.5 }}>
             深度思考
           </Typography>
@@ -273,8 +276,8 @@ const ThinkBlock = memo(function ThinkBlock({ item, streaming }: { item: Process
                   sx={{ height: 16, fontSize: 10, color: "text.disabled", borderColor: "divider", "& .MuiChip-label": { px: 0.5 } }} />
           )}
           <Box sx={{ ml: "auto" }}>{open
-            ? <ExpandLessIcon fontSize="small" sx={{ color: "text.disabled" }} />
-            : <ExpandMoreIcon fontSize="small" sx={{ color: "text.disabled" }} />}</Box>
+            ? <ExpandLessOutlinedIcon fontSize="small" sx={{ color: "text.disabled" }} />
+            : <ExpandMoreOutlinedIcon fontSize="small" sx={{ color: "text.disabled" }} />}</Box>
         </Stack>
         {open && (
           <ScrollArea maxHeight={200} sx={{ mt: 0.5 }}>
@@ -317,7 +320,7 @@ const ToolCallCard = memo(function ToolCallCard({ item }: { item: ProcessItem })
       {/* 与思考块/回复气泡统一：极淡底 + 无阴影无边框（原 action.hover 灰底像卡片） */}
       <Paper elevation={0} sx={{ maxWidth: "92%", px: 1.25, py: 0.75, borderRadius: 1.5, bgcolor: "rgba(0,0,0,0.03)", boxShadow: "none", border: "none" }}>
         <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
-          <TerminalIcon fontSize="small" color="action" />
+          <TerminalOutlinedIcon fontSize="small" color="action" />
           <Typography variant="caption" sx={{ fontWeight: 600 }}>
             🔧 {item.name}
           </Typography>
@@ -326,7 +329,7 @@ const ToolCallCard = memo(function ToolCallCard({ item }: { item: ProcessItem })
                   sx={{ height: 16, fontSize: 10, "& .MuiChip-label": { px: 0.5 } }} />
           )}
           <IconButton size="small" sx={{ py: 0, ml: "auto" }} onClick={() => setOpen((o) => !o)}>
-            {open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+            {open ? <ExpandLessOutlinedIcon fontSize="small" /> : <ExpandMoreOutlinedIcon fontSize="small" />}
           </IconButton>
         </Stack>
         {open && (
@@ -361,9 +364,9 @@ const IMAGE_ART_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"
 function artifactIcon(name: string) {
   const i = name.lastIndexOf(".");
   const ext = i >= 0 ? name.slice(i).toLowerCase() : "";
-  if (IMAGE_ART_EXTS.has(ext)) return <ImageIcon fontSize="small" sx={{ color: "#42a5f5" }} />;
-  if (ext === ".md" || ext === ".markdown") return <DescriptionRounded fontSize="small" sx={{ color: "#26c6da" }} />;
-  return <InsertDriveFileRounded fontSize="small" sx={{ color: "text.disabled" }} />;
+  if (IMAGE_ART_EXTS.has(ext)) return <ImageOutlinedIcon fontSize="small" sx={{ color: "#42a5f5" }} />;
+  if (ext === ".md" || ext === ".markdown") return <DescriptionOutlined fontSize="small" sx={{ color: "#26c6da" }} />;
+  return <InsertDriveFileOutlined fontSize="small" sx={{ color: "text.disabled" }} />;
 }
 
 const ArtifactCards = memo(function ArtifactCards({ artifacts }: { artifacts: ArtifactInfo[] }) {
@@ -455,7 +458,7 @@ const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false
 });
 
 export default function Chat() {
-  const { messages, running, sendMessage, injectMessage, stopTask, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval, taskObjectives, dockOpen, openDockMenu, closeDock } = useTaskStore();
+  const { messages, running, sendMessage, enqueueMessage, removeQueuedAt, sendQueuedNow, queuedMessages, stopTask, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval, taskObjectives, dockOpen, openDockMenu, closeDock } = useTaskStore();
   const [draft, setDraft] = useState("");
   // 助手名：从角色卡 frontmatter 解析（缺省 OmniAgent），用于顶栏与消息标签
   const [assistantName, setAssistantName] = useState("OmniAgent");
@@ -564,11 +567,11 @@ export default function Chat() {
     }
   }, [draft]);
 
-  // 运行中插话（软注入）：不打断当前步骤，主 agent 下一轮可见
-  const handleInject = () => {
+  // 运行中发送 = 排队并注入本轮（M8 软注入，不打断当前轮，模型下一请求边界可见）
+  const handleEnqueue = () => {
     const text = draft.trim();
     if (!text || !running) return;
-    injectMessage(text);
+    enqueueMessage(text);
     setDraft("");
   };
 
@@ -576,8 +579,8 @@ export default function Chat() {
     const text = draft.trim();
     if (!text) return;
     if (running) {
-      // 运行中普通消息被禁用，回车/发送键转为软注入（插话）
-      handleInject();
+      // 运行中普通消息被禁用，回车/发送键转为排队注入（不打断；点条目上的「立即」才打断）
+      handleEnqueue();
       return;
     }
     setDraft("");
@@ -698,8 +701,43 @@ export default function Chat() {
             flexShrink: 0,
           }}
         >
+          {/* 排队条目 = 本轮注入列表（M8 软注入）：发送即注入本轮，模型下一请求边界可见；
+              「立即」= 打断当前轮并作为新消息发出；本轮结束自动清空 */}
+          {queuedMessages.length > 0 && (
+            <Box sx={{ px: 1, pt: 0.5 }}>
+              {queuedMessages.map((q, i) => (
+                <Box key={`queued-${i}-${q.slice(0, 16)}`}
+                  sx={{ display: "flex", alignItems: "center", gap: 0.5, py: 0.25 }}>
+                  <Typography variant="body2" sx={{
+                    flexGrow: 1, minWidth: 0, overflow: "hidden",
+                    textOverflow: "ellipsis", whiteSpace: "nowrap", color: "text.primary",
+                  }}>
+                    {q}
+                  </Typography>
+                  <Button size="small" startIcon={<ArrowUpwardOutlinedIcon />}
+                    onClick={() => sendQueuedNow(i, fullAccess, modelSel || undefined)}
+                    title="打断当前轮并作为新消息立即发出"
+                    sx={{
+                      flexShrink: 0, minHeight: 0, py: 0.25, px: 1, fontSize: 12,
+                      color: "text.primary", border: "1px solid", borderColor: "divider",
+                      borderRadius: 2, textTransform: "none",
+                    }}>
+                    立即
+                  </Button>
+                  <IconButton size="small" title="复制到输入框修改后重新发送" aria-label="编辑排队消息"
+                    onClick={() => { setDraft(q); removeQueuedAt(i); }}>
+                    <EditOutlinedIcon fontSize="small" />
+                  </IconButton>
+                  <IconButton size="small" title="移除条目（已注入本轮的内容不可撤回）" aria-label="移除排队条目"
+                    onClick={() => removeQueuedAt(i)}>
+                    <DeleteOutlinedIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+              ))}
+            </Box>
+          )}
           <TextField
-            placeholder={running ? "运行中可插话（软注入）：输入后回车或点插话按钮，不打断当前步骤" : `给 ${assistantName} 发消息…`}
+            placeholder={running ? "继续输入以排队后续修改（注入本轮不打断；点条目上的「立即」强制打断发出）" : `给 ${assistantName} 发消息…`}
             multiline
             minRows={3}
             maxRows={10}
@@ -772,12 +810,13 @@ export default function Chat() {
               {/* 单按钮上下文逻辑：
                   - 非运行态：始终「发送」（空输入禁用）
                   - 运行态 + 空输入：显示「停止」（红）
-                  - 运行态 + 有输入：显示「发送」（点即软注入/插话，不打断当前步骤） */}
+                  - 运行态 + 有输入：显示「发送」（点即排队并注入本轮，不打断；
+                    打断请点排队条目上的「立即」） */}
               <IconButton
-                onClick={running ? (draft.trim() ? handleInject : stopTask) : handleSend}
+                onClick={running ? (draft.trim() ? handleEnqueue : stopTask) : handleSend}
                 disabled={!running && !draft.trim()}
                 aria-label={running && !draft.trim() ? "停止" : "发送"}
-                title={running && !draft.trim() ? "停止当前任务" : (running ? "插话（软注入）：不打断当前步骤" : "发送")}
+                title={running && !draft.trim() ? "停止当前任务" : (running ? "排队并注入本轮（不打断当前轮）" : "发送")}
                 sx={{
                   width: 36, height: 36, flexShrink: 0,
                   bgcolor: running && !draft.trim() ? "error.main" : "primary.main",
@@ -787,7 +826,7 @@ export default function Chat() {
                   "&:disabled": { bgcolor: "action.disabledBackground", color: "action.disabled" },
                 }}
               >
-                {running && !draft.trim() ? <StopIcon /> : <SendIcon />}
+                {running && !draft.trim() ? <StopOutlinedIcon /> : <SendOutlinedIcon />}
               </IconButton>
             </Stack>
           </Box>
@@ -801,7 +840,7 @@ export default function Chat() {
           slotProps={{ paper: { sx: { p: 2, width: 300, maxWidth: "92vw", borderRadius: 2 } } }}
         >
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-            <WarningAmberRounded color="warning" fontSize="small" />
+            <WarningAmberOutlined color="warning" fontSize="small" />
             <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>要开启完全访问权限吗？</Typography>
           </Stack>
           <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1.5 }}>
@@ -809,13 +848,13 @@ export default function Chat() {
             关闭时（默认），每个危险动作都需要你点头。本开关即审批总闸。
           </Typography>
           <Stack spacing={1.25} sx={{ mb: 1.5 }}>
-            <CapabilityRow icon={<FolderRounded />} label="文件和文件夹" desc="读取、创建、修改或删除任意位置的文件" tag="默认已启用" />
-            <CapabilityRow icon={<TerminalIcon />} label="命令执行" desc="在宿主机运行系统命令" tag="默认已启用" />
-            <CapabilityRow icon={<PublicRounded />} label="互联网和已连接的应用" desc="访问网站、发送数据并使用已启用的工具" tag="默认已启用" />
+            <CapabilityRow icon={<FolderOutlined />} label="文件和文件夹" desc="读取、创建、修改或删除任意位置的文件" tag="默认已启用" />
+            <CapabilityRow icon={<TerminalOutlinedIcon />} label="命令执行" desc="在宿主机运行系统命令" tag="默认已启用" />
+            <CapabilityRow icon={<PublicOutlined />} label="互联网和已连接的应用" desc="访问网站、发送数据并使用已启用的工具" tag="默认已启用" />
           </Stack>
           <Stack direction="row" justifyContent="flex-end" spacing={1}>
             <Button size="small" onClick={() => setConfirmAnchorEl(null)}>取消</Button>
-            <Button size="small" color="warning" variant="contained" startIcon={<WarningAmberRounded />}
+            <Button size="small" color="warning" variant="contained" startIcon={<WarningAmberOutlined />}
               onClick={() => { setFullAccessForTask(currentTaskId, true); setConfirmAnchorEl(null); }}>
               确认
             </Button>

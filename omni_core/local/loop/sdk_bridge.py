@@ -460,6 +460,18 @@ class SdkBridgeMixin:
                 "layers": ["memory"], "placement": "lead_in"})
         # 收尾意图门（仅主链;子任务有 verify 门控,不走信任大脑路径）
         _plain_judge = None if is_sub else self._plain_finish_judge(traj)
+        # 基础架构打点：LLM 计时（请求发出 / 首事件 / 首增量 / 完成）落轨迹。
+        # 仅主链有 traj；子任务 traj=None 自动不打点。role/model 命名与 emitter 对齐。
+        on_llm_timing = None
+        if traj is not None:
+            _t_role = "executor" if is_sub else "brain"
+            _t_model = str(getattr(brain, "model", "") or "")
+
+            def on_llm_timing(d, _r=_t_role, _m=_t_model):
+                try:
+                    traj.log_think(json.dumps(d, ensure_ascii=False), _r, _m)
+                except Exception:
+                    pass
         res = run_subtask_sdk(
             brain,
             instructions=system_prompt,
@@ -505,6 +517,7 @@ class SdkBridgeMixin:
             max_output_tokens=_max_output_tokens,
             on_truncate=_on_truncate,
             model_settings=_model_settings,
+            on_llm_timing=on_llm_timing,
         )
         # M7：主 agent 的派发计划（由 dispatch 元工具写到 gate 上）
         res["dispatch_plan"] = list(getattr(gate, "dispatch_plan", None) or [])

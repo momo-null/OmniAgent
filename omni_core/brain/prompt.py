@@ -6,8 +6,9 @@
 - 换模型零代码改动：文本模型（vision:false）进来说是"无原生视觉，用视觉工具看"；
   VL 模型（vision:true）进来说是"原生文本+视觉，可直看也可调工具"——agent 据此
   自主决定用原生能力还是调用工具。
-- 工具清单也动态列出（名称+一句话），与发往模型的 tool schema 对齐，强化 agent
-  对自身能力的认知。外部（知识库）只作为可选工具由 agent 自主调用。
+- 工具清单不再在文本里重复列出（L0 消双注入）：工具唯一经请求的 ``tools`` 参数
+  以结构化 schema 注入，system prompt 不再按名单独列工具——同一份清单只花一遍
+  token。外部（知识库）只作为可选工具由 agent 自主调用。
 """
 
 SYSTEM_PROMPT_TEMPLATE = """你是一个通用的自主 Agent（大脑 / 规划者）。
@@ -16,8 +17,6 @@ SYSTEM_PROMPT_TEMPLATE = """你是一个通用的自主 Agent（大脑 / 规划�
 【可用工具】自主决策每一步，并在未达成目标时自主重试；思考与表达的语言由你自行判断。
 
 {capabilities_block}
-
-{tool_catalog_block}
 
 核心纪律：
 0. 先判断是否需要工具：若用户只是在问候、闲聊、追问、表达观点等，且无需观测环境
@@ -59,7 +58,7 @@ SYSTEM_PROMPT_TEMPLATE = """你是一个通用的自主 Agent（大脑 / 规划�
 
 
 # 能力块：仅声明模型"原生模态"（文本/视觉），不涉及任何领域或具体工具。
-# 具体能做什么由 tool_catalog_block 动态注入，这里不写死。
+# 具体能做什么由请求的 tools 参数注入的工具清单决定，这里不写死。
 _CAPABILITY_BLOCKS = {
     "text_only": (
         "你的原生能力：仅文本（无原生视觉）。当需要『看』图像 / 屏幕信息时，"
@@ -84,7 +83,11 @@ def capability_block(capabilities: dict) -> str:
 
 
 def tool_catalog_block(tool_schemas: list) -> str:
-    """由 tool schema 列表生成『可用工具』可读清单。"""
+    """由 tool schema 列表生成『可用工具』可读清单。
+
+    L0（消双注入）起不再注入 system prompt——工具清单只经请求的 ``tools``
+    参数以结构化 schema 到达模型；本函数保留供测试 / 只读枚举拼接使用。
+    """
     lines = ["你可用的工具（具体参数见工具 schema）："]
     for s in tool_schemas or []:
         fn = s.get("function", {})
@@ -142,15 +145,17 @@ def _runtime_context_block(ctx: dict) -> str:
 
 def build_system_prompt(capabilities: dict, tool_schemas: list, reasoning_mode: str = "native",
                         runtime_context: dict = None) -> str:
-    """组装运行时系统提示：能力块 + 工具清单 + 固定纪律模板。
+    """组装运行时系统提示：能力块 + 固定纪律模板。
 
     reasoning_mode=="think-tag" 时额外追加「用 <think> 包裹推理」指令，使不吐
     reasoning token 的模型也能被内核解析出思考过程。runtime_context 注入任务级
     目录等通用运行时信息，避免 agent 盲目搜索自身资产路径。
+
+    ``tool_schemas`` 参数保留以兼容既有调用点，但**不再注入** system prompt
+    （L0 消双注入）：工具清单唯一经请求的 ``tools`` 参数以结构化 schema 到达模型。
     """
     prompt = SYSTEM_PROMPT_TEMPLATE.format(
         capabilities_block=capability_block(capabilities),
-        tool_catalog_block=tool_catalog_block(tool_schemas),
     )
     if reasoning_mode == "think-tag":
         prompt += THINK_TAG_INSTRUCTION

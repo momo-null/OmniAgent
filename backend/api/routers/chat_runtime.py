@@ -237,19 +237,27 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         _turn_ts0 = time.time()  # 本轮起点：产物登记表按 ts 过滤出本轮新增产物
         result = loop.run_task(spec)
         _reason = result.get("reason") or ""
+        # force 打断标记（读取即消费）：本轮被「立即发送」硬停
+        _force = False
+        _rec_f = manager.get(task_id, agent_id)
+        if _rec_f is not None and getattr(_rec_f, "force_interrupted", False):
+            _force = True
+            _rec_f.force_interrupted = False
         # TAM 记忆层:任务收尾触发提炼+判重+落库(buffer 里的本会话消息;异常静默)
-        try:
-            from omni_core import memory_tam
-            _pid = TaskStore.project_of(task_id)
-            _mstat = memory_tam.flush(_pid, brain_cfg, source_task=task_id)
-            _debug_push("memory_flush", {
-                "title": "记忆沉淀",
-                **_mstat,
-                "project_pool": memory_tam.count_atoms(_pid),
-                "global_pool": memory_tam.count_global_atoms(),
-            })
-        except Exception:
-            pass
+        # force 打断的轮次跳过：打断要快，不背 LLM 提炼的尾巴；buffer 保留，随下一轮正常收口
+        if not _force:
+            try:
+                from omni_core import memory_tam
+                _pid = TaskStore.project_of(task_id)
+                _mstat = memory_tam.flush(_pid, brain_cfg, source_task=task_id)
+                _debug_push("memory_flush", {
+                    "title": "记忆沉淀",
+                    **_mstat,
+                    "project_pool": memory_tam.count_atoms(_pid),
+                    "global_pool": memory_tam.count_global_atoms(),
+                })
+            except Exception:
+                pass
         # 把本轮执行轨迹（思考 + 工具调用）连同结论，作为「归属 agent 的一整轮」持久化：
         # 既供前端刷新后恢复完整过程流，也供下一轮模型上下文回填（根治跨轮失忆）。
         meta = {
@@ -271,6 +279,9 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             conclusion = _reason
         else:
             conclusion = f"任务已完成（共执行 {meta.get('steps')} 步）。详细结果见上方执行步骤。"
+        # force 打断的轮次：口播半句落库时显式标记，用户可见「这轮是被打断的」
+        if _force and conclusion:
+            conclusion += " ……[被打断]"
         # 终态记录：步数超上限则省略 steps（重放由 partial 拼接），防巨型单行 jsonl
         _steps_omitted = len(turn_steps) > _MAX_STEPS_IN_RECORD
         if _steps_omitted:
@@ -304,6 +315,8 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         rec = manager.get(task_id, agent_id)
         if rec is not None:
             rec.loop = None
+            # force 标记兜底清除（异常路径可能未走到消费点，防下一轮误跳沉淀）
+            rec.force_interrupted = False
         _finish_task(task_id, agent_id)
         # daemon 纯文本汇报后 paused：本轮结束但任务保持活跃，等用户下条消息续跑，
         # 不标 done（否则 chat 多轮会话被误判结束、无法续跑）。仅当 run_task 正常返回
@@ -566,10 +579,33 @@ async def api_chat(request: Request):
     if not last_user:
         return JSONResponse({"ok": False, "error": "最后一条消息内容为空"}, status_code=422)
 
-    # 原子检查：已有任务在跑则拒绝
+    # 原子检查：已有任务在跑则拒绝；force=True（立即发送 / barge-in）例外——
+    # 仅打断**同一 task** 的运行轮（不隐式杀别的会话），硬停后立即派发新消息。
     if _rt._is_any_running():
         _rid = _rt._running_task_id()
-        return JSONResponse({"ok": False, "error": f"已有任务在运行（task_id={_rid}），请等待结束或先停止"}, status_code=409)
+        if not req.force:
+            return JSONResponse({"ok": False, "error": f"已有任务在运行（task_id={_rid}），请等待结束或先停止"}, status_code=409)
+        if not task_id or _rid != task_id:
+            return JSONResponse({"ok": False, "error": f"运行中的是另一个任务（task_id={_rid}），不能在本会话强制发送"}, status_code=409)
+        _rec_f = manager.get(_rid, AGENT_MAIN)
+        _loop_f = _rec_f.loop if _rec_f else None
+        if _loop_f is None:
+            return JSONResponse({"ok": False, "error": "当前任务没有可打断的运行体"}, status_code=409)
+        # 打断标记由 _dispatch_chat 读取即消费：跳过本轮 TAM 沉淀（不背提炼尾巴）、口播半句标 [被打断]
+        _rec_f.force_interrupted = True
+        _loop_f.request_stop()
+        # 等旧线程自然收尾（finally 里 _finish_task 清 running 态）——不提前 flip 状态，
+        # 避免与旧线程 finally 收尾竞态。request_stop 是硬取消（S1），收尾通常 <1s。
+        _deadline = time.time() + 5.0
+        while _rt._is_any_running() and time.time() < _deadline:
+            await asyncio.sleep(0.1)
+        if _rt._is_any_running():
+            _rec_f.force_interrupted = False
+            return JSONResponse({"ok": False, "error": "打断超时，上一轮仍在收尾，请稍后重试"}, status_code=409)
+        # 等旧线程尾批 outbox 推送（流式增量 / 终态记录）落定，保证时序：
+        # 旧轮内容 → [被打断] → 新消息。只等 running=False 会撞上尾批推送未落定的竞态，
+        # 前端按 SSE 到达顺序渲染，旧轮内容会被排到新消息下面。
+        await asyncio.sleep(0.35)
 
     # 首条消息：自动建 task（落盘），agent 开始回后才算真正产生会话
     TaskStore = _task_store()

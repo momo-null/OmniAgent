@@ -19,6 +19,7 @@ import re
 import time
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from agents import Agent, Model, RunHooks, Runner, RunConfig
@@ -178,6 +179,88 @@ class OmniHooks(RunHooks):
             st.llm_calls += 1
         except Exception:
             pass
+
+
+class _TimingModel(Model):
+    """LLM 调用计时（基础架构打点）：每次模型调用记录 请求发出 / 首事件 / 首内容增量 /
+    完成 四个时刻，经 ``on_llm_timing`` 回调交上层落轨迹（主链有 traj 才挂）。
+
+    目的：把端到端延迟拆成 loop 接线 / 连接+预填 / 生成 三段——此前轨迹只有响应
+    汇聚时刻（emitter ``_emit``），request 发出与首 chunk 时刻缺失，延迟归因无从
+    下手。置于包装链最内层（紧贴真实 Model），外层包装（预算提示/压缩/截断）的
+    开销不计入。barge-in 取消（CancelledError）也经 finally 上报，能记到取消点。
+    """
+
+    def __init__(self, inner: Model,
+                 on_timing: Optional[Callable[[Dict[str, Any]], None]] = None):
+        self._inner = inner
+        self._on_timing = on_timing
+        self._seq = 0
+
+    @staticmethod
+    def _chunk_text(chunk: Any) -> str:
+        for attr in ("delta", "text", "data"):
+            v = getattr(chunk, attr, None)
+            if isinstance(v, str) and v:
+                return v
+        return ""
+
+    def _report(self, t0: float, t_evt: Optional[float], t_delta: Optional[float],
+                t1: float, chars: int, stream: bool) -> None:
+        if self._on_timing is None:
+            return
+        self._seq += 1
+
+        def _iso(t: Optional[float]) -> str:
+            return datetime.fromtimestamp(t, timezone.utc).isoformat() if t else ""
+
+        payload = {
+            "kind": "llm_timing",
+            "call": self._seq,
+            "stream": stream,
+            "ts_start": _iso(t0),
+            "ts_first_event": _iso(t_evt),
+            "ts_first_delta": _iso(t_delta),
+            "ts_end": _iso(t1),
+            "first_event_ms": int((t_evt - t0) * 1000) if t_evt else -1,
+            "first_delta_ms": int((t_delta - t0) * 1000) if t_delta else -1,
+            "total_ms": int((t1 - t0) * 1000),
+            "output_chars": chars,
+        }
+        try:
+            self._on_timing(payload)
+        except Exception:
+            pass
+
+    async def get_response(self, *args: Any, **kwargs: Any) -> Any:
+        t0 = time.time()
+        try:
+            resp = await self._inner.get_response(*args, **kwargs)
+            self._report(t0, None, None, time.time(),
+                         len(str(getattr(resp, "final_output", "") or "")), stream=False)
+            return resp
+        except BaseException:
+            self._report(t0, None, None, time.time(), 0, stream=False)
+            raise
+
+    async def stream_response(self, *args: Any, **kwargs: Any) -> Any:
+        t0 = time.time()
+        t_evt: Optional[float] = None
+        t_delta: Optional[float] = None
+        chars = 0
+        try:
+            async for chunk in self._inner.stream_response(*args, **kwargs):
+                now = time.time()
+                if t_evt is None:
+                    t_evt = now
+                txt = self._chunk_text(chunk)
+                if txt:
+                    if t_delta is None:
+                        t_delta = now
+                    chars += len(txt)
+                yield chunk
+        finally:
+            self._report(t0, t_evt, t_delta, time.time(), chars, stream=True)
 
 
 class _BudgetHintModel(Model):
@@ -1300,10 +1383,12 @@ def _assemble_agent_stack(
     prune_tail: int = 0,
     # M8（修复）：运行期人类软注入通道——人类 user 消息在下一请求边界注入（不依赖 checkpoint）
     human_injection: Optional[_HumanInjection] = None,
+    # 基础架构打点：LLM 计时回调（每次模型调用一条，payload 见 _TimingModel）
+    on_llm_timing: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Tuple[SubtaskState, Any, Any, bool, Optional[_RepeatGuard]]:
     """装配子任务的模型包装链 + `Agent` 实例，并连接 MCP（由 run_subtask_sdk 抽出，零逻辑改动）。
 
-    包装链自内向外：预算提示 → 重复失败防护 → 粘性压缩 → 输出截断
+    包装链自内向外：LLM 计时 → 预算提示 → 重复失败防护 → 粘性压缩 → 输出截断
     （记忆注入不走 Model 包装——稳定段在 instructions、检索段在起始 items，
     见 doc/plans/memory-architecture.md §4/§5）。
     返回 ``(state, agent, model, use_compaction, _repeat_guard)`` 供后续块循环复用。
@@ -1312,6 +1397,9 @@ def _assemble_agent_stack(
     # 收尾工具集（M7：允许派发时，dispatch 也触发收尾，好让编排层立刻扇出）
     stop_tools = ["task_done", "verify", "escalate"] + (["dispatch"] if allow_dispatch else [])
     model = _model_of(brain)
+    if on_llm_timing is not None:
+        # 计时置于最内层（紧贴真实 Model）：外层包装的开销不计入延迟
+        model = _TimingModel(model, on_llm_timing)
     if budget_hint_ratio > 0:
         model = _BudgetHintModel(model, state, max_steps, budget_hint_ratio)
     # T4.5（RG-1）：工具重复失败防护（默认 3 次，配置 0 = 关闭）
@@ -1442,6 +1530,8 @@ def run_subtask_sdk(
     on_compaction: Optional[Callable[[], None]] = None,
     # M8（修复）：运行期人类软注入通道（透传给 _assemble_agent_stack）
     human_injection: Optional[Any] = None,
+    # 基础架构打点：LLM 计时回调（每次模型调用一条，payload 见 _TimingModel；主链 traj 落轨迹）
+    on_llm_timing: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     """用 SDK Runner 跑一个子任务，返回与旧 `_run_inner` 相同的结果形状。
 
@@ -1477,6 +1567,7 @@ def run_subtask_sdk(
         prune_head=prune_head,
         prune_tail=prune_tail,
         human_injection=human_injection,
+        on_llm_timing=on_llm_timing,
     )
     # 「方案 B（纯文本收尾）」的例外标记：本块是否调用过 verify 元工具。
     # verify 属于 stop_tools，一调即结束本块。但它的语义是「请核对完成条件」，

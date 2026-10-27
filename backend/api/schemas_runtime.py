@@ -32,6 +32,9 @@ class ChatRequest(BaseModel):
     # 只接受该形状（不含 URL/空格），是否真实存在由 router 白名单二次校验。
     model: Optional[str] = Field(default=None, max_length=200,
                                  pattern=r"^[^\s/]+/[^\s/].*$")
+    # 立即发送 / barge-in（2026-10-28）：运行中允许打断**同一 task** 的当前轮并立即发出。
+    # 默认 False，主路径语义不变；打断标记由派发线程读取即消费（跳过 TAM 沉淀 + 半句标 [被打断]）。
+    force: bool = False
 
     @field_validator("task_id")
     @classmethod

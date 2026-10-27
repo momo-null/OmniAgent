@@ -10,7 +10,6 @@ from omni_core.tools.base import call_tool
 from omni_core.tools.loader import load_plugins, plugin_module
 from omni_core.brain.prompt import (
     capability_block,
-    tool_catalog_block,
     build_system_prompt,
 )
 from plugins.vision.runtime import VisionRuntime
@@ -43,14 +42,16 @@ def test_capability_block_text_vision():
     assert "可直接理解" in block  # 说明可原生看
 
 
-def test_build_system_prompt_lists_tools():
+def test_build_system_prompt_excludes_tool_catalog():
+    """L0（消双注入）：工具唯一经请求的 tools 参数以结构化 schema 注入，
+    system prompt 文本不再重复列工具名单——同一份清单只花一遍 token。"""
     schemas = [
         {"type": "function", "function": {"name": "vision_describe", "description": "理解截图。其它"}},
         {"type": "function", "function": {"name": "tap_by_mark", "description": "按标记点击。其它"}},
     ]
     prompt = build_system_prompt({"vision": False}, schemas)
-    assert "vision_describe" in prompt
-    assert "tap_by_mark" in prompt
+    assert "vision_describe" not in prompt
+    assert "tap_by_mark" not in prompt
     assert "无原生视觉" in prompt
 
 
