@@ -125,7 +125,11 @@ function MemoryRow({ atom, onDelete }: { atom: DebugMemoryAtom; onDelete: (atom:
       </Menu>
       <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
         <Chip size="small" label={atom.kind || "fact"} variant="outlined" />
-        {atom.version > 0 && <Chip size="small" label={`v${atom.version}`} variant="outlined" />}
+        {/* 单脑改造后 atoms 带 state/salience：展示状态与强度，替代旧 version 字段 */}
+        {atom.state && <Chip size="small" label={atom.state} variant="outlined" />}
+        {typeof atom.salience === "number" && (
+          <Chip size="small" label={`强度 ${atom.salience.toFixed(2)}`} variant="outlined" />
+        )}
         {atom.source_task && <Chip size="small" label={atom.source_task} variant="outlined" />}
         <Typography variant="caption" color="text.secondary" sx={{ ml: "auto" }}>{time}</Typography>
         <IconButton size="small" sx={{ py: 0 }} onClick={() => setExpanded((v) => !v)}>

@@ -25,6 +25,7 @@ import {
 } from "./backend";
 import type { ChildProcess } from "node:child_process";
 import { projectRootError, resolveProjectRoot } from "./project";
+import { ensureWebBuild } from "./webbuild";
 import { createTray, disposeTray, setTrayStatus } from "./tray";
 
 const IS_DEV = process.env.OMNI_DESKTOP_DEV === "1";
@@ -261,6 +262,13 @@ async function ensureBackend(): Promise<void> {
       await killBackendTree(old.process.pid);
     }
     const port = await findFreePort(8000);
+    // 前端自动构建（web/src 比 dist 新 → npm run build）。必须先于后端启动：
+    // backend 在 import 时注册 /assets 静态挂载，dist 当时缺失就永远 404。
+    // 失败/超时只降级用旧版界面，绝不挡启动。
+    await ensureWebBuild(root, (m) => {
+      setStatus(m);
+      setTrayStatus(m.slice(0, 30));
+    });
     setStatus(`正在启动后端（127.0.0.1:${port}）…`);
     setTrayStatus("后端启动中…");
     const handle = startBackend(root, port);
