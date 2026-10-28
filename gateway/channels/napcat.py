@@ -35,7 +35,7 @@ import re
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote
 
 from utils import get_logger
@@ -172,6 +172,56 @@ def _to_int(value: str) -> Any:
         return value
 
 
+#: 图片多模态：单张上限与超时（表情包很小、照片可能几 MB；超限退回 `[图片]` 占位）
+_IMAGE_MAX_BYTES = 4 * 1024 * 1024
+_IMAGE_TIMEOUT_SEC = 10.0
+
+
+def image_urls(raw: Dict[str, Any]) -> List[str]:
+    """从消息段里取图片地址（优先 ``url``；``file`` 是 http 地址时兜底）。"""
+    urls: List[str] = []
+    message = raw.get("message")
+    if not isinstance(message, list):
+        return urls
+    for seg in message:
+        if not isinstance(seg, dict) or seg.get("type") != "image":
+            continue
+        data = seg.get("data") or {}
+        url = str(data.get("url") or "").strip()
+        if not url:
+            file = str(data.get("file") or "").strip()
+            url = file if file.startswith(("http://", "https://")) else ""
+        if url:
+            urls.append(url)
+    return urls
+
+
+def fetch_image_data_url(url: str, timeout: float = _IMAGE_TIMEOUT_SEC) -> str:
+    """下载图片并转 data URL（多模态输入用）。超限 / 非图片 / 失败 → 空串（调用方降级）。"""
+    import base64
+
+    import requests
+
+    try:
+        resp = requests.get(url, timeout=timeout, stream=True)
+        resp.raise_for_status()
+        ctype = str(resp.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip()
+        if not ctype.startswith("image/"):
+            return ""
+        buf = bytearray()
+        for chunk in resp.iter_content(64 * 1024):
+            buf.extend(chunk)
+            if len(buf) > _IMAGE_MAX_BYTES:  # 边读边判，避免超大图占满内存
+                logger.warning("napcat 图片超过 %d 字节，已忽略", _IMAGE_MAX_BYTES)
+                return ""
+        if not buf:
+            return ""
+        return f"data:{ctype};base64," + base64.b64encode(bytes(buf)).decode("ascii")
+    except Exception as e:
+        logger.warning("napcat 图片下载失败（忽略）: %s: %s", type(e).__name__, e)
+        return ""
+
+
 class NapcatReply:
     """绑定会话的回发句柄（实现 ReplyChannel 协议）。"""
 
@@ -208,6 +258,9 @@ class NapcatAdapter:
         # 能力门：QQ 任何人都能发消息 → 缺省纯对话（无工具）。只有明确确认
         # "这个号只我自己能发"时才可在配置里置 true。
         self.allow_tools = bool(cfg.get("allow_tools", False))
+        # 多模态：QQ 收到的图片作为**当轮**模型输入（只取首张；会话记录仍只存 `[图片]`）。
+        # 关掉则退回纯文本占位（省 token，也适用于主模型不支持视觉时）。
+        self.images_enabled = bool(cfg.get("images", True))
         try:
             self.timeout_sec = float(cfg.get("timeout_sec", 10))
         except (TypeError, ValueError):
@@ -390,6 +443,15 @@ class NapcatAdapter:
         #   ④ 代答边界：可以说"话"，不能做"决定"（钱/账号/承诺/隐私/评价他人）。
         _bounds = ("你代表他，但不替他做决定——钱、账号、承诺、隐私、评价他人这类问题，"
                    "一律回「我确认下再回你」。")
+        # 图片只取首张：连发多图很常见，全带上会顶爆 token。
+        # 注意顺序——群聊未 @ 的消息已在上方 return，所以这里只会为「该处理的消息」下载。
+        attachments: List[Dict[str, str]] = []
+        if self.images_enabled:
+            for url in image_urls(raw)[:1]:
+                data_url = fetch_image_data_url(url)
+                if data_url:
+                    attachments.append({"type": "image", "data_url": data_url})
+
         display = f"「{nickname}」({user_id})" if nickname else f"QQ {user_id}"
         if message_type == "group":
             group_id = chat_id.split(":", 1)[1]
@@ -413,6 +475,7 @@ class NapcatAdapter:
             },
             reply=NapcatReply(self, chat_id),
             allow_tools=self.allow_tools,
+            attachments=attachments,
         ))
 
     @staticmethod

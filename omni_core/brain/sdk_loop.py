@@ -1493,7 +1493,8 @@ def run_subtask_sdk(
     brain: Any,
     *,
     instructions: str,
-    user_input: str,
+    # str（纯文本）或 content 块数组（多模态：input_text + input_image）
+    user_input: Any,
     tools: List[FunctionTool],
     gate: Any,
     # 能力门：False = 纯对话运行（工具/MCP/元工具全不装配）
@@ -1637,6 +1638,7 @@ def run_subtask_sdk(
         items.append({"role": "user", "content": skill_catalog})
     if lead_in_message:
         items.append({"role": "user", "content": lead_in_message})
+    # content 可为 str 或内容块数组（多模态输入：文本 + 图片，见 sdk_bridge.build_user_content）
     items.append({"role": "user", "content": user_input})
 
     # chunk_turns 默认从 config 读取（runtime.chunk_turns，默认 50）；

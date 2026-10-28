@@ -6,7 +6,7 @@ dispatch / plugins/messaging / scheduler 零改动。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, List, Optional, Protocol, runtime_checkable
 
 #: 入站消息统一回调：on_message(InboundMessage) -> None（实现方负责异步/排队策略）
 OnMessage = Callable[["InboundMessage"], None]
@@ -26,6 +26,12 @@ class InboundMessage:
     # 不具备任何工具能力（他人发消息无法驱动 shell/文件/设备）。通道确认「只有本人
     # 能发消息」（如内网/自用）时才可置 True。网关只读本字段，不感知具体通道。
     allow_tools: bool = False
+    # 多模态附件（**只作用于当轮模型输入**）：元素是 dict，目前形如
+    # ``{"type": "image", "data_url": "data:image/jpeg;base64,..."}``。
+    # 用 dict 而非固定字段：以后加文件 / 音频不必再改内核契约（一次收敛）。
+    # 会话记录里仍只存文本投影（如 `[图片]`），不落 base64——否则历史膨胀，
+    # 且每轮重建上下文都要重传（每张图约 1k+ tokens）。通道负责下载与尺寸限制。
+    attachments: List[Dict[str, str]] = field(default_factory=list)
 
 
 @runtime_checkable

@@ -94,7 +94,9 @@ def _on_message(msg) -> None:
     # 网关只读通道自声明，不判断"这是谁发的"——判定权在通道适配器。
     dispatch.submit(msg.text, source=f"msg:{msg.channel}", reply=msg.reply,
                     project_id=project_id or None, session_id=session_id or None,
-                    tools_enabled=bool(getattr(msg, "allow_tools", False)))
+                    tools_enabled=bool(getattr(msg, "allow_tools", False)),
+                    # 多模态附件只作用于当轮（会话记录仍写文本投影，不落 base64）
+                    attachments=list(getattr(msg, "attachments", None) or []))
 
 
 def _route_chat(msg) -> tuple:

@@ -72,6 +72,31 @@ def _args_payload_to_dict(raw: Any) -> Dict[str, Any]:
     return {}
 
 
+def build_user_content(text: str, attachments: Optional[List[Dict[str, Any]]] = None) -> Any:
+    """本轮 user 输入的 content：无附件 → 纯文本（原样，零回归）；有附件 → 内容块数组。
+
+    SDK 的 input item ``content`` 既可以是 str，也可以是内容块数组；
+    ``OpenAIChatCompletionsModel`` 会把 ``input_image`` 转成 chat 的 ``image_url``。
+
+    附件形态是 **dict 泛化**（``{"type": "image", "data_url": ...}``）：以后加文件/音频
+    只需在这里多一个 ``type`` 分支，调用方与内核契约都不用动。
+    未知 type 直接忽略（fail-open，不影响文本部分）。
+    附件只在本轮出现（不写会话历史），无需考虑历史重放时的体积。
+    """
+    if not attachments:
+        return text
+    blocks: List[Dict[str, Any]] = [{"type": "input_text", "text": text or ""}]
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "")
+        if kind == "image":
+            url = str(item.get("data_url") or item.get("url") or "")
+            if url:
+                blocks.append({"type": "input_image", "image_url": url})
+    return blocks if len(blocks) > 1 else text
+
+
 class SdkBridgeMixin:
     def _compress_history(self, brain, old_turns: List[List[Dict[str, Any]]], world=None,
                           source: str = "", prefix: str = "") -> List[Dict[str, Any]]:
@@ -472,10 +497,15 @@ class SdkBridgeMixin:
                     traj.log_think(json.dumps(d, ensure_ascii=False), _r, _m)
                 except Exception:
                     pass
+        # 当轮多模态附件：只作用于本次 user 输入，不进会话历史
+        _user_content = build_user_content(
+            user_input or self._build_user(spec, world, step=0),
+            list(getattr(spec, "attachments", None) or []),
+        )
         res = run_subtask_sdk(
             brain,
             instructions=system_prompt,
-            user_input=user_input or self._build_user(spec, world, step=0),
+            user_input=_user_content,
             # 能力门：tools_enabled=False（纯对话运行）→ 能力工具与 MCP 全部不传，
             # 配合 sdk_loop 的元工具收口，模型侧无任何可调用的 function schema。
             tools=self.registry.sdk_tools() if getattr(self, "tools_enabled", True) else [],

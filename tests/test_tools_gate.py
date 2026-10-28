@@ -152,6 +152,28 @@ def test_chat_only_run_finishes_with_plain_text(monkeypatch):
     assert calls["chat"] >= 1
 
 
+def test_build_user_content_is_plain_without_images():
+    from omni_core.local.loop.sdk_bridge import build_user_content
+
+    assert build_user_content("你好") == "你好"
+
+
+def test_build_user_content_multimodal_with_attachments():
+    from omni_core.local.loop.sdk_bridge import build_user_content
+
+    content = build_user_content(
+        "看看这个", [{"type": "image", "data_url": "data:image/png;base64,AAA"}])
+    assert content[0] == {"type": "input_text", "text": "看看这个"}
+    assert content[1] == {"type": "input_image", "image_url": "data:image/png;base64,AAA"}
+
+
+def test_build_user_content_ignores_unknown_attachment_types():
+    """未知 type 忽略且不破坏文本：全部未知时退化成纯文本（fail-open）。"""
+    from omni_core.local.loop.sdk_bridge import build_user_content
+
+    assert build_user_content("hi", [{"type": "video", "path": "x"}]) == "hi"
+
+
 # === 2. 网关派发层 ===
 
 def test_dispatch_submit_propagates_tools_enabled(monkeypatch):

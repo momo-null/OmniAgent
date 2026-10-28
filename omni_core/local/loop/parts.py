@@ -231,6 +231,12 @@ class TaskSpec:
     # 由 /chat 注入（session 记录重建），作为 agent 起始上下文——替代旧的
     # 单一历史入口：跨轮记忆唯一来源，不与其它注入叠加。
     task_mode: str = "oneshot"
+    # 当轮多模态附件：元素是 dict，目前形如
+    # ``{"type": "image", "data_url": "data:image/jpeg;base64,..."}``。
+    # 用 dict 泛化（而非固定 images 字段）：以后加文件 / 音频只扩 type，不再改内核契约。
+    # **不落会话历史**：历史只记 objective 文本投影，否则 base64 会撑爆 jsonl、
+    # 且每轮重建上下文都要重传。由通道层下载/限尺寸，派发层原样透传到本轮 user 消息。
+    attachments: List[Dict[str, Any]] = field(default_factory=list)
 def _safe_str(obj) -> str:
     try:
         return json.dumps(obj, ensure_ascii=False)

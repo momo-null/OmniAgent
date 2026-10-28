@@ -52,6 +52,21 @@
 - **其它防抖**：`message_id` 去重（上限 2000）；长文本按 1200 字符分条（QQ 单条字节上限）。
 - **排障要点**：NapCat 默认 `network.httpServers / websocketServers` 为空 → 端口不监听、消息只落它自己的日志。接入前必须确认 3000/3001 在听。快速登录参数不保证生效，掉登录态后需重新扫码。
 
+### 5.1 图片（多模态附件）
+
+QQ 图片段默认只被压成 `[图片]` 占位。要让模型"看见"，必须把图作为**多模态输入**送进去——
+对外通道是纯对话（`tools_enabled=false`），工具化的看图（vision 插件 / OCR）在这条链上用不了。
+
+```
+通道下载 → InboundMessage.attachments → dispatch → TaskSpec.attachments → build_user_content
+                [{"type": "image", "data_url": "data:image/jpeg;base64,..."}]
+```
+
+- **通道**：`image_urls()` 取消息段 `data.url`（`file` 为 http 地址时兜底）；`fetch_image_data_url()` 流式下载、**边读边判 ≤4MB**、非 `image/*` 丢弃、失败返回空（降级为占位）；**只取首张**（连发多图全带上会顶爆 token）。下载发生在**群聊 @ 过滤之后**——没 @ 她的群消息不下载。配置 `images: true` 可关。
+- **内核**：`build_user_content(text, attachments)` 无附件返回 `str`（逐字节零回归），有附件返回内容块数组（`input_text` + `input_image`）；**未知 `type` 忽略**，不影响文本部分（fail-open）。
+- **不进会话历史**：落盘仍写 `objective` 文本（含 `[图片]` 占位），base64 只活在当轮请求里。否则 jsonl 会被撑爆，且每轮重建上下文都要重传（每张图约 1k+ tokens）。
+- **为什么用 dict 契约**：`attachments: List[Dict]` 而非 `images: List[str]`——以后加文件 / 音频只扩一个 `type` 分支，内核契约不再动第二次。
+
 ## 6. 能力门 `tools_enabled`（唯一的内核改动）
 
 语义：`False` = 本次运行为纯对话。此时

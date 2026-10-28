@@ -19,7 +19,7 @@ import time
 import traceback
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .channels import context
 from .channels.base import ReplyChannel
@@ -197,6 +197,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             task_id=real_task_id,
             project_id=meta.get("project_id"),
             history=history_items,
+            attachments=list(item.get("attachments") or []),
         )
         # 当前任务回发句柄（线程绑定）→ msg_send_* 工具缺省发回来源会话
         context.set_current_reply(reply)
@@ -293,7 +294,8 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
            reply: Optional[ReplyChannel] = None,
            notify_channel: Optional[str] = None, job_id: Optional[str] = None,
            session_id: Optional[str] = None,
-           tools_enabled: bool = True) -> str:
+           tools_enabled: bool = True,
+           attachments: Optional[List[Dict[str, Any]]] = None) -> str:
     """异步提交（网关消息/cron 用）。返回 task_id。
 
     session_id：显式指定会话（消息通道用 ``msg:<channel>:<chat_id>`` 固定会话——
@@ -302,13 +304,18 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
     tools_enabled：能力门。False = 纯对话（无任何工具，模型物理上无法产生 tool_call）。
     外部可达的通道（他人能给账号发消息）必须传 False——否则任何给账号发消息的人
     都能驱动 shell/文件/设备工具。
+
+    attachments：当轮多模态附件（dict 列表，如 ``{"type":"image","data_url":...}``）。
+    **只作用于本次模型输入**，不进会话记录（历史仍按 objective 文本落盘，避免 base64
+    撑爆 jsonl）。用 dict 泛化，以后加文件 / 音频不用改契约。
     """
     ensure_worker()
     task_id = uuid.uuid4().hex[:16]
     _QUEUE.put({"task_id": task_id, "objective": objective, "done_when": done_when,
                 "max_steps": max_steps, "source": source, "project_id": project_id,
                 "reply": reply, "notify_channel": notify_channel, "job_id": job_id or "",
-                "session_id": session_id or "", "tools_enabled": bool(tools_enabled)})
+                "session_id": session_id or "", "tools_enabled": bool(tools_enabled),
+                "attachments": list(attachments or [])})
     return task_id
 
 
@@ -316,12 +323,14 @@ def dispatch_sync(objective: str, done_when: str = "", max_steps: int = 40, *,
                   source: str = "manual", project_id: Optional[str] = None,
                   reply: Optional[ReplyChannel] = None,
                   notify_channel: Optional[str] = None, job_id: Optional[str] = None,
-                  tools_enabled: bool = True) -> DispatchResult:
+                  tools_enabled: bool = True,
+                  attachments: Optional[List[Dict[str, Any]]] = None) -> DispatchResult:
     """同步执行（CLI/测试/「立即运行」用）。"""
     return _run_task_once({"task_id": uuid.uuid4().hex[:16], "objective": objective,
                            "done_when": done_when, "max_steps": max_steps, "source": source,
                            "project_id": project_id, "reply": reply, "notify_channel": notify_channel,
-                           "job_id": job_id or "", "tools_enabled": bool(tools_enabled)})
+                           "job_id": job_id or "", "tools_enabled": bool(tools_enabled),
+                           "attachments": list(attachments or [])})
 
 
 def queue_size() -> int:

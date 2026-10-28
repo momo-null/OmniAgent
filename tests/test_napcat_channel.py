@@ -232,6 +232,52 @@ def _load_messaging_plugin():
     return module
 
 
+def test_image_message_carries_single_data_url(adapter, monkeypatch):
+    """带图消息 → images 里只有一个 data URL（连发多图只取首张）。"""
+    monkeypatch.setattr(mod, "fetch_image_data_url", lambda url: "data:image/jpeg;base64,AAAA")
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "private", "self_id": 111,
+        "user_id": 222, "message_id": 501,
+        "message": [
+            {"type": "image", "data": {"url": "http://x/1.jpg"}},
+            {"type": "image", "data": {"url": "http://x/2.jpg"}},
+        ],
+    }, emit)
+    assert len(got) == 1
+    assert got[0].attachments == [{"type": "image", "data_url": "data:image/jpeg;base64,AAAA"}]
+    assert "[图片]" in got[0].text  # 文本投影保留占位（会话历史只存这个）
+
+
+def test_group_image_without_at_is_not_downloaded(adapter, monkeypatch):
+    """群聊没 @ 她 → 直接丢弃，连图都不下载（群聊刷图不白白耗流量与 token）。"""
+    calls = []
+    monkeypatch.setattr(mod, "fetch_image_data_url", lambda url: calls.append(url) or "")
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 502,
+        "message": [{"type": "image", "data": {"url": "http://x/3.jpg"}}],
+    }, emit)
+    assert got == []
+    assert calls == []
+
+
+def test_images_can_be_disabled(monkeypatch):
+    monkeypatch.delenv("NAPCAT_TOKEN", raising=False)
+    calls = []
+    monkeypatch.setattr(mod, "fetch_image_data_url", lambda url: calls.append(url) or "data:x")
+    adapter = NapcatAdapter({"enabled": True, "images": False})
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "private", "self_id": 111,
+        "user_id": 222, "message_id": 503,
+        "message": [{"type": "image", "data": {"url": "http://x/4.jpg"}}],
+    }, emit)
+    assert got[0].attachments == []
+    assert calls == []
+
+
 def test_msg_recent_strips_channel_ctx_and_parses_peer():
     plugin = _load_messaging_plugin()
     got = []
