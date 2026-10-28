@@ -35,6 +35,13 @@ class ChatRequest(BaseModel):
     # 立即发送 / barge-in（2026-10-28）：运行中允许打断**同一 task** 的当前轮并立即发出。
     # 默认 False，主路径语义不变；打断标记由派发线程读取即消费（跳过 TAM 沉淀 + 半句标 [被打断]）。
     force: bool = False
+    # 单链路参数化（plan §3.1）：auto（缺省，大脑自决）| chat（对话/语音）| task（干活）。
+    # 三者跑**同一条链路**，只切参数：工具粗集 / system 模板 / 模型槽 / 写链取舍。
+    mode: Literal["auto", "chat", "task"] = "auto"
+    # 会话激活的人格（角色卡 id）。检索 / 写入 / 画像三处都按它过滤；
+    # 空 = 用持久化在 task 上的值，再空则回退配置里的单人设缺省。
+    persona: Optional[str] = Field(default=None, max_length=64,
+                                   pattern=r"^[A-Za-z0-9_-]*$")
 
     @field_validator("task_id")
     @classmethod

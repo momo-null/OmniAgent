@@ -75,6 +75,58 @@ def _paths():
 def _ensure_outbox(task_id: str) -> Dict[str, "collections.deque"]:
     return manager.ensure_outbox(task_id)
 
+# ── outbox 多播（plan M3「outbox 多播扇出」） ─────────────────────────────────
+# 现状问题：outbox 是"消费即清空"的共享队列 → 只能有一个订阅者。Web 与语音桥
+# 同时订阅时会互相抢事件（谁都只拿到一半）。
+# 解决：每条事件带单调递增 seq；**主订阅者**（前端，sub_id 空）照旧清空消费，
+# **旁路订阅者**（语音 / 第二屏，带 sub_id）按自己的游标读 seq 之后的新增、不清空。
+# 流式块（thinking/message）每次 upsert 都分新 seq → 旁路订阅者能持续拿到最新全文，
+# 与前端"按 id upsert 覆盖"的幂等语义一致。
+_outbox_seq = itertools.count(1)
+_outbox_cursor: Dict[tuple, int] = {}
+_OUTBOX_CHANNELS = ("chat", "debug", "thinking", "toolcall", "message",
+                    "approval", "approval_resolved")
+
+
+def _stamp(entry: dict) -> dict:
+    """给事件盖单调序号（多播游标的唯一依据）。"""
+    entry["seq"] = next(_outbox_seq)
+    return entry
+
+
+def outbox_drain(tid: str, sub_id: str = "") -> Dict[str, list]:
+    """取走某 task 的待发事件（按通道分组）。
+
+    - ``sub_id`` 为空 → 主订阅者：消费即清空（前端单页面，原行为不变）；
+    - ``sub_id`` 非空 → 旁路订阅者：不清空，按自己的游标只取新增（Web 与语音可
+      同时订阅同一 task 而不互抢）。游标以 seq 为准，落在 deque 之外即视为追不上
+      （deque 有界 300），下次只从当前窗口续读——语音场景可接受。
+    """
+    box = _ensure_outbox(tid)
+    out: Dict[str, list] = {}
+    if not sub_id:
+        for ch in _OUTBOX_CHANNELS:
+            items = list(box[ch])
+            box[ch].clear()
+            out[ch] = items
+        return out
+    key = (tid, sub_id)
+    cur = int(_outbox_cursor.get(key, 0))
+    high = cur
+    for ch in _OUTBOX_CHANNELS:
+        items = [e for e in list(box[ch]) if int(e.get("seq") or 0) > cur]
+        out[ch] = items
+        for e in items:
+            high = max(high, int(e.get("seq") or 0))
+    if high != cur:
+        _outbox_cursor[key] = high
+    return out
+
+
+def outbox_reset_cursor(tid: str, sub_id: str) -> None:
+    """旁路订阅者断开时清游标（下次重连从当前窗口续读，不重放历史）。"""
+    _outbox_cursor.pop((tid, sub_id), None)
+
 # ── 当前轮「实时过程快照」（刷新 / 切任务后回放） ─────────────────────────────
 # outbox 是「消费即清空」的瞬时队列（见 chat_runtime._stream_gen），且实时过程不落盘；
 # 因此页面刷新或切换 task 后，进行中的这一轮没有任何可回放来源（前端 processLogs 空，
@@ -121,9 +173,13 @@ def clear_live_snapshot(task_id: str) -> None:
     with _live_lock:
         _LIVE_SNAPSHOT.pop(tid, None)
 
-def _try_start_task(task_id: str, agent_id: str = AGENT_MAIN) -> bool:
-    """原子地标记 (task_id, agent_id) 为 running。已有运行体在跑返回 False。"""
-    return manager.try_start(task_id, agent_id)
+def _try_start_task(task_id: str, agent_id: str = AGENT_MAIN, lane: str = "chat") -> bool:
+    """原子地标记 (task_id, agent_id) 为 running（同 lane 串行 + 同 task 互斥）。
+
+    ``lane``：``chat``（对话，缺省）/ ``work``（干活）。两者互不阻塞——这就是
+    「干活期间聊天不被 409」的落点（plan §4）。
+    """
+    return manager.try_start(task_id, agent_id, lane=lane)
 
 def _finish_task(task_id: str, agent_id: str = AGENT_MAIN) -> None:
     """标记 (task_id, agent_id) 为非运行。"""
@@ -136,8 +192,13 @@ def _finish_task(task_id: str, agent_id: str = AGENT_MAIN) -> None:
     except Exception:
         pass
 
-def _is_any_running() -> bool:
-    return manager.is_any_running()
+def _is_any_running(lane: Optional[str] = "chat") -> bool:
+    """对话 lane 是否有 run 在跑（= "现在能不能再说一句"）。
+
+    缺省只看 ``chat`` lane：工作 lane（长任务）在跑不该挡住对话——这正是 M4 的
+    验收口径。诊断面要看"全都在跑什么"请显式传 ``lane=None``。
+    """
+    return manager.is_any_running(lane)
 
 def _is_task_running(task_id: str, agent_id: str = AGENT_MAIN) -> bool:
     return manager.is_running(task_id, agent_id)
@@ -203,7 +264,8 @@ def push_chat(role: str, text: str, extra: Optional[dict] = None, debug: bool = 
     - task_id：消息归属的 task；空串则推到当前运行中的 task（兜底）。
     """
     tid = task_id or _running_task_id() or "_global"
-    entry = {"role": role, "text": text, "ts": time.time(), "extra": extra or {}, "task_id": tid}
+    entry = _stamp({"role": role, "text": text, "ts": time.time(),
+                    "extra": extra or {}, "task_id": tid})
     box = _ensure_outbox(tid)
     if debug:
         box["debug"].append(entry)
@@ -218,8 +280,8 @@ def push_thinking(role: str, content: str, model: str = "", task_id: str = ""):
     if not content:
         return
     tid = task_id or _running_task_id() or "_global"
-    entry = {"role": role, "content": content, "model": model, "ts": time.time(),
-             "id": f"th-{next(_live_seq)}"}
+    entry = _stamp({"role": role, "content": content, "model": model, "ts": time.time(),
+                    "id": f"th-{next(_live_seq)}"})
     _ensure_outbox(tid)["thinking"].append(entry)
     _live_push(tid, "thinking", entry["id"], entry)
 
@@ -230,12 +292,12 @@ def push_tool_call(role: str, name: str, arguments: str, result: str,
     name/arguments/result 构成一条完整的 react 动作卡（模型调了什么、结果如何）。
     """
     tid = task_id or _running_task_id() or "_global"
-    entry = {
+    entry = _stamp({
         "role": role, "name": name, "arguments": arguments or "",
         "result": result or "", "model": model, "ts": time.time(),
         # id：前端据此 upsert —— 刷新时 live 快照回放与后续 SSE 增量不会变成两张卡
         "id": f"tc-{next(_live_seq)}",
-    }
+    })
     _ensure_outbox(tid)["toolcall"].append(entry)
     _live_push(tid, "toolcall", entry["id"], entry)
 
@@ -245,14 +307,14 @@ def push_approval(card: Any, task_id: str = "") -> None:
     card 为 omni_core.tools.policy.ApprovalCard（鸭子类型读取，避免反向依赖内核类型）。
     """
     tid = task_id or _running_task_id() or "_global"
-    entry = {
+    entry = _stamp({
         "approval_id": card.approval_id,
         "task_id": tid,
         "tool": card.tool, "unit": card.unit, "risk": card.risk,
         "arguments": card.arguments or {},
         "created_at": card.created_at, "wait_seconds": card.wait_seconds,
         "ts": time.time(),
-    }
+    })
     _ensure_outbox(tid)["approval"].append(entry)
     _live_push(tid, "approvals", entry["approval_id"], entry)
 
@@ -260,8 +322,8 @@ def push_approval(card: Any, task_id: str = "") -> None:
 def push_approval_resolved(approval_id: str, outcome: str, task_id: str = "") -> None:
     """S2 决议 / 超时 / 取消：SSE `approval_resolved` 事件；并从 live 快照移除该卡。"""
     tid = task_id or _running_task_id() or "_global"
-    _ensure_outbox(tid)["approval_resolved"].append(
-        {"approval_id": approval_id, "outcome": outcome, "ts": time.time()})
+    _ensure_outbox(tid)["approval_resolved"].append(_stamp(
+        {"approval_id": approval_id, "outcome": outcome, "ts": time.time()}))
     with _live_lock:
         try:
             _live_box(tid)["approvals"].pop(approval_id, None)
@@ -270,7 +332,12 @@ def push_approval_resolved(approval_id: str, outcome: str, task_id: str = "") ->
 
 
 def _upsert(box: "collections.deque", channel: str, block_id: str, entry: dict):
-    """按 block_id 在通道内 upsert（存在则原地更新 content，保留原 ts 防时间线跳序）。"""
+    """按 block_id 在通道内 upsert（存在则原地更新 content，保留原 ts 防时间线跳序）。
+
+    每次都盖**新 seq**：流式块内容是"截至当前的全文"，旁路订阅者（语音桥）靠 seq
+    增量才能持续拿到最新全文；同 id 幂等覆盖，所以重复投递不会产生重复气泡。
+    """
+    _stamp(entry)
     q = box[channel]
     for i, e in enumerate(q):
         if e.get("id") == block_id:
@@ -282,7 +349,8 @@ def _upsert(box: "collections.deque", channel: str, block_id: str, entry: dict):
 def push_thinking_stream(role: str, model: str, block_id: str, content: str, task_id: str = ""):
     """流式「深度思考」增量：按 block_id upsert，content 为「截至当前完整文本」。"""
     tid = task_id or _running_task_id() or "_global"
-    entry = {"role": role, "content": content or "", "model": model, "id": block_id, "ts": time.time()}
+    entry = {"role": role, "content": content or "", "model": model, "id": block_id,
+             "ts": time.time()}
     _upsert(_ensure_outbox(tid), "thinking", block_id, entry)
     _live_push(tid, "thinking", block_id, entry)
 
@@ -342,6 +410,25 @@ def _make_brain_cfg(model: Optional[str] = None):
             executor_cfg["api_key"] = "dummy"
     return brain_cfg, executor_cfg
 
+def _mode_brain_cfg(model: Optional[str] = None, mode: str = "auto"):
+    """按 mode 选模型槽（plan §3.1）：chat 优先 ``voice`` 槽，目录未启用则回退主槽。
+
+    ``voice`` 槽与 ``main`` / ``worker`` 同级，都是模型目录里的用途位——语音要的是
+    "快、便宜、能对话"，和"能干活"的主槽是不同取舍。没配就完全沿用主槽（零回归）。
+    """
+    brain_cfg, executor_cfg = _make_brain_cfg(model)
+    if str(mode or "").lower() == "chat":
+        try:
+            from omni_core.brain import router as model_router
+
+            _v = dict(model_router.resolve_slot("voice") or {})
+        except Exception:  # noqa: BLE001
+            _v = {}
+        if _v.get("base_url"):
+            brain_cfg = {**brain_cfg, **_v}
+    return brain_cfg, executor_cfg
+
+
 def _append_task_name(task_id: str, name: str):
     """agent 提炼出的任务名回写 task 索引（仅当有变化）。"""
     try:
@@ -352,21 +439,49 @@ def _append_task_name(task_id: str, name: str):
     except Exception:
         pass
 
-_RECAP_STEPS = 12   # 跨轮回填的工具调用上限（防单轮历史撑爆上下文）
+# 注意力预算（plan §3.4）：跨轮**不再回灌完整 steps**，只给"结论 + 一行任务卡"。
+# 细节靠 read_task_digest 按需拉取——与 L2「文件名常驻 + read_scene 读全文」同构。
+_TASK_CARD_MAX = 120        # 单张卡上限（字）
+_TASK_CARD_KEEP = 20        # 最多保留的卡数，超出滚动折叠
+
+
+def _task_card_line(calls: List[Dict[str, Any]], content: str) -> str:
+    """把一轮的工具调用压成一行任务卡（≤120 字）。"""
+    names: List[str] = []
+    for s in calls:
+        n = str(s.get("name") or "")
+        if n and n not in names:
+            names.append(n)
+    line = f"【任务卡】执行 {len(calls)} 步"
+    if names:
+        line += f"（{'、'.join(names[:6])}{'…' if len(names) > 6 else ''}）"
+    if content:
+        line += f"；结论：{content[:40]}"
+    return line[:_TASK_CARD_MAX]
+
+
+def _strip_card(text: str) -> str:
+    """去掉 content 末尾的任务卡行（折叠过期卡时用，保留结论本身）。"""
+    return "\n".join(ln for ln in (text or "").splitlines()
+                     if not ln.startswith("【任务卡】")).strip()
 
 
 def _session_records_to_model_messages(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """会话记录 -> OpenAI 风格 messages（跨轮记忆）。
 
-    agent 轮的历史工具调用以**结构化 tool_calls + 成对 tool 结果消息**回填，
-    与 run 内 SDK 累积的 items 形态保持一致。
+    对话层预算（plan §3.4）：**对话 + 任务卡**。此前这里把上一轮的工具调用以
+    结构化 ``tool_calls`` + 成对 ``tool`` 结果消息回填（每轮最多 12 条、每条结果
+    2000 字），长期干活会把人格的上下文塞满细节，注意力被冲淡。现在：
 
-    此前此处把工具调用压成 `[工具] name(args) -> result` 的纯文本 recap 塞进
-    assistant content——等于给模型示范「工具调用是用文本写的」，导致跨轮续跑时
-    模型改用 DSML / `<tool_code>` 之类文本模仿、真实工具调用归零（0 action）。
-    结构化回填消除该诱因：不针对任何具体退化格式做清洗，故格式换马甲也不会复发。
+    - assistant 轮只回填**结论 + 一行任务卡**（目标/步数/涉及工具，≤120 字）；
+    - 完整 steps / 工具结果留在轨迹里，需要时由 ``read_task_digest`` 现查；
+    - 卡片超过 ``_TASK_CARD_KEEP`` 张时，最旧的折叠成一行提示（滚动合并）。
+
+    注意：这**不是**把工具调用写成文本让模型模仿——回填的是"上一轮做了什么"的
+    陈述性摘要，且明确指引用工具去取细节，与"示范用文本发调用"是两件事。
     """
     out: List[Dict[str, Any]] = []
+    card_positions: List[int] = []
     for r in records or []:
         role = r.get("role")
         if role == "user":
@@ -380,36 +495,26 @@ def _session_records_to_model_messages(records: List[Dict[str, Any]]) -> List[Di
             content = (r.get("content") or "").strip()
             steps = (r.get("extra") or {}).get("steps") or []
             calls = [s for s in steps if s.get("type") == "tool_call" and s.get("name")]
-            if len(calls) > _RECAP_STEPS:
-                calls = calls[-_RECAP_STEPS:]
             if calls:
-                base = len(out)
-                tool_calls = []
-                for i, s in enumerate(calls):
-                    args_raw = (s.get("arguments") or "").strip()
-                    try:
-                        json.loads(args_raw)      # 仅校验可解析，非法参数退化为 {}
-                        args = args_raw
-                    except Exception:
-                        args = "{}"
-                    tool_calls.append({
-                        "id": f"hist_{base}_{i}",
-                        "type": "function",
-                        "function": {"name": s.get("name", ""), "arguments": args},
-                    })
-                out.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
-                for i, s in enumerate(calls):
-                    out.append({
-                        "role": "tool",
-                        "tool_call_id": tool_calls[i]["id"],
-                        "content": (s.get("result") or "").strip()[:2000] or "(无结果)",
-                    })
+                card = _task_card_line(calls, content)
+                out.append({"role": "assistant",
+                            "content": (content + "\n" + card).strip()})
+                card_positions.append(len(out) - 1)
             elif content:
                 out.append({"role": "assistant", "content": content})
         elif role == "system":
             _sc = (r.get("content") or "").strip()
             if _sc:
                 out.append({"role": "system", "content": _sc})
+    # 滚动合并：卡片超上限时，最旧那批只留结论（卡片行剥掉），并在第一张处插一行提示
+    if len(card_positions) > _TASK_CARD_KEEP:
+        extra = card_positions[:len(card_positions) - _TASK_CARD_KEEP]
+        for idx in extra:
+            out[idx]["content"] = _strip_card(out[idx]["content"])
+        first = extra[0]
+        note = (f"【任务卡】更早的 {len(extra)} 轮已折叠；"
+                f"需要细节请调 read_task_digest(task_id=...) 现查。")
+        out[first]["content"] = (out[first]["content"] + "\n" + note).strip()
     return out
 
 def _merge_thinking_step(steps, block_id, model, content):

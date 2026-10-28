@@ -234,15 +234,19 @@ class SdkBridgeMixin:
         try:
             from omni_core.tools.skill_tool import set_skill_task_context
             from omni_core.tools.scene_tool import set_scene_task_context
+            from omni_core.tools.task_digest_tool import set_task_digest_context
 
             set_skill_task_context(spec.task_id)
             set_scene_task_context(spec.task_id)
+            # read_task_digest 空参时定位"当前任务"（注意力预算的按需拉取端）
+            set_task_digest_context(spec.task_id)
         except Exception:
             pass
         # F1.1：先取结构化 catalog（供埋点统计条数/来源），再格式化为 User 消息。
         # §8.2-1：选档交模型（brain_cfg 传入；无模型/失败 → 效用兜底序）。
         catalog: Optional[List[Dict[str, Any]]] = None
-        if skill_catalog is None:
+        # chat 模式不给技能目录（plan §3.1）：语音对话里塞几十条技能只会稀释人格。
+        if skill_catalog is None and self.mode != "chat":
             try:
                 from omni_core.local.knowledge_inject import (
                     build_skill_catalog,
@@ -491,10 +495,28 @@ class SdkBridgeMixin:
         if traj is not None:
             _t_role = "executor" if is_sub else "brain"
             _t_model = str(getattr(brain, "model", "") or "")
+            _t_dispatch = float(getattr(self, "dispatch_ts", 0.0) or 0.0)
+            _t_run = float(getattr(self, "ts_run_start", 0.0) or 0.0)
 
             def on_llm_timing(d, _r=_t_role, _m=_t_model):
+                # M1 验收口径：把「派发 → 请求发出」这段接线耗时单独落盘
+                # （since_dispatch_ms 从 API 线程收到请求算起，wiring_ms 从 run_task
+                #   进入算起）。二者都取自 ts_start，与发送时刻同源、无额外时钟误差。
                 try:
-                    traj.log_think(json.dumps(d, ensure_ascii=False), _r, _m)
+                    _p = dict(d)
+                    _ts = str(_p.get("ts_start") or "")
+                    # 只对**第 1 次调用**量接线：后续调用的 ts_start 与派发时刻之差
+                    # 是"上一轮生成耗时"，不是接线开销（口径错误会得出 5s 的假读数）。
+                    if _ts and int(_p.get("call") or 0) == 1:
+                        try:
+                            _req = datetime.fromisoformat(_ts).timestamp()
+                        except Exception:
+                            _req = 0.0
+                        if _req and _t_dispatch:
+                            _p["since_dispatch_ms"] = int((_req - _t_dispatch) * 1000)
+                        if _req and _t_run:
+                            _p["wiring_ms"] = int((_req - _t_run) * 1000)
+                    traj.log_think(json.dumps(_p, ensure_ascii=False), _r, _m)
                 except Exception:
                     pass
         # 当轮多模态附件：只作用于本次 user 输入，不进会话历史
@@ -508,7 +530,7 @@ class SdkBridgeMixin:
             user_input=_user_content,
             # 能力门：tools_enabled=False（纯对话运行）→ 能力工具与 MCP 全部不传，
             # 配合 sdk_loop 的元工具收口，模型侧无任何可调用的 function schema。
-            tools=self.registry.sdk_tools() if getattr(self, "tools_enabled", True) else [],
+            tools=self._sdk_tools(),
             gate=gate,
             mcp_servers=self.mcp_servers if getattr(self, "tools_enabled", True) else [],
             tools_enabled=getattr(self, "tools_enabled", True),

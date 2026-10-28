@@ -63,6 +63,9 @@ class GraphRunnerMixin:
         # 绑定当前任务的临时工作目录：脚本 / 截图等临时产物默认落 tasks/<task_id>/tmp/。
         from omni_core.tools.workspace import set_task
         set_task(spec.task_id)
+        # 接线延迟打点起点（run_task 进入时刻）：用于 llm_timing.since_dispatch_ms。
+        # 与 dispatch_ts（API 线程收到请求）配合，把"派发 → 请求发出"这段单独量出来。
+        self.ts_run_start = time.time()
         # S0/S1/S2 安全上下文随 run 绑定（运行级配置快照一次性凝固；run 内不变）
         from omni_core.tools import policy as security_policy
         security_policy.bind(
@@ -195,9 +198,9 @@ class GraphRunnerMixin:
             "project_skills_dir": str(project_skills(TaskStore.project_of(spec.task_id))),
             "global_skills_dir": str(global_skills()),
         }
-        system_prompt = build_system_prompt(
-            self.brain_capabilities, self.tool_schemas, runtime_context=_runtime_ctx,
-        )
+        # mode 决定纪律模板（chat=人格版 / task+auto=平台工作台版），能力块与运行时
+        # 上下文两边共用——见 ToolLoop._base_prompt。
+        system_prompt = self._base_prompt(runtime_context=_runtime_ctx)
         # §3.4 知识层弱注入（默认关闭；全量 try 兜底，绝不阻塞任务执行）
         # T2.4（O4'）：技能摘要不再注入 system prompt——改由新机制提供：
         # 技能目录以固定模板 User 消息注入（knowledge_inject.build_skill_catalog），
@@ -208,6 +211,9 @@ class GraphRunnerMixin:
         # F2.4：主链墙钟对齐——取自 runtime.long_task.wallclock_sec（缺省 0=不检查）。
         # 与子任务墙钟（runtime.escalation.wallclock_sec，缺省 120s，worker 防打转）解耦。
         main_wallclock_sec = self._resolve_main_wallclock(budget, spec)
+        # M1 接线归因：run_task 进入 → SDK 装配完成（首个请求发出前）的耗时
+        self._log(f"run_task 预备耗时 {int((time.time() - self.ts_run_start) * 1000)}ms "
+                  f"(不含模型生成)")
         res = self._run_via_sdk(
             spec, self.brain,
             system_prompt,

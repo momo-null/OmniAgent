@@ -511,7 +511,8 @@ class TestChatForceInterrupt:
         monkeypatch.setattr(cr, "manager", MagicMock())
         cr.manager.get.return_value = rec
 
-        def _fake_dispatch(task_id, history, max_steps, full_access=None, agent_id=None, model=None):
+        def _fake_dispatch(task_id, history, max_steps, full_access=None, agent_id=None,
+                           model=None, mode="auto", persona=""):
             calls["dispatch"] += 1
 
         monkeypatch.setattr(rt, "_dispatch_chat", _fake_dispatch)

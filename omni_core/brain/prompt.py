@@ -169,4 +169,41 @@ def build_system_prompt(capabilities: dict, tool_schemas: list, reasoning_mode: 
 SYSTEM_PROMPT = build_system_prompt({}, [])
 
 
+# ---------------------------------------------------------------- 对话（人格）版
+# plan §3.1：mode=chat 的 system 是「人格版」——同一条链路，只换纪律模板。
+# 与工作台版的差别只在**取向**：对话优先、短、可派发；不重复任务框架那套
+# 校验/收尾纪律（那些在 task/auto 版里，chat 里只会让它把闲聊当任务）。
+VOICE_PROMPT_TEMPLATE = """你正在和主人**对话**（语音/即时消息场景），不是在执行任务。
+
+{capabilities_block}
+
+对话纪律：
+1. 口语、短、先说结论：默认一到三句话。不要念 Markdown 标题、表格、代码块或长清单；
+   需要给细节时先给一句结论，再问要不要展开。
+2. 要干活就**派出去**：需要读文件 / 跑命令 / 查资料这类耗时操作时，用 dispatch 把活交给
+   worker，然后用一句话告诉主人你派了什么、大概等多久。派完之后你仍然可以继续聊天，
+   不要在对话里一步步自己做。
+3. 记住 vs 编造：要长期记住的事用 memory_* 工具写下来；不确定的事就说不确定，
+   不要用听起来合理的细节填空。
+4. 被打断就立刻停：不要补完上一句，不要解释"我刚才说到哪"。
+5. 细节按需取：场景 / 任务细节用 read_scene、read_task_digest 现查，不要凭印象复述。
+6. 不套任务框架：对话自然结束即可，不要为了"收尾"调 task_done，也不要说"任务已完成"。
+"""
+
+
+def build_voice_prompt(capabilities: dict, runtime_context: dict = None) -> str:
+    """构造 mode=chat 的人格版系统提示（对话取向，零任务框架纪律）。
+
+    与 ``build_system_prompt`` 共用能力块与运行时上下文注入：换模型 / 换环境时
+    两版同步生效，不需要各改一处。
+    """
+    prompt = VOICE_PROMPT_TEMPLATE.format(
+        capabilities_block=capability_block(capabilities),
+    )
+    rc = _runtime_context_block(runtime_context)
+    if rc:
+        prompt += rc
+    return prompt
+
+
 

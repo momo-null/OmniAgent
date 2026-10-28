@@ -266,6 +266,12 @@ class LLMClient:
     """
 
     def __init__(self, cfg: dict, timeout: float = 180.0, on_debug=None):
+        """构造大脑客户端（对外契约不变：cfg / timeout / on_debug）。
+
+        传输层（AsyncOpenAI 的连接池）由 ``sdk_model.build_sdk_model`` 从 loop
+        组件池取**共享**实例，因此跨轮免掉 TCP/TLS 握手；per-run 状态仍只在本
+        对象上（on_debug 等），同配置并发 run 也安全。
+        """
         self.on_debug = on_debug
         self.base_url = str(cfg["base_url"]).rstrip("/")
         self.model = cfg["model"]

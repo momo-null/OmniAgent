@@ -44,6 +44,9 @@ class RuntimeContext:
     agent_id: str = AGENT_MAIN
     project_id: str = ""
     run_id: str = ""
+    # lane（plan §4）：chat=对话 / work=干活。二者互不阻塞（干活期间聊天不断），
+    # 但**同一个 task 永远只允许一个 run**（一条会话的写入必须串行）。
+    lane: str = "chat"
     running: bool = False
     started_at: float = 0.0
     state: str = "INIT"
@@ -85,10 +88,22 @@ class RuntimeManager:
         self._lock = threading.Lock()
 
     # --- 生命周期（复合键寻址） ---
-    def try_start(self, task_id: str, agent_id: str = AGENT_MAIN) -> bool:
-        """原子地标记 (task_id, agent_id) 为 running。已有运行体在跑返回 False。"""
+    def try_start(self, task_id: str, agent_id: str = AGENT_MAIN,
+                  lane: str = "chat") -> bool:
+        """原子地标记 (task_id, agent_id) 为 running。冲突时返回 False。
+
+        互斥规则（plan §4 lane 化）**两条**：
+        1. 同一 lane 内串行——对话 lane 里同时只允许一轮对话，工作 lane 同理；
+        2. **同一 task 永不并发**——不管在哪个 lane。会话 jsonl / 轨迹 / 世界模型
+           都是按 task 落盘的，两条 run 同时写同一条会话必然互相踩。
+        因此「干活期间聊天不断」成立的前提是：派出去的活属于**另一个 task**
+        （handoff 出去的 worker 任务本就是独立 task）。
+        """
         with self._lock:
-            if any(r.running for r in self._runs.values()):
+            if any(r.running and str(getattr(r, "lane", "chat")) == lane
+                   for r in self._runs.values()):
+                return False
+            if any(r.running and r.task_id == task_id for r in self._runs.values()):
                 return False
             self._runs[(task_id, agent_id)] = RuntimeContext(
                 task_id=task_id,
@@ -96,6 +111,7 @@ class RuntimeManager:
                 run_id=f"r_{int(time.time())}",
                 running=True,
                 started_at=time.time(),
+                lane=lane,
             )
             return True
 
@@ -106,20 +122,22 @@ class RuntimeManager:
             if rec is not None:
                 rec.running = False
 
-    def is_any_running(self) -> bool:
+    def is_any_running(self, lane: Optional[str] = None) -> bool:
+        """是否有 run 在跑。``lane=None`` = 任意 lane（诊断口径）。"""
         with self._lock:
-            return any(r.running for r in self._runs.values())
+            return any(r.running and (lane is None or str(getattr(r, "lane", "chat")) == lane)
+                       for r in self._runs.values())
 
     def is_running(self, task_id: str, agent_id: str = AGENT_MAIN) -> bool:
         with self._lock:
             rec = self._runs.get((task_id, agent_id))
             return bool(rec and rec.running)
 
-    def running_task_id(self) -> Optional[str]:
-        """返回当前运行中的 task_id（单任务互斥，至多一个）。"""
+    def running_task_id(self, lane: Optional[str] = None) -> Optional[str]:
+        """返回当前运行中的 task_id（同 lane 内至多一个）。"""
         with self._lock:
             for r in self._runs.values():
-                if r.running:
+                if r.running and (lane is None or str(getattr(r, "lane", "chat")) == lane):
                     return r.task_id
             return None
 

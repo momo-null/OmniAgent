@@ -238,8 +238,15 @@ def _search_conn(conn: sqlite3.Connection, query: str, k: int) -> List[Dict[str,
 _FLUSH_MIN_ROLES = 2        # buffer 少于此条不触发提炼(无内容可提炼)
 _FLUSH_MAX_CHARS = 8000     # 提炼原料(对话片段)截断
 _MAX_ATOMS_PER_FLUSH = 5
+# buffer 上限（plan §3.3）：barge-in 频繁时（打断轮不 flush，且可能有并发通道）缓冲
+# 会无限增长。超限即**滚动切段**——丢最旧的，只保留最近窗口，并记 dropped 计数。
+# 之所以不是"超限就强制 flush"：flush 要跑 3 次 LLM，把它塞进消息路径等于把
+# 尾延迟搬回主链路，正是本轮要去掉的东西。
+_CAPTURE_MAX_MSGS = 80
+_CAPTURE_MAX_CHARS = 24000
 _buf_lock = threading.RLock()
 _buffers: Dict[str, List[Dict[str, str]]] = {}  # pid -> [{role, content}]
+_buf_dropped: Dict[str, int] = {}               # pid -> 被切掉的消息条数
 
 
 def capture(project_id: str, role: str, content: str) -> None:
@@ -247,7 +254,27 @@ def capture(project_id: str, role: str, content: str) -> None:
     if not enabled() or not project_id:
         return
     with _buf_lock:
-        _buffers.setdefault(project_id, []).append({"role": role, "content": content})
+        buf = _buffers.setdefault(project_id, [])
+        buf.append({"role": role, "content": content})
+        # 滚动切段：先按条数裁，再按字符裁（单条超长也吃得下，只要它在最新窗口里）
+        dropped = 0
+        while len(buf) > _CAPTURE_MAX_MSGS:
+            buf.pop(0)
+            dropped += 1
+        while len(buf) > 1 and sum(len(m.get("content") or "") for m in buf) > _CAPTURE_MAX_CHARS:
+            buf.pop(0)
+            dropped += 1
+        if dropped:
+            _buf_dropped[project_id] = _buf_dropped.get(project_id, 0) + dropped
+
+
+def buffer_stats(project_id: str) -> Dict[str, int]:
+    """L0 缓冲状态（诊断面：证明切段确实在工作，而不是静默长胖）。"""
+    with _buf_lock:
+        buf = _buffers.get(project_id) or []
+        return {"msgs": len(buf),
+                "chars": sum(len(m.get("content") or "") for m in buf),
+                "dropped": int(_buf_dropped.get(project_id, 0))}
 
 
 def pop_capture(project_id: str) -> List[Dict[str, str]]:
@@ -336,8 +363,25 @@ def open_brain() -> sqlite3.Connection:
     if tok == "simple":
         _ensure_simple_ext(conn)
     conn.executescript(_SCHEMA_V2.format(tokenizer=tok))
+    _ensure_owner_column(conn)
     conn.commit()
     return conn
+
+
+def _ensure_owner_column(conn: sqlite3.Connection) -> None:
+    """owner 三分档列（plan §5.2-4）：``user`` / ``persona`` / ``world``。
+
+    本轮**只加列与默认值**，判定逻辑后置——先让写链有地方落归属，等多人格/
+    worker 隔离真需要时再补判据，避免现在猜一套规则、以后又推翻重来。
+    老库（schema v2 早期）没有该列 → ALTER 补上，默认 ``world``（环境与任务事实）。
+    """
+    try:
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(atoms)").fetchall()}
+        if "owner" not in cols:
+            conn.execute("ALTER TABLE atoms ADD COLUMN owner TEXT NOT NULL DEFAULT 'world'")
+            conn.commit()
+    except Exception:
+        pass
 
 
 # ---- 强度模型（ACT-R 简化；参数配置化，dry-run 先行） ----
@@ -380,12 +424,22 @@ _CONSIST_SYSTEM = (
 
 
 def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
-                source_task: str = "", persona: str = "") -> Dict[str, int]:
-    """任务收尾：buffer 摘要 → 提炼 → 价值/kind/importance → 一致性四态 → brain.db。"""
+                source_task: str = "", persona: str = "",
+                msgs: Optional[List[Dict[str, str]]] = None,
+                allow_episode: bool = True, allow_write: bool = True) -> Dict[str, int]:
+    """任务收尾：buffer 摘要 → 提炼 → 价值/kind/importance → 一致性四态 → brain.db。
+
+    Args:
+        msgs: 已从 capture 缓冲取走的消息（异步写链在入队时取走，worker 后续消费）。
+            ``None`` = 就地 pop（同步路径 / 测试）。
+        allow_episode: 是否允许沉淀 ``kind=episode``。chat（闲聊）模式下 False——
+            流水账会把库填满、把真正的事实挤下去（plan §3.3）。
+        allow_write: 本轮是否"真的干了活"（did_work），透传给 L2 维护。
+    """
     persona = persona or str(_cfg("persona") or "")
     stats: Dict[str, int] = {"extracted": 0, "kept": 0, "stored": 0, "duplicated": 0,
                              "merged": 0, "conflict": 0, "dropped": 0}
-    msgs = pop_capture(project_id)
+    msgs = pop_capture(project_id) if msgs is None else msgs
     if not enabled() or not brain_cfg or len(msgs) < _FLUSH_MIN_ROLES:
         return stats
     digest = "\n".join(f"[{m['role']}] {m['content']}" for m in msgs)[-_FLUSH_MAX_CHARS:]
@@ -396,15 +450,9 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
     atoms = atoms[:_MAX_ATOMS_PER_FLUSH]
     stats["extracted"] = len(atoms)
     if not atoms:
-        try:
-            from omni_core.local import scene_executor
-            scene_executor.maybe_maintain(project_id, brain_cfg, digest,
-                                          task_id=source_task, stats=stats)
-        except Exception:
-            pass
         # 白卷也是"收尾了一次"：巩固的 flush 计数与触发不能只挂在非空提炼上，
         # 否则语音/闲聊为主的会话永远攒不到巩固条件
-        maybe_consolidate(brain_cfg, persona)
+        _flush_tail(project_id, brain_cfg, digest, source_task, stats, persona, allow_write)
         return stats
 
     # 第一段：价值 / kind / importance（一次批量 LLM）
@@ -433,6 +481,13 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
         kind = str(it.get("kind") or "fact")
         if kind not in ("fact", "preference", "rule", "episode"):
             kind = "fact"
+        # chat（闲聊）模式不产 episode：一次性的"聊了什么"沉淀成原子记忆只会挤占
+        # 真正的跨会话事实（plan §3.3）。降级为丢弃而非改 kind——改 kind 等于假装
+        # 它是事实，比不写更糟。
+        if kind == "episode" and not allow_episode:
+            stats["dropped"] += 1
+            stats["episode_dropped"] = stats.get("episode_dropped", 0) + 1
+            continue
         try:
             imp = max(0.0, min(1.0, float(it.get("importance", 0.5))))
         except Exception:
@@ -441,6 +496,9 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
                            "kind": kind, "importance": imp}))
     stats["kept"] = len(kept)
     if not kept:
+        # 一条都没留下也要走收尾：L2 维护与巩固的触发不该被"这轮没沉淀事实"卡住
+        # （闲聊/全部被判为一次性 也是"收尾了一次"，同白卷分支口径）。
+        _flush_tail(project_id, brain_cfg, digest, source_task, stats, persona, allow_write)
         return stats
 
     # 第二段：一致性四态（候选 = 各条 top-3 并集，一次批量 LLM）
@@ -502,15 +560,26 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
     conn.close()
     stats["applied"] = applied
 
-    # L2 场景块：唯一写入口在 scene_executor（本模块只触发，不碰文件）
+    _flush_tail(project_id, brain_cfg, digest, source_task, stats, persona, allow_write)
+    return stats
+
+
+def _flush_tail(project_id: str, brain_cfg: Optional[Dict[str, Any]], digest: str,
+                source_task: str, stats: Dict[str, int], persona: str,
+                allow_write: bool) -> None:
+    """收尾公共尾段：L2 维护（受 did_work 门控）+ 巩固调度。
+
+    三条收尾路径（白卷 / 全被判为一次性 / 正常落库）都走这里——把"该做的事"收成
+    一处，避免某条分支忘了触发巩固（历史上白卷分支就漏过，语音会话因此攒不到巩固）。
+    """
     try:
         from omni_core.local import scene_executor
         scene_executor.maybe_maintain(project_id, brain_cfg, digest,
-                                      task_id=source_task, stats=stats)
+                                      task_id=source_task, stats=stats,
+                                      allow_write=allow_write)
     except Exception:
         pass
     maybe_consolidate(brain_cfg, persona)
-    return stats
 
 
 def _new_id() -> str:
@@ -519,13 +588,15 @@ def _new_id() -> str:
 
 
 def _insert_atom(conn: sqlite3.Connection, rid: str, it: Dict[str, Any],
-                 persona: str, origin: str, source_task: str, now: str) -> None:
+                 persona: str, origin: str, source_task: str, now: str,
+                 owner: str = "world") -> None:
     conn.execute("INSERT OR REPLACE INTO atoms(record_id, content, kind, persona, origin, "
                  "source_task, importance, salience, access_count, last_access, state, "
-                 "version, created, updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                 "version, created, updated, owner) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (rid, it["text"], it.get("kind", "fact"), persona or "", origin or "",
                   source_task or "", float(it.get("importance", 0.5)),
-                  float(it.get("importance", 0.5)), 0, "", "active", 1, now, now))
+                  float(it.get("importance", 0.5)), 0, "", "active", 1, now, now,
+                  owner or "world"))
     conn.execute("INSERT OR REPLACE INTO atoms_fts(record_id, content) VALUES(?,?)",
                  (rid, it["text"]))
 
@@ -939,10 +1010,11 @@ def dump_atoms(limit: int = 200) -> List[Dict[str, Any]]:
     try:
         rows = conn.execute(
             "SELECT record_id, content, kind, persona, origin, source_task, importance, "
-            "salience, access_count, state, superseded_by, updated FROM atoms "
+            "salience, access_count, state, superseded_by, updated, owner FROM atoms "
             "ORDER BY updated DESC LIMIT ?", (limit,)).fetchall()
         keys = ("record_id", "content", "kind", "persona", "origin", "source_task",
-                "importance", "salience", "access_count", "state", "superseded_by", "updated")
+                "importance", "salience", "access_count", "state", "superseded_by", "updated",
+                "owner")
         return [dict(zip(keys, r)) for r in rows]
     except Exception:
         return []

@@ -64,6 +64,31 @@ from omni_core.local.loop.sdk_bridge import SdkBridgeMixin
 from omni_core.local.loop.graph_runner import GraphRunnerMixin
 from omni_core.local.loop.emitter import EmitterMixin
 from omni_core.local.loop.finish import FinishMixin
+from omni_core.local.loop import pool as loop_pool
+
+
+# chat 模式的轻工具集（plan §3.1「轻工具 + dispatch」）：只给"说话 / 记东西 / 看场景 /
+# 派活"四类。重执行（shell/文件/技能回放）与检索类工具在这一档不给——语音场景里
+# 它们既慢又危险，真要干活由 dispatch 交给 worker。可被
+# ``runtime.mode.chat_tools`` 覆盖（列表即白名单）。
+# 元工具（task_done / verify / record / dispatch）由 build_meta_tools 单独装配，
+# 不受此白名单约束——它们是收尾与派发机制，不是"能力"。
+_CHAT_TOOLS = frozenset({
+    "msg_send_text", "msg_send_card", "msg_recent",
+    "memory_remember", "memory_recall", "memory_update", "memory_forget",
+    "memory_overview",
+    "read_scene", "read_task_digest",
+})
+
+
+def _schema_name(schema: Any) -> str:
+    """从 OpenAI function schema 视图取工具名（兼容嵌套 / 平铺两种形态）。"""
+    if not isinstance(schema, dict):
+        return ""
+    fn = schema.get("function")
+    if isinstance(fn, dict):
+        return str(fn.get("name") or "")
+    return str(schema.get("name") or "")
 
 
 class ToolLoop(
@@ -87,6 +112,16 @@ class ToolLoop(
         config_snapshot: Optional[dict] = None,
         agent_id: str = "main",
         tools_enabled: bool = True,
+        # 单链路参数化（plan §3.1）：auto(缺省) | chat | task —— 只改参数不改链路。
+        # chat：轻工具集 + 人格版 system + 可选 voice 模型槽 + 不产 episode；
+        # task/auto：全量工具 + 平台工作台 system + brain 主槽。
+        mode: str = "auto",
+        # 会话激活的人格（plan §3.1「人格 = 会话参数」）：检索/写入/画像三处都按它过滤。
+        # 空 = 用配置里的缺省人格（单人设期的临时实现）。
+        persona: str = "",
+        # 本轮"派发时刻"（API 线程收到请求的时刻）：仅用于接线延迟打点
+        # （llm_timing.since_dispatch_ms），不参与任何决策。
+        dispatch_ts: float = 0.0,
     ):
         # 详细日志通道：内核把 prompt/response/react 旁路推给前端（右栏「运行日志」）
         self.on_debug = on_debug
@@ -108,11 +143,21 @@ class ToolLoop(
         # MCP / 内核元工具全部不暴露），模型请求里没有 tools 字段，物理上无法产生
         # tool_call。内核只接一个布尔，**不感知消息来源**；谁该关由调用方（网关/通道）决定。
         self.tools_enabled = bool(tools_enabled)
+        # 模式（plan §3.1）：只决定参数（工具粗集 / system / 模型槽 / 写链取舍），
+        # 不新增链路——所有模式跑同一个 run_task。
+        _mode = str(mode or "auto").strip().lower()
+        self.mode = _mode if _mode in ("auto", "chat", "task") else "auto"
+        self.persona = str(persona or "")
+        self.dispatch_ts = float(dispatch_ts or 0.0)
+        self.ts_constructed = time.time()
+        self._t_construct0 = time.time()
         _cfg = self._cfg
         _rt = (_cfg.get("runtime") or {})
 
         # 模型路由（2026-09-29）：端点唯一真源是 ~/.omniagent/models.json 目录，
         # 由调用方按槽位解析后注入；worker「目录里选了才启用」。
+        # 传输层由 sdk_model 从组件池取共享 AsyncOpenAI：跨轮复用 httpx 连接池，
+        # 免掉每轮 TCP/TLS 握手——首事件延迟的主要可优化项（per-run 状态仍在本对象上）。
         self.brain = LLMClient(brain_cfg, on_debug=self._dbg("brain"))
         self.brain_model = (brain_cfg or {}).get("model", "?")
         # T3.2：保留大脑端点配置原样，供读取模型级上下文上限（maxInputTokens）
@@ -144,12 +189,10 @@ class ToolLoop(
         _tools_cfg = (_rt.get("tools") or {})
         configure_shell(_rt.get("shell_exec") or {})
         # 外部 MCP：交给 SDK 原生 MCPServer；连接生命周期由 sdk_loop 在运行期负责。
+        # M1 常驻化：server 对象按 mcp.json 内容池化——同配置跨 run 复用**已连接**实例
+        # （实测 connect 从 ~950ms 降到 2.8ms），断连由 sdk_loop 的探活自愈。
         _mcp_cfg = config.load_mcp_config()
-        self.mcp_servers = (
-            build_mcp_servers(_mcp_cfg.get("servers"), log=self._log)
-            if (_mcp_cfg.get("enabled") and self.tools_enabled)
-            else []
-        )
+        self.mcp_servers = loop_pool.mcp_servers(_mcp_cfg) if self.tools_enabled else []
         # 插件装载：扫 plugin_dirs，按各插件自有 enabled 决定注册与否；单包失败只降级。
         # 插件只拿到只读 env_kind，**不拿环境厚句柄**（见 PluginContext）。
         from omni_core.tools.loader import PluginContext, load_plugins
@@ -166,7 +209,17 @@ class ToolLoop(
                 )
             )
         self.registry = build_plugin_registry()
-        self.tool_schemas = self.registry.schemas
+        # 工具粗集（plan §3.1 渐进披露第一档）：mode 决定"能给哪一档"。
+        # chat 只给轻工具 + dispatch（不给技能目录、不给重执行工具）；
+        # auto/task 保持全量。白名单可配置（runtime.mode.chat_tools），缺省见 _CHAT_TOOLS。
+        self.tool_allow: Optional[set] = None
+        if self.mode == "chat":
+            _allow = (_rt.get("mode") or {}).get("chat_tools")
+            self.tool_allow = set(_allow if isinstance(_allow, list) and _allow else _CHAT_TOOLS)
+        # schema 视图是嵌套形态 {"type":"function","function":{"name":...}}——
+        # 直接 s.get("name") 恒 None，chat 档会被过滤成 0（踩过）
+        self.tool_schemas = [s for s in self.registry.schemas
+                             if self._tool_allowed(_schema_name(s))]
         self.env_kind = self.exec.kind
 
         # Layer 0（2026-09-30）：通用派发底座——执行单元注册表 slot→LLMClient。
@@ -207,8 +260,9 @@ class ToolLoop(
             except Exception as e:  # noqa: BLE001
                 self._log(f"executor({_slot} 槽) 初始化跳过: {type(e).__name__}: {e}")
                 continue
-            # 健康检查按槽接管：不可达槽不入表（替代旧 M-fix 门控预判，见 plan §3.5 历史注记）
-            if model_health_ok(_slot_cfg.get("base_url")) is False:
+            # 健康检查按槽接管：不可达槽不入表（替代旧 M-fix 门控预判，见 plan §3.5 历史注记）。
+            # M1：走池的 TTL 缓存——run 路径不再每轮同步等 2s 超时。
+            if loop_pool.health_ok(_slot_cfg.get("base_url")) is False:
                 _dbg = self._dbg("executor")
                 if _dbg:
                     _dbg(f"executor_unavailable:{_slot}", {
@@ -274,7 +328,7 @@ class ToolLoop(
 
         # 系统提示：用当前模型的真实能力 + 工具清单动态组装（模型无关）。
         self.messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": build_system_prompt(self.brain_capabilities, self.tool_schemas, self.reasoning_mode)}
+            {"role": "system", "content": self._base_prompt()}
         ]
         self.step = 0
 
@@ -289,6 +343,45 @@ class ToolLoop(
         self._retry_count = 0       # 无效动作次数（升级 / verify 失败）
         self._failures = 0          # 失败次数（升级 + run 级失败）
         self._recoveries = 0        # 失败后恢复次数（升级后仍有子任务完成）
+
+        # M1 接线归因：构造段耗时落日志（pool 预热后应稳定在个位~几十 ms；
+        # 若此处仍然大，说明还有每 run 的重对象没进池）
+        self._log(f"loop 构造耗时 {int((time.time() - self._t_construct0) * 1000)}ms "
+                  f"(mode={self.mode}, tools={len(self.tool_schemas)}, "
+                  f"mcp={len(self.mcp_servers)})")
+
+    def _tool_allowed(self, name: Optional[str]) -> bool:
+        """工具粗集门（mode 决定档位；None = 全量放行）。
+
+        与 ``tools_enabled`` 的关系：后者是"要不要工具"（外部通道 fail-closed），
+        本方法是"要哪一档"（mode 渐进披露）。两者都与具体平台/来源无关。
+        """
+        if self.tool_allow is None:
+            return True
+        return str(name or "") in self.tool_allow
+
+    def _sdk_tools(self) -> List[Any]:
+        """本轮暴露给 SDK 的工具：池化的包装结果 + mode 粗集过滤。
+
+        ``tools_enabled=False``（外部通道纯对话）→ 空列表（能力门优先于 mode 门）。
+        """
+        if not getattr(self, "tools_enabled", True):
+            return []
+        return [t for t in loop_pool.sdk_tools(self.registry)
+                if self._tool_allowed(getattr(t, "name", ""))]
+
+    def _base_prompt(self, runtime_context: Optional[dict] = None) -> str:
+        """主链 system 基线：mode 决定「人格版」还是「平台工作台版」（plan §3.1）。
+
+        两版共用能力块与运行时上下文注入（换模型 / 换环境同步生效），差别只在纪律
+        模板：chat 版对话优先、要干活就派出去；task/auto 版是干活那套。
+        """
+        if self.mode == "chat":
+            from omni_core.brain.prompt import build_voice_prompt
+
+            return build_voice_prompt(self.brain_capabilities, runtime_context=runtime_context)
+        return build_system_prompt(self.brain_capabilities, self.tool_schemas,
+                                   self.reasoning_mode, runtime_context=runtime_context)
 
     def _log(self, *a):
         if self.verbose:

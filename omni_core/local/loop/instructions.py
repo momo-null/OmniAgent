@@ -256,8 +256,10 @@ class InstructionMixin:
             return ""
         try:
             from omni_core import memory_brain
-            # L1 检索 brain.db（融合排序 + 召回强化），零命中也落观测
-            _persona = str(memory_brain._cfg("persona") or "")
+            # L1 检索 brain.db（融合排序 + 召回强化），零命中也落观测。
+            # persona 优先取**会话激活**的人格（ToolLoop.persona，plan §3.1），
+            # 缺省才回退配置里的单人设值——多人格期靠这一处透传，不改检索语义。
+            _persona = str(getattr(self, "persona", "") or memory_brain._cfg("persona") or "")
             _mt, _meta = memory_brain.inject_text_brain(_persona, query or "")
             if self.on_debug:
                 self.on_debug("memory_inject", {"title": "记忆注入", **_meta})

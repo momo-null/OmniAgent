@@ -20,6 +20,7 @@ from backend.api.routers.helpers import (
     _make_brain_cfg,
     _merge_message_step,
     _merge_thinking_step,
+    _mode_brain_cfg,
     _paths,
     _project_store,
     _read_latest_collected,
@@ -31,6 +32,8 @@ from backend.api.routers.helpers import (
     _trajectory_dir,
     _try_start_task,
     asyncio,
+    outbox_drain,
+    outbox_reset_cursor,
     sse_close,
     sse_open,
     clear_live_snapshot,
@@ -55,7 +58,35 @@ import backend.api.router_runtime as _rt
 
 router = APIRouter(tags=["runtime"])
 
-def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, full_access: Optional[bool] = None, agent_id: str = AGENT_MAIN, model: Optional[str] = None):
+# 注意力预算 / did_work 判定用：这些工具是"机制"或"只读"，不产出事实，因此不算干活。
+# 判定口径（plan §3.3）：本轮有**真实**工具调用（写文件 / 跑命令 / 抓网页 …）或派出去
+# 的任务确实执行了 → did_work=True，L2 场景维护才允许写。
+_META_TOOLS = frozenset({
+    "task_done", "verify", "verify_done", "escalate", "record", "dispatch", "todo_write",
+    "read_scene", "read_task_digest", "load_skill", "search_skill",
+    "memory_remember", "memory_recall", "memory_update", "memory_forget", "memory_overview",
+    "msg_send_text", "msg_send_card", "msg_recent",
+})
+
+
+def _did_work(turn_steps: List[Dict[str, Any]], result: Optional[Dict[str, Any]] = None) -> bool:
+    """本轮是否"真的干了活"（L2 写的唯一门控维度）。
+
+    按 did_work 而不是按入口模式：闲聊不产场景，但语音派出去的任务照常维护场景
+    （那些活的 did_work 由 worker 那一轮决定）。
+    """
+    for s in turn_steps or []:
+        if s.get("type") != "tool_call":
+            continue
+        name = str(s.get("name") or "")
+        if name and name not in _META_TOOLS:
+            return True
+    if list((result or {}).get("dispatch_plan") or []):
+        return True       # 派了活（handoff）：任务本身算产出
+    return False
+
+
+def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, full_access: Optional[bool] = None, agent_id: str = AGENT_MAIN, model: Optional[str] = None, mode: str = "auto", persona: str = ""):
     """统一 agent 入口（单入口处理闲聊 + 双 agent 任务执行）。
 
     一个会话 = 一个 task（首条消息由调用方在外部建好 task 并传入 task_id）。
@@ -74,6 +105,10 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     ``model``：本次运行的模型选择 ``"<provider_id>/<model_id>"``（模型路由，2026-09-29），
     仅作用于 main 槽位；空 = 用目录默认 / 配置。
     """
+    # 接线延迟打点起点（plan §2 验收项）：从"收到派发"到"请求发出"这段耗时要能量出来
+    _ts_entry = time.time()
+    # lane（plan §4）：mode=task 是"干活"，其余是"对话"。只影响互斥与回播，不改链路。
+    _lane = "work" if str(mode or "").lower() == "task" else "chat"
     # 阶段 1：运行体句柄存于 RuntimeManager 复合键 (task_id, agent_id)，不再用全局 _loop
     _last_answer = ""  # 累积大脑最后一段口播，作为结尾「结果框」内容
     loop = None  # ToolLoop 句柄（finally 收尾补投需要；构造失败时为 None）
@@ -91,7 +126,8 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     try:
         from omni_core.local.loop import ToolLoop, TaskSpec
 
-        brain_cfg, executor_cfg = _make_brain_cfg(model)
+        # mode 决定模型槽（chat → voice 槽，缺省回退主槽），链路本身不变
+        brain_cfg, executor_cfg = _mode_brain_cfg(model, mode)
         # 阶段 0.5：运行级配置快照——一次性加载，运行期内 ToolLoop 不再重读全局 config
         cfg = config.load_config() or {}
 
@@ -139,6 +175,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         loop = ToolLoop(brain_cfg, executor_cfg=executor_cfg, verbose=True,
                         full_access=full_access,
                         config_snapshot=cfg, agent_id=agent_id,
+                        mode=mode, persona=persona, dispatch_ts=_ts_entry,
                         on_debug=_debug_push,
                         on_thinking=_on_thinking, on_tool_call=_on_tool_call,
                         on_llm_delta=_on_llm_delta)
@@ -246,15 +283,26 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         if _rec_f is not None and getattr(_rec_f, "force_interrupted", False):
             _force = True
             _rec_f.force_interrupted = False
-        # TAM 记忆层:任务收尾触发提炼+判重+落库(buffer 里的本会话消息;异常静默)
-        # force 打断的轮次跳过：打断要快，不背 LLM 提炼的尾巴；buffer 保留，随下一轮正常收口
+        # 记忆写链**异步化**（plan §3.3）：收尾只入队，不进主链路。
+        # flush_brain 是 3 次 LLM（提炼 / 价值判 / 一致性判）+ L2 维护（墙钟上限 300s），
+        # 同步跑就是语音每句话都要吃的尾巴（实测 0~7.4s，最坏 45s+）。
+        # force 打断的轮次跳过入队：打断要快；消息留在 capture 缓冲里，随下一轮正常收口。
         if not _force:
             try:
-                from omni_core import memory_brain
+                from omni_core import memory_writer
                 _pid = TaskStore.project_of(task_id)
-                # 收尾：提炼 → 两段判 → brain.db；随后触发 L2 维护与巩固
-                _mstat = memory_brain.flush_brain(_pid, brain_cfg, source_task=task_id)
-                _debug_push("memory_flush", {"title": "记忆沉淀", **_mstat})
+                _dw = _did_work(turn_steps, result)
+                memory_writer.enqueue(
+                    _pid, brain_cfg, source_task=task_id,
+                    persona=getattr(loop, "persona", "") or persona,
+                    did_work=_dw,
+                    # chat（闲聊）不产 episode：流水账会把库填满、把真事实挤下去
+                    allow_episode=(str(mode or "auto").lower() != "chat"),
+                    on_done=lambda _st: _debug_push(
+                        "memory_flush", {"title": "记忆沉淀(异步)", **_st}),
+                )
+                _debug_push("memory_enqueue", {"title": "记忆入队", "did_work": _dw,
+                                               "mode": mode, "pending": memory_writer.pending()})
             except Exception:
                 pass
         # 把本轮执行轨迹（思考 + 工具调用）连同结论，作为「归属 agent 的一整轮」持久化：
@@ -306,6 +354,19 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         if conclusion or turn_steps:
             _push("agent", conclusion, extra=_extra)
             _append_assistant(conclusion, extra=_extra)
+        # work lane 完成回播（plan §4）：干活的任务跑完，给主人一句话（可播报）。
+        # 带 extra.announce，语音桥（旁路订阅者）据此决定要不要念出来；
+        # 正文一句话，不刷屏——完整细节留在该任务自己的对话流里。
+        if _lane == "work" and conclusion:
+            try:
+                _one = (conclusion or "").strip().splitlines()[0][:80]
+                if _one:
+                    push_chat("system", _one,
+                              extra={"announce": True, "lane": "work",
+                                     "task_id": task_id},
+                              task_id=task_id)
+            except Exception:
+                pass
     except Exception as e:
         tb = traceback.format_exc()
         push_chat("agent", f"❌ 对话循环失败：{type(e).__name__}: {e}",
@@ -353,15 +414,21 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
 def _sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-async def _stream_gen(task_id: str = ""):
+async def _stream_gen(task_id: str = "", sub: str = ""):
     """SSE 流：按 task_id 订阅，只推送该 task 的事件。
 
     task_id 为空（全局订阅，前端首屏默认）时，透明跟随「当前正在运行」的 task 的
     专属 outbox —— 否则前端在拿到 task_id 之前（status 事件到达前的窗口）会收不到
     任何 chat/thinking/toolcall 事件，表现为「对话区全程无输出」。无运行中的 task
     时退化为空全局 outbox（兼容）。
+
+    ``sub``（plan M3「outbox 多播扇出」）：非空 = **旁路订阅者**（语音桥 / 第二屏）。
+    它不清空 outbox，只按自己的 seq 游标取新增，因此可以和前端主订阅并存，
+    两边都能拿到完整事件流，不再互相抢事件。
     """
     sub_id = task_id or "_global"
+    _sub = str(sub or "").strip()
+    _eff_last = ""
     sse_open()
     try:
         while True:
@@ -371,46 +438,23 @@ async def _stream_gen(task_id: str = ""):
                 rid = _running_task_id()
                 if rid:
                     eff = rid
-            box = _ensure_outbox(eff)
+            _eff_last = eff
+            parts = outbox_drain(eff, _sub)
 
-            # 1c) thinking outbox（对话区实时「深度思考」块）
-            tmsgs = list(box["thinking"])
-            box["thinking"].clear()
-            for m in tmsgs:
+            # 顺序：思考 → 口播 → 工具卡 → 审批 → chat 殿后（保证沉在对话最末）→ debug
+            for m in parts.get("thinking", []):
                 yield _sse("thinking", m)
-
-            # 1e) message outbox（对话区实时「口播」气泡，真流式增量）
-            mmsgs = list(box["message"])
-            box["message"].clear()
-            for m in mmsgs:
+            for m in parts.get("message", []):
                 yield _sse("message", m)
-
-            # 1d) toolcall outbox（对话区实时「工具调用」卡片）
-            tcmsgs = list(box["toolcall"])
-            box["toolcall"].clear()
-            for m in tcmsgs:
+            for m in parts.get("toolcall", []):
                 yield _sse("toolcall", m)
-
-            # 1f) S2 审批：approval（推卡）+ approval_resolved（决议/超时/取消）
-            amsgs = list(box["approval"])
-            box["approval"].clear()
-            for m in amsgs:
+            for m in parts.get("approval", []):
                 yield _sse("approval", m)
-            armsgs = list(box["approval_resolved"])
-            box["approval_resolved"].clear()
-            for m in armsgs:
+            for m in parts.get("approval_resolved", []):
                 yield _sse("approval_resolved", m)
-
-            # 1) chat outbox（task-scoped，含结尾结果框 / system 状态）殿后，确保沉在对话最末
-            chat_msgs = list(box["chat"])
-            box["chat"].clear()
-            for m in chat_msgs:
+            for m in parts.get("chat", []):
                 yield _sse("chat", m)
-
-            # 1b) debug outbox（task-scoped，旁路推送，右栏日志）
-            dmsgs = list(box["debug"])
-            box["debug"].clear()
-            for m in dmsgs:
+            for m in parts.get("debug", []):
                 yield _sse("debug", m)
 
             # 2) status + 数据快照（task-scoped）
@@ -457,6 +501,12 @@ async def _stream_gen(task_id: str = ""):
     except asyncio.CancelledError:
         return
     finally:
+        # 旁路订阅者断开：清掉游标，下次重连从当前窗口续读（不重放整段历史）
+        if _sub:
+            try:
+                outbox_reset_cursor(_eff_last or sub_id, _sub)
+            except Exception:
+                pass
         sse_close()
 
 @router.get("/live")
@@ -481,15 +531,19 @@ async def live(task_id: str = ""):
     return JSONResponse(data)
 
 @router.get("/stream")
-async def stream(task_id: str = ""):
-    """SSE 流。支持 ?task_id=xxx 订阅特定 task 的事件（task-scoped）。"""
+async def stream(task_id: str = "", sub: str = ""):
+    """SSE 流。``?task_id=xxx`` 订阅特定 task；``?sub=voice`` 声明旁路订阅者（多播）。
+
+    ``sub`` 为空 = 主订阅者（前端，消费即清空）；非空 = 旁路订阅者（语音桥 / 第二屏），
+    按自己的游标读、不清空，两者可同时订阅同一 task（plan M3）。
+    """
     if task_id:
         paths = _paths()
         try:
             paths.validate_identifier(task_id, "task_id")
         except ValueError:
             return JSONResponse({"ok": False, "error": "task_id 格式不合法"}, status_code=422)
-    return StreamingResponse(_stream_gen(task_id), media_type="text/event-stream",
+    return StreamingResponse(_stream_gen(task_id, sub), media_type="text/event-stream",
                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @router.post("/stop")
@@ -648,6 +702,17 @@ async def api_chat(request: Request):
             except Exception:
                 pass
 
+    # 会话人格（plan §3.1「人格 = 会话参数」）：显式请求 > 任务持久化 > 配置缺省。
+    # 持久化的目的是 **handoff 透传**：chat 模式派出去的任务、以及同一个 task 的后续
+    # 轮次，都继承同一个人格，否则语音里交代的事会落成默认人格的记忆。
+    _persona = str(req.persona or "").strip() or str((meta or {}).get("persona") or "")
+    if req.persona and _persona != str((meta or {}).get("persona") or ""):
+        try:
+            TaskStore.update(task_id, persona=_persona)
+            meta = TaskStore.get(task_id) or meta
+        except Exception:
+            pass
+
     # P2.1: 持久化会话历史——每条 user/assistant 消息写 jsonl
     project_id = meta.get("project_id", "")
     session_id = meta.get("session_id", "")
@@ -657,8 +722,11 @@ async def api_chat(request: Request):
         except Exception:
             pass
 
+    # lane（plan §4）：mode=task 走 work lane，其余走 chat lane。二者互不阻塞
+    # （干活期间照常聊天），但同一个 task 永远只允许一个 run。
+    _lane = "work" if req.mode == "task" else "chat"
     # 原子标记 task 为 running（阶段 0.5：复合键 (task_id, "main")）
-    if not _try_start_task(task_id, AGENT_MAIN):
+    if not _try_start_task(task_id, AGENT_MAIN, lane=_lane):
         _rid = _rt._running_task_id()
         return JSONResponse({"ok": False, "error": f"已有任务在运行（task_id={_rid}），请等待结束或先停止"}, status_code=409)
 
@@ -670,8 +738,10 @@ async def api_chat(request: Request):
 
     push_chat("user", last_user, task_id=task_id)
     threading.Thread(target=_rt._dispatch_chat,
-                     args=(task_id, messages, max_steps, full_access, AGENT_MAIN, req.model), daemon=True).start()
-    return JSONResponse({"ok": True, "task_id": task_id, "msg": "已下发"})
+                     args=(task_id, messages, max_steps, full_access, AGENT_MAIN, req.model,
+                           req.mode, _persona), daemon=True).start()
+    return JSONResponse({"ok": True, "task_id": task_id, "msg": "已下发",
+                         "mode": req.mode, "persona": _persona})
 
 @router.post("/wake")
 async def api_wake(request: Request):

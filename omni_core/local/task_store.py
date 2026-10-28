@@ -113,7 +113,10 @@ class TaskStore:
     @staticmethod
     def update(task_id: str, **fields) -> Dict[str, Any]:
         """更新白名单内的任务元数据。"""
-        allowed = {"objective", "done_when", "state", "success", "runs", "finished_at", "project_id", "session_id", "full_access"}
+        allowed = {"objective", "done_when", "state", "success", "runs", "finished_at", "project_id", "session_id", "full_access",
+                   # 人格（plan §3.1）：会话激活后持久化，使 handoff 出去的任务与后续轮次
+                   # 继承同一人格；owner 是同源的归属标记（user/persona/world，本轮只存不判）。
+                   "persona", "owner"}
         unknown = set(fields) - allowed
         if unknown:
             raise ValueError(f"不允许更新 task 字段: {', '.join(sorted(unknown))}")

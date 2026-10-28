@@ -570,10 +570,15 @@ def maintain_scenes(project_id: str, brain_cfg: Optional[Dict[str, Any]], eviden
 # ---------------------------------------------------------------- 触发薄壳(任务收尾)
 
 def maybe_maintain(project_id: str, brain_cfg: Optional[Dict[str, Any]], digest: str,
-                   task_id: str = "", stats: Optional[Dict[str, Any]] = None) -> None:
+                   task_id: str = "", stats: Optional[Dict[str, Any]] = None,
+                   allow_write: bool = True) -> None:
     """任务收尾触发 L2 维护:gate + 900s 水位 + 证据组装,机制全在 maintain_scenes。
 
     - gate:``runtime.knowledge.memory.enabled``(与 L1 同一总开关)
+    - ``allow_write``:本轮"是否真的干了活"(plan §3.3 ``did_work``)。False → 直接返回,
+      **不跑场景 agent 也不推进水位**。门控维度是"有没有产出事实",不是入口模式:
+      闲聊/纯对话不产场景,语音派出去的任务照常维护(由 worker 那轮的 did_work 决定)。
+      这条也是语音体验的硬依赖——场景 agent 是墙钟最长 300s 的循环,绝不能挂在闲聊尾巴上。
     - 水位:``scene_index.json`` 的 last_maintain_ts;空维护不推进(对齐 TAM checkpoint)
     - 带外信号:场景 agent 的 ``[PERSONA_UPDATE_REQUEST]`` → brain meta,下次巩固强制画像重写
     - 任何异常静默,绝不阻断收尾
@@ -582,6 +587,9 @@ def maybe_maintain(project_id: str, brain_cfg: Optional[Dict[str, Any]], digest:
     try:
         from omni_core import memory_brain
         if not memory_brain.enabled() or not project_id or not brain_cfg:
+            return
+        if not allow_write:
+            stats["l2_skipped_no_work"] = 1
             return
         last = get_watermark(project_id)
         if last:

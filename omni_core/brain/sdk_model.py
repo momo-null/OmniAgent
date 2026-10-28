@@ -52,12 +52,15 @@ class _MalformedResponseGuard(Model):
             yield chunk
 
 
-def build_sdk_model(brain_cfg: dict, timeout: float | None = None) -> Model:
+def build_sdk_model(brain_cfg: dict, timeout: float | None = None,
+                    client: object | None = None) -> Model:
     """由 LLMClient 风格的 cfg 构造 SDK Model。
 
     Args:
         brain_cfg: 含 base_url / model / api_key（或 api_key_env）/ proxy 的 dict。
         timeout: 单次请求超时（秒）；None 则用 openai 默认。
+        client: 可选的**共享** ``AsyncOpenAI``（loop 组件池提供，连接保活）。
+            传入时不再新建传输层；``None`` = 行为与池化前完全一致。
     """
     base_url = str(brain_cfg["base_url"]).rstrip("/")
     model = brain_cfg["model"]
@@ -72,13 +75,23 @@ def build_sdk_model(brain_cfg: dict, timeout: float | None = None) -> Model:
             f"或设置环境变量 {env_key!r}。"
         )
 
-    kwargs = {"base_url": base_url, "api_key": api_key}
-    if timeout:
-        kwargs["timeout"] = timeout
-    # 代理：每个提供方可独立配置；留空/缺失 = 直连。鉴权按通用写法嵌进 URL
-    # （http://user:pass@host:port），由 httpx 原生解析，无需单独字段。
-    proxy = str(brain_cfg.get("proxy") or "").strip()
-    if proxy:
-        kwargs["http_client"] = httpx.AsyncClient(proxy=proxy)
-    client = AsyncOpenAI(**kwargs)
+    if client is None:
+        # 传输层池化（M1 常驻化）：同端点/同 key/同超时复用同一个 AsyncOpenAI，
+        # 跨轮命中 httpx 连接池 → 免掉每轮 TCP/TLS 握手。池不可用则落回自建（零回归）。
+        try:
+            from omni_core.local.loop import pool as _loop_pool
+
+            client = _loop_pool.shared_openai(brain_cfg, timeout)
+        except Exception:
+            client = None
+    if client is None:
+        kwargs = {"base_url": base_url, "api_key": api_key}
+        if timeout:
+            kwargs["timeout"] = timeout
+        # 代理：每个提供方可独立配置；留空/缺失 = 直连。鉴权按通用写法嵌进 URL
+        # （http://user:pass@host:port），由 httpx 原生解析，无需单独字段。
+        proxy = str(brain_cfg.get("proxy") or "").strip()
+        if proxy:
+            kwargs["http_client"] = httpx.AsyncClient(proxy=proxy)
+        client = AsyncOpenAI(**kwargs)
     return _MalformedResponseGuard(OpenAIChatCompletionsModel(model=model, openai_client=client))

@@ -16,9 +16,10 @@ def wake_env(monkeypatch):
     captured = []
     monkeypatch.setattr(rr, "_dispatch_chat",
                         lambda task_id, messages, max_steps, full_access=None,
-                        agent_id="main": captured.append(
+                        agent_id="main", model=None, mode="auto", persona="": captured.append(
                             {"task_id": task_id, "messages": messages,
-                             "max_steps": max_steps, "agent_id": agent_id}))
+                             "max_steps": max_steps, "agent_id": agent_id,
+                             "mode": mode, "persona": persona}))
     started = []
 
     def _cleanup():

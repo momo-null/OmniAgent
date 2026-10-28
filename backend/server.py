@@ -98,6 +98,15 @@ async def lifespan(app: FastAPI):
         logger.info("S2 审批 sink 已注册（SSE 推卡 + REST 决议）")
     except Exception as e:  # 注册失败不阻断启动（回落 AutoDeny，安全侧）
         logger.warning("注册 S2 审批 sink 失败（将回落 AutoDeny）: %s", e)
+    # M1 常驻化：启动期后台预热 MCP 连接（run 路径零连接成本；plan §2 验收
+    # 「派发→请求 <100ms」要求首个 run 也不付 1s 连接税）。后台线程，不拖慢启动。
+    try:
+        from omni_core.local.loop.pool import prime_mcp
+
+        prime_mcp()
+        logger.info("loop 组件池：MCP 启动预热已发起（后台线程）")
+    except Exception as e:  # 预热失败不阻断启动
+        logger.warning("MCP 启动预热失败（已忽略）: %s", e)
     yield
     # P1 工具插件：进程退出前依次调用各插件 shutdown()（异常吞掉，不阻断退出）。
     try:
