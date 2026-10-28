@@ -402,6 +402,9 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
                                           task_id=source_task, stats=stats)
         except Exception:
             pass
+        # 白卷也是"收尾了一次"：巩固的 flush 计数与触发不能只挂在非空提炼上，
+        # 否则语音/闲聊为主的会话永远攒不到巩固条件
+        maybe_consolidate(brain_cfg, persona)
         return stats
 
     # 第一段：价值 / kind / importance（一次批量 LLM）

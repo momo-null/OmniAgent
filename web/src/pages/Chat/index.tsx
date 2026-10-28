@@ -16,7 +16,6 @@ import {
 } from "@mui/material";
 import SendOutlinedIcon from "@mui/icons-material/SendOutlined";
 import StopOutlinedIcon from "@mui/icons-material/StopOutlined";
-import ArrowUpwardOutlinedIcon from "@mui/icons-material/ArrowUpwardOutlined";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
 import ExpandMoreOutlinedIcon from "@mui/icons-material/ExpandMoreOutlined";
@@ -458,7 +457,7 @@ const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false
 });
 
 export default function Chat() {
-  const { messages, running, sendMessage, enqueueMessage, removeQueuedAt, sendQueuedNow, queuedMessages, stopTask, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval, taskObjectives, dockOpen, openDockMenu, closeDock } = useTaskStore();
+  const { messages, running, sendMessage, injectOrQueue, removeQueuedAt, queuedMessages, stopTask, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval, taskObjectives, dockOpen, openDockMenu, closeDock } = useTaskStore();
   const [draft, setDraft] = useState("");
   // 助手名：从角色卡 frontmatter 解析（缺省 OmniAgent），用于顶栏与消息标签
   const [assistantName, setAssistantName] = useState("OmniAgent");
@@ -567,11 +566,12 @@ export default function Chat() {
     }
   }, [draft]);
 
-  // 运行中发送 = 排队并注入本轮（M8 软注入，不打断当前轮，模型下一请求边界可见）
-  const handleEnqueue = () => {
+  // 运行中发送 = 注入本轮（M8 软注入，不打断当前轮）；注入被拒（收尾窗口）才排队兜底，
+  // 轮次结束自动作为新消息发出——两路互斥，不双重投递
+  const handleInjectOrQueue = () => {
     const text = draft.trim();
     if (!text || !running) return;
-    enqueueMessage(text);
+    injectOrQueue(text);
     setDraft("");
   };
 
@@ -579,8 +579,7 @@ export default function Chat() {
     const text = draft.trim();
     if (!text) return;
     if (running) {
-      // 运行中普通消息被禁用，回车/发送键转为排队注入（不打断；点条目上的「立即」才打断）
-      handleEnqueue();
+      handleInjectOrQueue();
       return;
     }
     setDraft("");
@@ -701,8 +700,7 @@ export default function Chat() {
             flexShrink: 0,
           }}
         >
-          {/* 排队条目 = 本轮注入列表（M8 软注入）：发送即注入本轮，模型下一请求边界可见；
-              「立即」= 打断当前轮并作为新消息发出；本轮结束自动清空 */}
+          {/* 排队条目：仅当注入被拒（收尾窗口/无运行体）时出现，本轮结束自动作为新消息发出 */}
           {queuedMessages.length > 0 && (
             <Box sx={{ px: 1, pt: 0.5 }}>
               {queuedMessages.map((q, i) => (
@@ -714,21 +712,11 @@ export default function Chat() {
                   }}>
                     {q}
                   </Typography>
-                  <Button size="small" startIcon={<ArrowUpwardOutlinedIcon />}
-                    onClick={() => sendQueuedNow(i, fullAccess, modelSel || undefined)}
-                    title="打断当前轮并作为新消息立即发出"
-                    sx={{
-                      flexShrink: 0, minHeight: 0, py: 0.25, px: 1, fontSize: 12,
-                      color: "text.primary", border: "1px solid", borderColor: "divider",
-                      borderRadius: 2, textTransform: "none",
-                    }}>
-                    立即
-                  </Button>
                   <IconButton size="small" title="复制到输入框修改后重新发送" aria-label="编辑排队消息"
                     onClick={() => { setDraft(q); removeQueuedAt(i); }}>
                     <EditOutlinedIcon fontSize="small" />
                   </IconButton>
-                  <IconButton size="small" title="移除条目（已注入本轮的内容不可撤回）" aria-label="移除排队条目"
+                  <IconButton size="small" title="删除排队消息" aria-label="删除排队消息"
                     onClick={() => removeQueuedAt(i)}>
                     <DeleteOutlinedIcon fontSize="small" />
                   </IconButton>
@@ -737,7 +725,7 @@ export default function Chat() {
             </Box>
           )}
           <TextField
-            placeholder={running ? "继续输入以排队后续修改（注入本轮不打断；点条目上的「立即」强制打断发出）" : `给 ${assistantName} 发消息…`}
+            placeholder={running ? "运行中：发送 = 注入本轮（不打断）；收尾期发送将排队、本轮结束后自动发出" : `给 ${assistantName} 发消息…`}
             multiline
             minRows={3}
             maxRows={10}
@@ -810,13 +798,13 @@ export default function Chat() {
               {/* 单按钮上下文逻辑：
                   - 非运行态：始终「发送」（空输入禁用）
                   - 运行态 + 空输入：显示「停止」（红）
-                  - 运行态 + 有输入：显示「发送」（点即排队并注入本轮，不打断；
-                    打断请点排队条目上的「立即」） */}
+                  - 运行态 + 有输入：显示「发送」（点即注入本轮，不打断；
+                    注入被拒时自动转排队，本轮结束后自动发出） */}
               <IconButton
-                onClick={running ? (draft.trim() ? handleEnqueue : stopTask) : handleSend}
+                onClick={running ? (draft.trim() ? handleInjectOrQueue : stopTask) : handleSend}
                 disabled={!running && !draft.trim()}
                 aria-label={running && !draft.trim() ? "停止" : "发送"}
-                title={running && !draft.trim() ? "停止当前任务" : (running ? "排队并注入本轮（不打断当前轮）" : "发送")}
+                title={running && !draft.trim() ? "停止当前任务" : (running ? "注入本轮（不打断当前轮）" : "发送")}
                 sx={{
                   width: 36, height: 36, flexShrink: 0,
                   bgcolor: running && !draft.trim() ? "error.main" : "primary.main",

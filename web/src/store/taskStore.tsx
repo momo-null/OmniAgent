@@ -52,14 +52,13 @@ interface TaskStoreValue {
   sendMessage: (text: string, fullAccess?: boolean, model?: string) => Promise<void>;
   // 立即发送（barge-in）：打断同一 task 的当前轮并立即发出（后端 /chat force=true）
   forceSendMessage: (text: string, fullAccess?: boolean, model?: string) => Promise<void>;
-  // 排队消息：运行中发送 → 入队（UI 显示为输入框上方条目）；轮末自动接力发出队首
+  // 排队条目：仅当注入被拒（收尾窗口/无运行体）时兜底入队；轮次结束自动作为新消息发出
   queuedMessages: string[];
-  enqueueMessage: (text: string) => void;
   removeQueuedAt: (index: number) => void;
-  // 「立即」：指定排队条目移出队列并强制发出（打断当前轮）
-  sendQueuedNow: (index: number, fullAccess?: boolean, model?: string) => void;
-  // M8 软注入：运行中向 agent 插话（不打断当前步骤，下一轮可见）；失败回显系统消息
-  injectMessage: (text: string) => Promise<void>;
+  // 运行中发送入口：先注入本轮（M8）；注入被拒才排队，两路互斥绝不双重投递
+  injectOrQueue: (text: string) => void;
+  // M8 软注入：运行中向 agent 插话（不打断当前步骤，下一请求边界可见）；返回是否成功
+  injectMessage: (text: string) => Promise<boolean>;
   stopTask: () => void;
 
   maxSteps: number;
@@ -166,10 +165,11 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   const esRef = useRef<EventSource | null>(null);
   const runningRef = useRef(false);
   runningRef.current = running;
+  // 排队队列：ref 是唯一权威（接力/入队同步改 ref 再镜像 state，防 SSE 连帧双发）
   const queuedRef = useRef<string[]>([]);
-  queuedRef.current = queuedMessages;
-  // 「立即」防抖：打断性操作，连点只认第一次（否则第二次会把刚开的新轮也打断）
-  const lastSendNowAtRef = useRef(0);
+  const sendMessageRef = useRef<((text: string, fullAccess?: boolean, model?: string) => Promise<void>) | null>(null);
+  const prevRunningRef = useRef(false);  // status false→true = 新 run 启动（清过程流时机）
+  const pumpTimerRef = useRef<number | null>(null);  // 接力防抖：一轮只发一条，等 status 确认
   const messagesRef = useRef<ChatMsg[]>([]);
   messagesRef.current = messages;
   const currentTaskIdRef = useRef<string>("");
@@ -279,7 +279,13 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     try { localStorage.setItem("omniagent.currentTaskId", taskId); } catch { /* ignore */ }
     clearProcessLogs();
     setPendingApprovals([]);
-    setQueuedMessages([]); // 排队消息不跨会话携带
+    queuedRef.current = []; // 排队消息不跨会话携带（ref 权威 + state 镜像）
+    setQueuedMessages([]);
+    if (pumpTimerRef.current != null) {
+      clearTimeout(pumpTimerRef.current);
+      pumpTimerRef.current = null;
+    }
+    prevRunningRef.current = false;
     loadHistory(taskId);
     // 回放进行中这一轮的实时过程（见 seedLiveLogs 注释）
     seedLiveLogs(taskId);
@@ -516,8 +522,15 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         const s = JSON.parse((ev as MessageEvent).data) as {
           running: boolean; task_id: string; project_id: string;
         };
+        const wasRunning = prevRunningRef.current;
+        prevRunningRef.current = s.running;
         setRunning(s.running);
         setSnapshot((prev) => ({ ...prev, running: s.running, task_id: s.task_id, project_id: s.project_id }));
+        // 新 run 启动（false→true）：清上一轮残留过程流。block_id 已带 run 级后缀，
+        // 这里是双保险——链式续跑不经 sendMessage，没有别的清理时机
+        if (!wasRunning && s.running) {
+          clearProcessLogs();
+        }
         if (s.task_id) {
           // 仅在「未绑定具体会话」（全局/新建对话视图，currentTaskId 为空）时，
           // 才随 status 自动切到运行中的 task 并回拉历史；一旦已绑定到某个具体会话，
@@ -531,8 +544,22 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
           // 任务终态：不允许还有卡悬着（后端已置 cancelled，前端兜底清空）
           setPendingApprovals([]);
           refreshTasks();
-          // 排队条目 = 本轮注入列表：本轮结束即清空（已注入消费或已随会话历史落库）
-          setQueuedMessages([]);
+          // 排队兜底接力：注入被拒而排队的消息，本轮结束自动作为新消息发出
+          // （正常注入路径不排队，这里只处理兜底队列；同步改 ref 防 SSE 连帧双发）
+          const q = queuedRef.current;
+          // 防抖延时：给后端收尾补投让路（它若已开跑则 running=true，这里直接放弃）；
+          // 同时一轮只接力一条，等下一轮 status 确认后再续
+          if (q.length && pumpTimerRef.current == null) {
+            pumpTimerRef.current = window.setTimeout(() => {
+              pumpTimerRef.current = null;
+              if (runningRef.current) return;
+              const cur = queuedRef.current;
+              if (!cur.length) return;
+              queuedRef.current = cur.slice(1);
+              setQueuedMessages(queuedRef.current);
+              sendMessageRef.current?.(cur[0]);
+            }, 600);
+          }
         }
       } catch {
         /* ignore */
@@ -622,6 +649,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       // running 由 SSE status 事件驱动，不在这里清
     }
   }, [maxSteps, pushMessage]);
+  sendMessageRef.current = sendMessage;
 
   const stopTask = useCallback(() => {
     runtimeApi.stop().catch(() => {});
@@ -655,45 +683,45 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [maxSteps, pushMessage]);
 
-  // M8 软注入：运行中插入人类纠偏，不打断当前 turn，主 agent 下一轮可见。
-  // 成功后后端经 SSE 推一条 system 消息「💬 已注入指示：…」自动上屏；这里只负责发请求。
-  const injectMessage = useCallback(async (text: string) => {
+  // M8 软注入：运行中插入人类纠偏，不打断当前 turn，主 agent 下一请求边界可见。
+  // 成功后后端经 SSE 推一条 system 消息「💬 已注入指示：…」自动上屏。
+  // 返回是否成功——失败（收尾窗口/无运行体被 409）由调用方转排队兜底。
+  const injectMessage = useCallback(async (text: string): Promise<boolean> => {
     const content = text.trim();
-    if (!content) return;
+    if (!content) return false;
     try {
       await runtimeApi.inject({ text: content, task_id: currentTaskIdRef.current });
+      return true;
     } catch (err) {
       const e = err as { response?: { data?: { error?: string } }; message?: string };
       const msg = e?.response?.data?.error || e?.message || "注入失败";
       pushMessage({ role: "system", text: `（注入失败：${msg}）`, ts: Date.now() });
+      return false;
     }
   }, [pushMessage]);
 
-  // 排队 = 注入本轮（M8 软注入）：入队展示 + 立即调 /inject，模型下一请求边界可见，不打断当前轮。
-  // （定义在 injectMessage 之后：useCallback deps 数组是即时求值的，前置引用会踩 TDZ）
+  // 排队兜底：仅注入被拒时入队（ref 权威 + state 镜像），轮次结束由接力自动发出。
+  // 正常注入路径不排队——避免「已注入又排队/立即再发一次」的双重投递混乱。
   const enqueueMessage = useCallback((text: string) => {
     const content = text.trim();
     if (!content) return;
-    setQueuedMessages((prev) => [...prev, content]);
-    injectMessage(content);
-  }, [injectMessage]);
-
-  const removeQueuedAt = useCallback((index: number) => {
-    // 仅移除条目展示——已注入本轮的指示无法撤回，会随下一请求边界/会话历史自然生效
-    setQueuedMessages((prev) => prev.filter((_, i) => i !== index));
+    queuedRef.current = [...queuedRef.current, content];
+    setQueuedMessages(queuedRef.current);
   }, []);
 
-  // 「立即」：该条移出队列并强制打断当前轮、作为新消息立即发出
-  // （已注入但未被消费的指示随旧轮作废；已消费的等于显式重发）
-  const sendQueuedNow = useCallback((index: number, fullAccess?: boolean, model?: string) => {
-    const item = queuedRef.current[index];
-    if (item == null) return;
-    const now = Date.now();
-    if (now - lastSendNowAtRef.current < 800) return;
-    lastSendNowAtRef.current = now;
-    setQueuedMessages((prev) => prev.filter((_, i) => i !== index));
-    forceSendMessage(item, fullAccess, model);
-  }, [forceSendMessage]);
+  const removeQueuedAt = useCallback((index: number) => {
+    queuedRef.current = queuedRef.current.filter((_, i) => i !== index);
+    setQueuedMessages(queuedRef.current);
+  }, []);
+
+  // 运行中发送入口：先注入本轮；被拒才排队兜底（轮末自动接力，见 status 监听）。
+  const injectOrQueue = useCallback((text: string) => {
+    const content = text.trim();
+    if (!content) return;
+    void injectMessage(content).then((ok) => {
+      if (!ok) enqueueMessage(content);
+    });
+  }, [injectMessage, enqueueMessage]);
 
   // S2 审批决议：REST 决议；乐观移卡（approval_resolved 事件与 /live 兜底对齐）
   const decideApproval = useCallback(async (approvalId: string, action: "approve" | "deny", remember?: boolean) => {
@@ -791,7 +819,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       running,
       messages, pushMessage, clearMessages,
       snapshot, setSnapshot,
-      connectStream, disconnectStream, sendMessage, forceSendMessage, enqueueMessage, removeQueuedAt, sendQueuedNow, queuedMessages, injectMessage, stopTask,
+      connectStream, disconnectStream, sendMessage, forceSendMessage, injectOrQueue, removeQueuedAt, queuedMessages, injectMessage, stopTask,
       maxSteps, setMaxSteps,
       fullAccessByTask, setFullAccessForTask,
       pendingApprovals, decideApproval,
@@ -805,7 +833,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath,
       artifactsVersion, bumpArtifactsVersion,
     }),
-    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, forceSendMessage, enqueueMessage, removeQueuedAt, sendQueuedNow, queuedMessages, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, taskProjects, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval, dockOpen, dockWin, dockPreviewPath, openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath, artifactsVersion, bumpArtifactsVersion]
+    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, forceSendMessage, injectOrQueue, removeQueuedAt, queuedMessages, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, taskProjects, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval, dockOpen, dockWin, dockPreviewPath, openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath, artifactsVersion, bumpArtifactsVersion]
   );
 
   return <TaskStoreContext.Provider value={value}>{children}</TaskStoreContext.Provider>;

@@ -85,6 +85,11 @@ class EmitterMixin:
         # B7：回合序号——每个 LLM 回合独立块（_emit 收尾时递增），同回合的
         # delta 先于 emit 到达、共享同号，跨回合不再串成单一巨型 thinking 块
         seq = 0
+        # run 级随机后缀：block_id 跨 run 唯一。此前 id 为 "brain-R1/M1" 这种每 run
+        # 重复的形状，链式续跑/连续多轮时前端按 id upsert 会把**不同 run** 的思考/口播
+        # 合并进同一块（表现为时序错乱、思考与正文互换位置）。
+        import uuid as _uuid
+        _run_nonce = _uuid.uuid4().hex[:6]
         # 回合内累积缓冲：增量回调时携带「截至当前的完整文本」，前端按 block_id upsert
         rbuf: List[str] = []
         mbuf: List[str] = []
@@ -95,10 +100,10 @@ class EmitterMixin:
             try:
                 if kind == "reasoning":
                     rbuf.append(text)
-                    self.on_llm_delta(role, "reasoning", f"{role}-R{seq}", "".join(rbuf), model)
+                    self.on_llm_delta(role, "reasoning", f"{role}-R{seq}-{_run_nonce}", "".join(rbuf), model)
                 else:
                     mbuf.append(text)
-                    self.on_llm_delta(role, "message", f"{role}-M{seq}", "".join(mbuf), model)
+                    self.on_llm_delta(role, "message", f"{role}-M{seq}-{_run_nonce}", "".join(mbuf), model)
             except Exception:
                 pass
 
@@ -146,14 +151,14 @@ class EmitterMixin:
             if self.on_llm_delta:
                 try:
                     if reasoning:
-                        self.on_llm_delta(role, "reasoning", f"{role}-R{seq}", reasoning, model)
+                        self.on_llm_delta(role, "reasoning", f"{role}-R{seq}-{_run_nonce}", reasoning, model)
                     if message:
                         if rm == "think-tag":
                             pure = _strip_after_think(message)
                             if pure:
-                                self.on_llm_delta(role, "message", f"{role}-M{seq}", pure, model)
+                                self.on_llm_delta(role, "message", f"{role}-M{seq}-{_run_nonce}", pure, model)
                         else:
-                            self.on_llm_delta(role, "message", f"{role}-M{seq}", message, model)
+                            self.on_llm_delta(role, "message", f"{role}-M{seq}-{_run_nonce}", message, model)
                 except Exception:
                     pass
             # 本回合结束：序号递增、缓冲清空（下一回合独立成块，不与上回合拼接）

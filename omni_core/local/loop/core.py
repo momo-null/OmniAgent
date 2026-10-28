@@ -374,6 +374,16 @@ class ToolLoop(
             return False
         return True
 
+    def drain_human_injections(self) -> List[Dict[str, Any]]:
+        """取走通道里**未被消费**的人类注入（仅在 run 结束后调用；正常消费发生在请求边界）。
+
+        收尾补投用：本轮最后一次模型请求之后注入的消息不会再有请求边界，
+        留在通道里会随 loop 销毁而丢失（表现为「消息落库但模型不回应」）。
+        """
+        if self._human_inj_channel is None:
+            return []
+        return self._human_inj_channel.take_messages()
+
     def _drain_injections(self) -> List[str]:
         """取走并清空待投递的人类注入（主 agent 每轮开始时调用）。"""
         with self._injections_lock:

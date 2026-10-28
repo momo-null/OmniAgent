@@ -525,6 +525,9 @@ class TestChatForceInterrupt:
         assert calls["stop"] == 1
         assert calls["dispatch"] == 1
         assert rec.force_interrupted is True
+        # 清理：桩掉的 dispatch 不会收尾，泄漏的 running 记录会堵死真实 manager 的全局互斥
+        from backend.api.routers.helpers import manager as _mgr, AGENT_MAIN as _main
+        _mgr.finish(tid, _main)
 
     def test_without_force_still_rejected_while_running(self, client, monkeypatch):
         """回归：不带 force 的运行中 /chat 仍 409（主路径语义不变）。"""
@@ -537,3 +540,45 @@ class TestChatForceInterrupt:
         })
         assert r.status_code == 409
         assert "已有任务在运行" in r.json()["error"]
+
+
+def test_wind_down_injection_auto_chain(monkeypatch):
+    """收尾补投回归：LLM 已答完但未收尾时注入的消息，run 结束后自动续跑一轮。
+
+    旧表现：注入通道只在模型请求边界消费——最后一轮回答之后不再有边界，
+    消息落库但模型永不回应（用户看到的「进了等待列表然后没了下文」）。"""
+    import time as _time
+
+    import backend.api.routers.chat_runtime as cr
+    import backend.api.router_runtime as rt
+    from omni_core.local import loop as loop_pkg
+
+    dispatched = []
+
+    class _FakeLoop:
+        def __init__(self, *a, **k):
+            pass
+
+        def reset_stop(self):
+            pass
+
+        def run_task(self, spec):
+            return {"success": True, "steps": 0}
+
+        def drain_human_injections(self):
+            return [{"role": "user", "content": "补投消息"}]
+
+    monkeypatch.setattr(loop_pkg, "ToolLoop", _FakeLoop)
+    monkeypatch.setattr(rt, "_dispatch_chat", lambda *a, **k: dispatched.append(a))
+    cr._dispatch_chat("t_autochain", [{"role": "user", "content": "hi"}], 40)
+    # 补投在新线程里跑，轮询等它
+    for _ in range(100):
+        if dispatched:
+            break
+        _time.sleep(0.02)
+    assert dispatched, "收尾补投应自动续跑一轮"
+    assert dispatched[0][0] == "t_autochain"
+    assert dispatched[0][1] == [{"role": "user", "content": "补投消息"}]
+    # 清理：补投线程是桩，不会收尾
+    from backend.api.routers.helpers import manager as _mgr, AGENT_MAIN as _main
+    _mgr.finish("t_autochain", _main)

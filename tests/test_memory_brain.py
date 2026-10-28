@@ -86,6 +86,19 @@ def test_flush_writes_novel_atom_with_value_fields(brain):
     assert row[3] == "tangtang" and row[4] == "p_test" and row[5] == "active"
 
 
+def test_blank_extraction_still_counts_flush(brain):
+    """白卷轮也要计入 flush 计数并尝试巩固，否则闲聊为主的会话永远攒不到巩固。"""
+    brain.script = [{"facts": []}]
+    memory_brain.capture("p", "user", "你好啊")
+    memory_brain.capture("p", "assistant", "在的")
+    stats = memory_brain.flush_brain("p", {"base_url": "http://x"}, persona="tangtang")
+    assert stats["extracted"] == 0
+    conn = memory_brain.open_brain()
+    cnt = conn.execute("SELECT v FROM meta WHERE k='flush_count'").fetchone()
+    conn.close()
+    assert cnt and int(cnt[0]) == 1
+
+
 def test_duplicate_strengthens_instead_of_new_row(brain):
     brain.script = [_extract("用户偏好先聊后动的工作方式"), _value("preference", 0.8)]
     memory_brain.capture("p", "user", "以后改我代码前先跟我说方案")

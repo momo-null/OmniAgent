@@ -39,8 +39,11 @@ def test_turn_end_splits_blocks_and_clears_buffer():
     r_keys = [b for k, b, _ in seen if k == "reasoning"]
     m_keys = [b for k, b, _ in seen if k == "message"]
     # 同回合共用 key（原地增长，前端 upsert 成一条）
-    assert r_keys[0] == r_keys[1] == "brain-R0"
-    assert m_keys[0] == "brain-M0"
+    # block_id 带 run 级随机后缀（跨 run 唯一，防前端按 id upsert 跨 run 串块），
+    # 断言改为前缀匹配：同回合同前缀、回合间前缀不同
+    assert r_keys[0].startswith("brain-R0-") and r_keys[0] == r_keys[1]
+    assert m_keys[0].startswith("brain-M0-")
+    assert r_keys[0].split("-", 2)[2] == m_keys[0].split("-", 2)[2]
     # 跨回合换 key：不再被合并成同一条
     assert r_keys[-1] != "brain-R0" and m_keys[-1] != "brain-M0"
     # 缓冲已清空：新回合只含本回合增量，不拼接上回合内容

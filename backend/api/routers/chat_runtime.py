@@ -76,6 +76,9 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     """
     # 阶段 1：运行体句柄存于 RuntimeManager 复合键 (task_id, agent_id)，不再用全局 _loop
     _last_answer = ""  # 累积大脑最后一段口播，作为结尾「结果框」内容
+    loop = None  # ToolLoop 句柄（finally 收尾补投需要；构造失败时为 None）
+    _force = False  # force 打断标记（TAM 区读取即消费；finally 用于跳过补投）
+    _pending_injections: List[Dict[str, Any]] = []  # 收尾补投：未消费注入
     turn_steps: List[Dict[str, Any]] = []  # 本轮 agent 的执行轨迹（思考 + 工具调用）
     # 增量落库（2026-10-04）：过程记录每 ~20 步刷一条 partial 到会话 jsonl，
     # 崩溃/被杀不再整轮蒸发；终态 final 收口，重放时按 run_key 并回单轮（coalesce）。
@@ -321,6 +324,29 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             # 更新 task 状态为 done/failed（P1.4 任务状态机）
             try:
                 _task_store().update(task_id, state="done")
+            except Exception:
+                pass
+        # M8 收尾补投：本轮最后一次模型请求之后注入的消息不会再有请求边界，
+        # 留在通道里会随 loop 销毁而丢失（表现为「消息落库但模型不回应」——
+        # LLM 已答完、用户在收尾窗口发消息即触发）。这里取走未消费注入并
+        # 自动续跑一轮（对齐 /wake 语义：消息已落库，补一次执行）。
+        # force 打断轮不补投：通道随旧轮作废，新消息已由 force 路径派发。
+        if loop is not None and not _force:
+            try:
+                _pending_injections = loop.drain_human_injections() or []
+            except Exception:
+                _pending_injections = []
+        if _pending_injections:
+            try:
+                if _try_start_task(task_id, agent_id):
+                    try:
+                        _task_store().update(task_id, state="running")
+                    except Exception:
+                        pass
+                    threading.Thread(target=_rt._dispatch_chat,
+                                     args=(task_id, _pending_injections, max_steps,
+                                           full_access, agent_id, model),
+                                     daemon=True).start()
             except Exception:
                 pass
 
