@@ -86,6 +86,7 @@ class ToolLoop(
         full_access: Optional[bool] = None,
         config_snapshot: Optional[dict] = None,
         agent_id: str = "main",
+        tools_enabled: bool = True,
     ):
         # 详细日志通道：内核把 prompt/response/react 旁路推给前端（右栏「运行日志」）
         self.on_debug = on_debug
@@ -103,6 +104,10 @@ class ToolLoop(
         # S2 审批总开关（per-task「完全访问」）：graph_runner 绑定进 SecurityContext。
         # 此前为 inert 挂点（capability-unit 重构），S2 落地后转正。
         self.full_access = bool(full_access)
+        # 能力门（运行级）：False = 纯对话运行——SDK Agent 的工具清单为空（能力插件 /
+        # MCP / 内核元工具全部不暴露），模型请求里没有 tools 字段，物理上无法产生
+        # tool_call。内核只接一个布尔，**不感知消息来源**；谁该关由调用方（网关/通道）决定。
+        self.tools_enabled = bool(tools_enabled)
         _cfg = self._cfg
         _rt = (_cfg.get("runtime") or {})
 
@@ -142,7 +147,7 @@ class ToolLoop(
         _mcp_cfg = config.load_mcp_config()
         self.mcp_servers = (
             build_mcp_servers(_mcp_cfg.get("servers"), log=self._log)
-            if _mcp_cfg.get("enabled")
+            if (_mcp_cfg.get("enabled") and self.tools_enabled)
             else []
         )
         # 插件装载：扫 plugin_dirs，按各插件自有 enabled 决定注册与否；单包失败只降级。

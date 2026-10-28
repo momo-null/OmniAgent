@@ -70,6 +70,9 @@ class FeishuAdapter:
         self.app_id = cfg.get("app_id", "")
         self.app_secret = os.environ.get(cfg.get("app_secret_env", "FEISHU_APP_SECRET"), "")
         self.default_chat_id = cfg.get("default_chat_id", "")
+        # 能力门：飞书机器人对所在组织/外部联系人可达 → 缺省纯对话（无工具）。
+        # 只允许本人可达的场景（allow_user_ids 收紧到单账号）才建议置 true。
+        self.allow_tools = bool(cfg.get("allow_tools", False))
         self.allow_chat_ids = set(cfg.get("allow_chat_ids", []) or [self.default_chat_id])
         self.allow_user_ids = set(cfg.get("allow_user_ids", []) or [])
         self._client = None
@@ -149,6 +152,7 @@ class FeishuAdapter:
             channel="feishu", chat_id=chat_id, user_id=user_id, text=text.strip(),
             raw={"message_id": msg_id, "message_type": msg.message_type, "ts": time.time()},
             reply=FeishuReply(self._client, chat_id),
+            allow_tools=self.allow_tools,
         ))
 
     def reply_to(self, chat_id: str) -> ReplyChannel:

@@ -187,7 +187,9 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
 
         loop = ToolLoop(brain_cfg, verbose=False,
                         on_thinking=_on_thinking, on_tool_call=_on_tool_call,
-                        on_llm_delta=_on_llm_delta)
+                        on_llm_delta=_on_llm_delta,
+                        # 外部消息（他人可达的通道）默认纯对话：见 submit 的 tools_enabled
+                        tools_enabled=bool(item.get("tools_enabled", True)))
         spec = TaskSpec(
             objective=item["objective"],
             done_when=item.get("done_when", ""),
@@ -223,8 +225,15 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         if job_id:
             from .scheduler import record_run
             record_run(job_id, real_task_id, "ok" if ok else "error", summary=answer)
-        # 飞书单条文本上限 4000 字符（send_text 内截断到 4000，这里先留前缀余量）
-        _send(f"{'✅' if ok else '⚠️'} [{item.get('source', 'task')} {real_task_id[:8]}]\n{answer[:3500] or '(无摘要)'}")
+        # 回发文案分两种场景（关键区别：对面是不是人）：
+        # - reply 非空 = 消息通道里的人说的 → **只发正文**，不加 ✅/任务号/来源前缀
+        #   （机器味的状态标签破坏拟人感，且来源标识对人无意义）；
+        # - reply 为空 = cron / 广播推送 → 保留标识，便于在群里认出是哪条定时任务。
+        _body = answer[:3500] or "(这一轮没有产出内容)"
+        if reply is not None:
+            _send(_body)
+        else:
+            _send(f"{'✅' if ok else '⚠️'} [{item.get('source', 'task')} {real_task_id[:8]}]\n{_body}")
         return dr
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
@@ -248,8 +257,13 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         if job_id:
             from .scheduler import record_run
             record_run(job_id, real_task_id or task_id, "error", error=err)
-        # 失败直推（不经 agent——它可能正是死因）
-        _send(f"🚨 任务失败 [{item.get('source', 'task')} {task_id[:8]}]: {err}（由网关直发，agent 可能已死）")
+        # 失败直推（不经 agent——它可能正是死因）。同上方原则：对面是人就只说人话，
+        # traceback / 任务号只进日志与任务详情，不甩进聊天窗口。
+        if reply is not None:
+            _send("我这出了点问题，这次没办成，稍后再试一次？")
+        else:
+            _send(f"🚨 任务失败 [{item.get('source', 'task')} {task_id[:8]}]: {err}"
+                  f"（由网关直发，agent 可能已死）")
         return DispatchResult(task_id=real_task_id or task_id, ok=False, error=err)
 
 
@@ -278,30 +292,36 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
            source: str = "manual", project_id: Optional[str] = None,
            reply: Optional[ReplyChannel] = None,
            notify_channel: Optional[str] = None, job_id: Optional[str] = None,
-           session_id: Optional[str] = None) -> str:
+           session_id: Optional[str] = None,
+           tools_enabled: bool = True) -> str:
     """异步提交（网关消息/cron 用）。返回 task_id。
 
     session_id：显式指定会话（消息通道用 ``msg:<channel>:<chat_id>`` 固定会话——
     同一聊天窗口连续对话共享上下文，对齐 hermes 的 thread 绑定语义；不传则每任务新会话）。
+
+    tools_enabled：能力门。False = 纯对话（无任何工具，模型物理上无法产生 tool_call）。
+    外部可达的通道（他人能给账号发消息）必须传 False——否则任何给账号发消息的人
+    都能驱动 shell/文件/设备工具。
     """
     ensure_worker()
     task_id = uuid.uuid4().hex[:16]
     _QUEUE.put({"task_id": task_id, "objective": objective, "done_when": done_when,
                 "max_steps": max_steps, "source": source, "project_id": project_id,
                 "reply": reply, "notify_channel": notify_channel, "job_id": job_id or "",
-                "session_id": session_id or ""})
+                "session_id": session_id or "", "tools_enabled": bool(tools_enabled)})
     return task_id
 
 
 def dispatch_sync(objective: str, done_when: str = "", max_steps: int = 40, *,
                   source: str = "manual", project_id: Optional[str] = None,
                   reply: Optional[ReplyChannel] = None,
-                  notify_channel: Optional[str] = None, job_id: Optional[str] = None) -> DispatchResult:
+                  notify_channel: Optional[str] = None, job_id: Optional[str] = None,
+                  tools_enabled: bool = True) -> DispatchResult:
     """同步执行（CLI/测试/「立即运行」用）。"""
     return _run_task_once({"task_id": uuid.uuid4().hex[:16], "objective": objective,
                            "done_when": done_when, "max_steps": max_steps, "source": source,
                            "project_id": project_id, "reply": reply, "notify_channel": notify_channel,
-                           "job_id": job_id or ""})
+                           "job_id": job_id or "", "tools_enabled": bool(tools_enabled)})
 
 
 def queue_size() -> int:

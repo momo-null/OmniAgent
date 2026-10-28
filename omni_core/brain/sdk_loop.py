@@ -1367,6 +1367,8 @@ def _assemble_agent_stack(
     allow_dispatch: bool,
     todo_store: Any,
     available_slots: Optional[List[str]] = None,
+    # 能力门（运行级）：False = 纯对话运行，不装配任何工具（详见装配处注释）
+    tools_enabled: bool = True,
     budget_hint_ratio: float,
     max_input_tokens: int,
     compress_threshold: float,
@@ -1449,24 +1451,41 @@ def _assemble_agent_stack(
     # loop 内先 connect，server.session 永远为空，任何 MCP 工具调用都会抛
     # "Server not initialized" 使 agent 不可用。这里在子任务开始时连接（已连接则
     # 复用），单个 server 失败只跳过、不拖垮整体。
-    _mcp_connected = _ensure_mcp_connected(list(mcp_servers or []))
-    agent = Agent(
-        name=name,
-        model=model,
-        instructions=instructions,
-        tools=list(tools) + build_meta_tools(state, gate, on_state, allow_dispatch, todo_store, available_slots),
-        mcp_servers=_mcp_connected,
-        # T4.7：把 request（temperature / max_tokens 等）真正下发给模型；
-        # 此前 SDK 主链路未传 model_settings，配置里的 request.max_tokens 形同虚设。
-        # 注：SDK 升级后 Agent.__post_init__ 不再接受 model_settings=None，
-        # 故 None 退化为空 dict（SDK 会 coerce 为默认 ModelSettings，行为等价于原 None），
-        # 仅在确有配置值时才下发真实 model_settings。
-        model_settings=model_settings if model_settings is not None else {},
-        # 框架原生收尾：调了 task_done / verify / escalate 就结束本块，把控制权交回 L2。
-        # - task_done 被拒绝（verify 未过）→ L2 不认 done，下一块带着拒绝原因继续跑；
-        # - verify 每调一次就回 L2 一次，使「连续失败升级」阈值能及时生效。
-        tool_use_behavior=StopAtTools(stop_at_tool_names=stop_tools),
-    )
+    # 能力门（运行级）：tools_enabled=False = 纯对话运行。此时**不装配任何工具**——
+    # 能力插件（registry）、MCP、内核元工具（task_done/verify/escalate/record/dispatch）
+    # 全部不暴露，模型请求里连 tools 字段都没有：工具调用在物理层不可达，
+    # 不是"调用后被拒"（后者仍会给模型可乘之机，也会白烧轮次）。
+    # 纯文本收尾由下方 plain_finish_judge 路径正常收口（task_mode=oneshot）。
+    if tools_enabled:
+        _mcp_connected = _ensure_mcp_connected(list(mcp_servers or []))
+        _agent_tools: List[FunctionTool] = list(tools) + build_meta_tools(
+            state, gate, on_state, allow_dispatch, todo_store, available_slots)
+        _stop_behavior: Any = StopAtTools(stop_at_tool_names=stop_tools)
+    else:
+        _mcp_connected = []
+        _agent_tools = []
+        _stop_behavior = None
+
+    # T4.7：把 request（temperature / max_tokens 等）真正下发给模型；
+    # 此前 SDK 主链路未传 model_settings，配置里的 request.max_tokens 形同虚设。
+    # 注：SDK 升级后 Agent.__post_init__ 不再接受 model_settings=None，
+    # 故 None 退化为空 dict（SDK 会 coerce 为默认 ModelSettings，行为等价于原 None），
+    # 仅在确有配置值时才下发真实 model_settings。
+    _agent_kwargs: Dict[str, Any] = {
+        "name": name,
+        "model": model,
+        "instructions": instructions,
+        "tools": _agent_tools,
+        "mcp_servers": _mcp_connected,
+        "model_settings": model_settings if model_settings is not None else {},
+    }
+    # 框架原生收尾：调了 task_done / verify / escalate 就结束本块，把控制权交回 L2。
+    # - task_done 被拒绝（verify 未过）→ L2 不认 done，下一块带着拒绝原因继续跑；
+    # - verify 每调一次就回 L2 一次，使「连续失败升级」阈值能及时生效。
+    # 无工具时不传（StopAtTools 在空工具集上没有意义）。
+    if _stop_behavior is not None:
+        _agent_kwargs["tool_use_behavior"] = _stop_behavior
+    agent = Agent(**_agent_kwargs)
     return state, agent, model, use_compaction, _repeat_guard
 
 
@@ -1477,6 +1496,8 @@ def run_subtask_sdk(
     user_input: str,
     tools: List[FunctionTool],
     gate: Any,
+    # 能力门：False = 纯对话运行（工具/MCP/元工具全不装配）
+    tools_enabled: bool = True,
     mcp_servers: Optional[List[Any]] = None,
     max_steps: Optional[int] = None,
     chunk_turns: int = 0,
@@ -1552,6 +1573,7 @@ def run_subtask_sdk(
         allow_dispatch=allow_dispatch,
         todo_store=todo_store,
         available_slots=available_slots,
+        tools_enabled=tools_enabled,
         budget_hint_ratio=budget_hint_ratio,
         max_input_tokens=max_input_tokens,
         compress_threshold=compress_threshold,

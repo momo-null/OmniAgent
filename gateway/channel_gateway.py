@@ -22,9 +22,32 @@ _ADAPTER_FACTORIES = {}  # name -> build(cfg)  惰性注册（避免 import 不�
 
 
 def _register_factories() -> None:
-    from .channels import feishu, wecom
+    from .channels import feishu, napcat, wecom
     _ADAPTER_FACTORIES["feishu"] = feishu.build
     _ADAPTER_FACTORIES["wecom"] = wecom.build
+    _ADAPTER_FACTORIES["napcat"] = napcat.build
+
+
+def build_adapter(name: str):
+    """按 ``config.channels.<name>`` 构造适配器（**不连接**），供非网关进程使用。
+
+    背景：``msg_send_*`` 工具取通道走本进程的注册表（``channels.context``），只有网关
+    进程里有实例。在 Web 后端进程里让 agent 主动发消息时，注册表是空的 → 工具返回
+    "无可用通道"，模型只能绕去 shell 调 OneBot HTTP（实测发生过：绕了 9 步）。
+
+    这里只构造「会发消息」的句柄：napcat 的发送走 HTTP，不依赖 WS 长连接，所以
+    **不 connect** 也能正常发；返回 None 表示通道未知或未启用（fail-closed）。
+    """
+    try:
+        _register_factories()
+        factory = _ADAPTER_FACTORIES.get(name)
+        if factory is None:
+            return None
+        import config as _config
+        cfg = ((_config.load_config() or {}).get("channels") or {}).get(name) or {}
+        return factory(cfg)
+    except Exception:
+        return None
 
 
 def start_channels() -> int:
@@ -53,33 +76,40 @@ def start_channels() -> int:
 
 
 def _on_message(msg) -> None:
-    """入站消息 → 打字机回执 → 派发。
+    """入站消息 → 派发。
 
     会话语义（对齐 hermes thread 绑定）：同一聊天窗口（channel:chat_id）固定绑定一个
     项目会话——消息带完整上下文连续对话；不传项目则归 default 项目下的固定会话。
     （旧语义「每消息=独立任务」改为固定会话，用户预期是与 agent 连续聊天。）
+
+    刻意**不发「处理中」回执**：消息通道对面是人，先弹一句机器味的状态提示破坏拟人感
+    （且每条消息都多占一次发信配额）。进度反馈由通道自身能力承担，不在此硬发。
     """
     dispatch.ensure_worker()
     preview = msg.text[:60].replace("\n", " ")
     print(f"[gateway] 收到消息 <{msg.channel}:{msg.chat_id}> {preview}")
-    try:
-        if msg.reply is not None:
-            msg.reply.send_text(f"⏳ 处理中…（{preview[:30]}）")
-    except Exception:
-        pass
     # 聊天路由：msg/<channel>/<chat_id> → 哪个项目 + 哪个会话（config.chat_routes 可覆盖）
     project_id, session_id = _route_chat(msg)
+    # 能力门透传：外部可达通道默认 allow_tools=False → 该来源任务为纯对话（无任何工具）。
+    # 网关只读通道自声明，不判断"这是谁发的"——判定权在通道适配器。
     dispatch.submit(msg.text, source=f"msg:{msg.channel}", reply=msg.reply,
-                    project_id=project_id or None, session_id=session_id or None)
+                    project_id=project_id or None, session_id=session_id or None,
+                    tools_enabled=bool(getattr(msg, "allow_tools", False)))
 
 
 def _route_chat(msg) -> tuple:
-    """消息 → (project_id, session_id)。默认：default 项目 + 通道固定会话。"""
-    from . import config as _cfg_mod  # noqa: F401  (仅确保 config 已加载)
+    """消息 → (project_id, session_id)。默认：default 项目 + 通道固定会话。
+
+    路由规则（``config.chat_routes``）两级匹配，精确优先：
+    - ``"napcat:private:123456"`` → 单个会话；
+    - ``"napcat:*"``             → 整条通道（所有 QQ 私聊/群）→ 同一项目。
+    配了 project_id 的消息不再是「临时任务」（临时任务跑完即从任务索引删除，
+    Web 任务列表里看不到），而是持久归属到该项目、可在界面点开看过程。
+    """
     import config as _config
     routes = (_config.load_config() or {}).get("chat_routes", {}) or {}
     key = f"{msg.channel}:{msg.chat_id}"
-    rule = routes.get(key) or {}
+    rule = routes.get(key) or routes.get(f"{msg.channel}:*") or {}
     project_id = rule.get("project_id") or ""
     # 会话 ID：通道+聊天唯一，形如 s_feishu_<chat 哈希>（跨重启稳定）
     import hashlib

@@ -19,6 +19,7 @@
 - 主 agent 执行循环（OpenAI Agents SDK）+ 自主派发：互不依赖的子任务可派给按槽位配置的执行单元。
 - 通用工具运行时：加能力 = 写工具 / Provider，内核零场景硬编码（红线 lint + CI 守护）。
 - 本地模型生命周期管理、MCP 接入、GUI / 设备操控执行后端。
+- **消息通道（gateway）**：常驻网关把外部 IM 归一为入站消息 → 派发 → 回发；新增通道 = 一个适配器文件 + 一段配置，派发与工具零改动。对外通道默认**纯对话**（`tools_enabled=false`，模型侧无任何工具 schema），来源与说话人由通道写进消息本身；`msg_recent` 可跨会话回看往来。见 [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md)。
 - 会话记录增量落盘 + 重放合并（崩溃不丢过程流）；项目级 AGENTS.md 三层纪律注入（global → project → task）；技能库（人工维护 + 按需加载）。
   （skill 提取链修订：录像式机械转录整链已于 2026-10-03 A9 删除；2026-10-04 skill 轴以**可重放宏缓存**形态保留但默认关闭——结构化提取 + 回放执行器，`skill.auto_distill` 默认关，有效性验证未做，见下。）
 
@@ -35,6 +36,7 @@
 | [`doc/agent-control-product-design.html`](doc/agent-control-product-design.html) | 产品设计（定位 / 原则 / 技术选型 / 行业对标 / 维护约定） |
 | [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | 架构设计（图集 N1–N10） |
 | [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | **架构决策权威（单一事实来源）** |
+| [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | 消息通道（gateway）接入机制：通道协议 / 能力门 / 场合自述 / 跨进程发送 |
 | [`spec/coding_standard.md`](spec/coding_standard.md) | 工程规范（X3 现行编码规范） |
 
 > ⚠️ 上述设计文档均为中文。
@@ -151,6 +153,7 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
 - Main-agent execution loop (OpenAI Agents SDK) + autonomous dispatch: independent subtasks can be delegated to executor units configured per slot.
 - General tool runtime: adding a capability = writing a tool / provider; zero scene-specific logic in the kernel (enforced by a red-line lint + CI).
 - Local model lifecycle management, MCP integration, GUI / device execution backends.
+- **Message channels (gateway)**: a long-running gateway normalizes external IM events → dispatch → reply; adding a channel = one adapter file + one config block, with zero changes to dispatch or tools. External channels default to **chat-only** (`tools_enabled=false`, so the model receives no tool schema at all); source and speaker are written into the message by the channel, and `msg_recent` can look back across sessions. See [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md).
 - Session records are persisted incrementally with replay coalescing (crash-safe); three-layer AGENTS.md discipline injection (global → project → task); skill library (manually maintained + on-demand loading).
   (Skill-chain revision: the mechanical-transcription chain was deleted on 2026-10-03 (A9); on 2026-10-04 the skill axis was retained as a **replayable macro cache** — default off — with structural extraction + replay executor, `skill.auto_distill` off by default, effectiveness unverified, see below.)
 
@@ -167,6 +170,7 @@ CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scri
 | [`doc/agent-control-product-design.html`](doc/agent-control-product-design.html) | Product design (positioning / principles / tech choices / industry comparison / conventions) |
 | [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | Architecture design (diagrams N1–N10) |
 | [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | **Authoritative architecture decisions (single source of truth)** |
+| [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | Message-channel (gateway) design: channel protocol / tool gate / source narration / cross-process send |
 | [`spec/coding_standard.md`](spec/coding_standard.md) | Engineering standard (current X3 coding conventions) |
 
 > ⚠️ The design documents listed above are written in Chinese.

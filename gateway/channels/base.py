@@ -22,6 +22,10 @@ class InboundMessage:
     text: str                        # 纯文本投影（富消息取其文本）
     raw: Dict[str, Any] = field(default_factory=dict)   # 原始事件（审计）
     reply: Optional["ReplyChannel"] = None              # 绑定本消息的回发句柄
+    # 能力门（fail-closed）：外部可达的通道默认为 False = 该来源的任务是纯对话，
+    # 不具备任何工具能力（他人发消息无法驱动 shell/文件/设备）。通道确认「只有本人
+    # 能发消息」（如内网/自用）时才可置 True。网关只读本字段，不感知具体通道。
+    allow_tools: bool = False
 
 
 @runtime_checkable

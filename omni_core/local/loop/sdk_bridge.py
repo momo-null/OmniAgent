@@ -476,9 +476,12 @@ class SdkBridgeMixin:
             brain,
             instructions=system_prompt,
             user_input=user_input or self._build_user(spec, world, step=0),
-            tools=self.registry.sdk_tools(),
+            # 能力门：tools_enabled=False（纯对话运行）→ 能力工具与 MCP 全部不传，
+            # 配合 sdk_loop 的元工具收口，模型侧无任何可调用的 function schema。
+            tools=self.registry.sdk_tools() if getattr(self, "tools_enabled", True) else [],
             gate=gate,
-            mcp_servers=self.mcp_servers,
+            mcp_servers=self.mcp_servers if getattr(self, "tools_enabled", True) else [],
+            tools_enabled=getattr(self, "tools_enabled", True),
             max_steps=max_steps,
             wallclock_sec=wallclock_sec,
             task_mode=getattr(spec, "task_mode", "oneshot"),
