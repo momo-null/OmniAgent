@@ -192,8 +192,6 @@ class GraphRunnerMixin:
         from omni_core.local.task_store import TaskStore
         _runtime_ctx = {
             "task_id": spec.task_id,
-            "env_kind": self.exec.kind,
-            "env_platform": getattr(self.exec, "platform", ""),
             "task_dir": str(task_dir(spec.task_id)),
             "project_skills_dir": str(project_skills(TaskStore.project_of(spec.task_id))),
             "global_skills_dir": str(global_skills()),
@@ -581,8 +579,6 @@ class GraphRunnerMixin:
         from omni_core.local.task_store import TaskStore
         _exec_runtime_ctx = {
             "task_id": inner_spec.task_id,
-            "env_kind": self.exec.kind,  # 与主链一致：worker 也要知道自己所在环境
-            "env_platform": getattr(self.exec, "platform", ""),
             "task_dir": str(task_dir(inner_spec.task_id)),
             "project_skills_dir": str(project_skills(TaskStore.project_of(inner_spec.task_id))),
             "global_skills_dir": str(global_skills()),
@@ -624,7 +620,7 @@ class GraphRunnerMixin:
         # 大脑反思时看到空状态，误判目标应用未打开而放弃）。
         # M6: 回传 = flush 到共享黑板，facts 带来源（子任务目标），供 view(scope) 溯源。
         if parent_world is not None and sub_world.state_text:
-            parent_world.update(sub_world.current_percept, self.exec)
+            parent_world.update(sub_world.current_percept, state_text=sub_world.state_text)
         if parent_world is not None:
             # M5: 子任务采集到的条目/备注也要回传（否则父 world 看不到采数据，整任务会误判漏采）
             parent_world.merge_collection(sub_world, source=inner_spec.objective[:40])

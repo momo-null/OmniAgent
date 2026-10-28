@@ -9,7 +9,6 @@
   ``TOOL_REGISTRY``（机制不变，loader 不碰派发）；装载后把工具的 ``unit`` 设为插件名、
   ``source`` 设为 ``"plugin"``。
 - 可选生命周期钩子：``configure(cfg)``（收到本插件自有配置 dict）/ ``startup(ctx)`` / ``shutdown()``。
-- **环境绑定（可选）**：``plugin.json`` 的 ``requires_env``（环境 kind 列表）；当前环境不匹配则不装载。
 - 单包失败只回滚该包并记 ``failed``，绝不向外抛（C-P2）；本模块**不 import 任何具体插件**（C-P1）。
 """
 from __future__ import annotations
@@ -75,14 +74,10 @@ class PluginContext:
     ``wired`` 区分两类装载：``True`` = 来自真实装配（ToolLoop，句柄已就绪）；
     ``False`` = 只读枚举等旁路（GET /api/runtime/tools、测试）。
     插件**不得**在 ``wired=False`` 时做破坏性动作（如注销工具）。
-
-    ``env_kind``：当前环境标识（``"host"`` / ``"emulator"`` …）只读；插件可据此做
-    环境分支，但**拿不到环境厚句柄**（键鼠 / 截图等原语一律走工具）。
     """
 
     config: Dict[str, Any] = field(default_factory=dict)
     wired: bool = False
-    env_kind: str = ""
 
 
 @dataclass
@@ -162,11 +157,6 @@ def load_plugins(cfg: Optional[Dict[str, Any]] = None, ctx: Optional[PluginConte
             if isinstance(manifest, str):
                 report.fail(name, manifest)
                 continue
-            # 环境绑定：requires_env 非空且当前环境已知且不匹配 → 不装载
-            requires = manifest.get("requires_env") or []
-            if requires and ctx.env_kind and ctx.env_kind not in requires:
-                report.skip(name, f"requires_env 不含当前环境 {ctx.env_kind}")
-                continue
             # 开关：plugin.yaml 优先，缺省取 manifest.enabled（缺省 true）
             if not _enabled(name, plugin_cfg, manifest):
                 report.skip(name, "插件已停用（enabled=false）")
@@ -195,10 +185,10 @@ def plugin_config(name: str) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def list_plugins(cfg: Optional[Dict[str, Any]] = None, env_kind: str = "") -> List[Dict[str, Any]]:
-    """枚举发现到的插件（含停用 / 环境不匹配的），供前端渲染「一个开关」。
+def list_plugins(cfg: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """枚举发现到的插件（含停用的），供前端渲染「一个开关」。
 
-    返回 ``[{name, title, description, enabled, requires_env, available}]``。
+    返回 ``[{name, title, description, enabled}]``。
     """
     cfg = cfg if isinstance(cfg, dict) else {}
     out: List[Dict[str, Any]] = []
@@ -215,15 +205,11 @@ def list_plugins(cfg: Optional[Dict[str, Any]] = None, env_kind: str = "") -> Li
             if isinstance(manifest, str):
                 continue
             pcfg = plugin_config(name)
-            requires = list(manifest.get("requires_env") or [])
-            available = (not requires) or (not env_kind) or (env_kind in requires)
             out.append({
                 "name": name,
                 "title": manifest.get("title") or name,
                 "description": manifest.get("description", ""),
                 "enabled": _enabled(name, pcfg, manifest),
-                "requires_env": requires,
-                "available": available,
             })
     return out
 

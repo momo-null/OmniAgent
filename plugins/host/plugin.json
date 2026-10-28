@@ -1,0 +1,8 @@
+{
+  "name": "host",
+  "version": "1.0.0",
+  "title": "本机 Windows 操作",
+  "description": "控制本机（Windows）：键鼠 / 截图 / 屏幕观测。启用后 agent 可直接操作这台电脑。",
+  "enabled": false,
+  "permissions": ["fs_read"]
+}

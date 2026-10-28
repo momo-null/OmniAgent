@@ -1,0 +1,8 @@
+{
+  "name": "ocr",
+  "version": "1.0.0",
+  "title": "OCR 文字识别",
+  "description": "本地 OCR（RapidOCR / ONNXRuntime CPU，常驻约 200MB）。对图片 / 截图做文字识别；启用后 host 的 observe 会附带屏幕文字增强。",
+  "enabled": false,
+  "permissions": ["fs_read"]
+}

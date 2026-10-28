@@ -95,13 +95,13 @@ def _make_loop(monkeypatch, brain_script=None, ocr=None):
 
     _FakeBrain.__init__ = _init
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", _FakeBrain)
-    install_fake_env(monkeypatch, _FakeBackend)
+    _fb = install_fake_env(monkeypatch, _FakeBackend)
     loop = ToolLoop(
         {"model": "brain", "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
     )
     if ocr is not None:
-        loop.exec.ocr = ocr
+        _fb.ocr = ocr
     return loop
 
 

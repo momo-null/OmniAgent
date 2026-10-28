@@ -180,9 +180,6 @@ export const runtimeApi = {
     http.post("/api/runtime/skill/delete", payload),
   // 工具插件层枚举（自研 + 外部 MCP 平级）
   tools: () => http.get("/api/runtime/tools"),
-  // 环境单选（写 runtime.backend；重启后生效）
-  setEnvironment: (kind: string) =>
-    http.patch("/api/runtime/tools/environment", { kind }),
   // 插件开关（写 ~/.omniagent/plugins/<name>.yaml；重启后生效）
   setPluginEnabled: (name: string, enabled: boolean) =>
     http.patch("/api/runtime/tools/plugins", { name, enabled }),

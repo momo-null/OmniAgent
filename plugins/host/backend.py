@@ -1,10 +1,10 @@
-"""HostBackend：本机环境（Windows）—— pyautogui 键鼠 + mss 截图 + EasyOCR 观测。
+"""HostBackend：本机（Windows）执行原语—— pyautogui 键鼠 + mss 截图。
 
-属 ``environments/host/`` 自带实现；对内核只暴露契约三成员（``kind`` / ``text_of`` /
-``verify_done``），其余原语（键鼠 / 截图 / OCR）供本环境工具调用。
+属 ``plugins/host/`` 自包含实现（普通能力插件，与 web/filesystem 同级）；
+对外只产出**原语级结果 dict**，感知文本化（state_text）由本插件工具面负责，
+完成判定走内核 LLM 判定器——本类不持有任何"环境"语义。
 """
 import os
-import time
 from typing import Any, Dict, Optional
 
 import pyautogui
@@ -13,10 +13,6 @@ from utils import get_logger
 
 
 class HostBackend:
-    kind = "host"
-    #: 平台展示名（环境自报，供 system prompt 对齐语义；内核零硬编码）
-    platform = "Windows"
-
     def __init__(self, config: Optional[dict] = None):
         self.logger = get_logger("execution.host")
         self.config = config or {}
@@ -111,42 +107,9 @@ class HostBackend:
 
     # --- 感知（委托 observer）------------------------------------------------
     def observe(self) -> Dict[str, Any]:
-        from environments.host import observer
-        obs = observer.observe()
-        return {
-            "active_window": obs.get("active_window", ""),
-            "ocr_text": obs.get("ocr_text", []),
-        }
-
-    def read_screen_text(self) -> Dict[str, Any]:
-        from environments.host import observer
-        return {"ocr_text": observer.read_screen_text()}
-
-    # --- 感知文本化 / 完成判定（覆盖基类抽象，屏幕形状） ---------------------
-    def text_of(self, percept: Dict[str, Any]) -> str:
-        """把 HostBackend 的屏幕 percept 转纯文本（active_window + ocr_text + ui_tree）。"""
-        if not isinstance(percept, dict):
-            return str(percept)
-        parts = []
-        if percept.get("active_window"):
-            parts.append(f"[窗口] {percept['active_window']}")
-        ocr = percept.get("ocr_text")
-        if ocr:
-            parts.append("[文字] " + " / ".join(ocr if isinstance(ocr, list) else [str(ocr)]))
-        if percept.get("ui_tree"):
-            parts.append("[UI树] " + str(percept["ui_tree"]))
-        return "\n".join(parts)
-
-    def verify_done(self, condition: str, percept: Dict[str, Any]) -> tuple:
-        """屏幕完成判定：condition 按 '|' 拆多候选，在 text_of(percept) 中做子串命中。"""
-        if not condition:
-            return False, "无可校验条件"
-        text = self.text_of(percept)
-        for c in str(condition).split("|"):
-            c = c.strip()
-            if c and c in text:
-                return True, f"命中条件: {c}"
-        return False, f"未找到完成条件: {condition}"
+        """感知原语：活动窗口标题。文字识别是可选增强（OCR 插件经 capability 提供）。"""
+        from plugins.host import observer
+        return {"active_window": observer.active_window_title()}
 
     # --- 截屏（mss）---------------------------------------------------------
     def screenshot(self, save_path: Optional[str] = None) -> Dict[str, Any]:
@@ -164,7 +127,15 @@ class HostBackend:
                 record_artifact(save_path, tool="screenshot")
             except Exception:
                 pass
-            return {"ok": True, "path": save_path}
+            res: Dict[str, Any] = {"ok": True, "path": save_path}
+            # 视觉主链路：原图（压缩后）作为附件回传，由内核在下一请求边界投进
+            # 多模态模型消息；压缩 / 投递门控失败都不影响截图本身的可用性。
+            try:
+                from utils.image_utils import image_to_data_url
+                res["attachments"] = [{"type": "image", "data_url": image_to_data_url(save_path)}]
+            except Exception as e:
+                self.logger.warning(f"截图附件生成失败（仅返回路径）: {e}")
+            return res
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 

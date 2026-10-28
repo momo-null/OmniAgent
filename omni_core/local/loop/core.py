@@ -28,7 +28,6 @@ from omni_core.local import telemetry
 from omni_core.tools import (
     build_plugin_registry,
     configure_shell,
-    activate_environment,
     build_mcp_servers,
 )
 from omni_core.local.runtime_paths import (
@@ -79,6 +78,13 @@ _CHAT_TOOLS = frozenset({
     "memory_overview",
     "read_scene", "read_task_digest",
 })
+
+# verify 判定器的系统提示（S5 通用化）：只做语义判定，零环境知识。
+_VERIFY_JUDGE_SYSTEM = (
+    "你是完成条件判定器。给定一条完成条件和当前状态文本，判断条件是否已经达成。"
+    "判定必须严格基于状态文本中的证据，不臆测、不脑补；证据不足视为未达成。"
+    "只输出 JSON：{\"passed\": true/false, \"reason\": \"一句话依据\"}。"
+)
 
 
 def _schema_name(schema: Any) -> str:
@@ -162,9 +168,7 @@ class ToolLoop(
         self.brain_model = (brain_cfg or {}).get("model", "?")
         # T3.2：保留大脑端点配置原样，供读取模型级上下文上限（maxInputTokens）
         self.brain_cfg = dict(brain_cfg or {})
-        # 环境（host / emulator …）：按 runtime.backend 单选激活；内核只经
-        # ExecutionModule 使用契约三成员（kind / text_of / verify_done）。
-        self.exec = activate_environment(_cfg)
+        # 执行单元模型名占位（与 env 无关；真实值由 dispatch 注册表按槽位填充）
         self.exec_model = "none"
         self.verbose = verbose
         self.brain_capabilities = (brain_cfg or {}).get("capabilities", {}) or {}
@@ -178,14 +182,7 @@ class ToolLoop(
             ((_rt.get("long_task") or {}).get("budget_hint_ratio", 0.75)) or 0.0
         )
 
-        # 视觉通道已彻底插件化（plugins/vision）：运行时由插件 startup 自构造，
-        # 内核不再构造 / 读取 runtime.vision，也不注入 runtime["vision"]。
-        self.runtime = {
-            "exec": self.exec,
-        }
-
-        # 工具清单 = 环境自带（env）+ 插件（plugin）+ 内核 builtin（core）。
-        # 环境已在上方按 runtime.backend 激活；下面装载插件与内建限流。
+        # 工具清单 = 插件（plugin）+ 内核 builtin（core）。
         _tools_cfg = (_rt.get("tools") or {})
         configure_shell(_rt.get("shell_exec") or {})
         # 外部 MCP：交给 SDK 原生 MCPServer；连接生命周期由 sdk_loop 在运行期负责。
@@ -193,12 +190,11 @@ class ToolLoop(
         # （实测 connect 从 ~950ms 降到 2.8ms），断连由 sdk_loop 的探活自愈。
         _mcp_cfg = config.load_mcp_config()
         self.mcp_servers = loop_pool.mcp_servers(_mcp_cfg) if self.tools_enabled else []
-        # 插件装载：扫 plugin_dirs，按各插件自有 enabled 决定注册与否；单包失败只降级。
-        # 插件只拿到只读 env_kind，**不拿环境厚句柄**（见 PluginContext）。
+        # 插件装载：扫 plugin_dirs，按各插件 enabled 决定注册与否；单包失败只降级。
         from omni_core.tools.loader import PluginContext, load_plugins
         self.plugin_report = load_plugins(
             _cfg,
-            ctx=PluginContext(config=_cfg, wired=True, env_kind=self.exec.kind),
+            ctx=PluginContext(config=_cfg, wired=True),
         )
         if self.plugin_report.failed:
             self._log(
@@ -220,7 +216,6 @@ class ToolLoop(
         # 直接 s.get("name") 恒 None，chat 档会被过滤成 0（踩过）
         self.tool_schemas = [s for s in self.registry.schemas
                              if self._tool_allowed(_schema_name(s))]
-        self.env_kind = self.exec.kind
 
         # Layer 0（2026-09-30）：通用派发底座——执行单元注册表 slot→LLMClient。
         # 把「子 agent 是谁」从写死的 self.executor 升级为按逻辑名寻址的注册表；
@@ -511,11 +506,11 @@ class ToolLoop(
             return None
 
     def _verify(self, spec: TaskSpec, world: WorldModel, condition: str = "") -> tuple:
-        """M4a.3 / §9 显式校验：目标是否已达成。
+        """M4a.3 / §9 显式校验：目标是否已达成（通用 LLM 语义判定）。
 
-        去场景化：完成判定委托给环境（``self.exec.verify_done``），
-        内核不再直接读取 ocr_text / active_window 等屏幕字段（红线）；
-        各环境自定命中语义（host 子串 / emulator 文字列表元素命中等）。
+        判定 = 完成条件 + 当前世界状态文本（``world.current_state_text()``，由感知
+        工具经 ``state_text`` 约定写入）交给大脑模型做语义级裁决——内核不再有
+        任何环境特定的子串 / 列表匹配（原环境契约的写死遗留已删）。
 
         无可校验条件时返回 (False, '无可校验条件')——verify 工具据此计 verify_fail；
         task_done 门控调用方须自行判断「无条件→信任大脑」。
@@ -526,8 +521,25 @@ class ToolLoop(
         cond = condition or spec.expected or spec.done_when
         if not cond:
             return False, "无可校验条件"
-        percept = world.current_percept if hasattr(world, "current_percept") else {}
-        return self.exec.verify_done(cond, percept)
+        try:
+            state_text = str(world.current_state_text() or "")
+        except Exception:
+            state_text = ""
+        if not state_text:
+            return False, "无当前状态（可先调用 observe / screenshot 等感知工具获取）"
+        from omni_core.local import llm_judge
+        user = (
+            f"【完成条件】{cond}\n"
+            f"【当前状态】\n{state_text}\n\n"
+            '仅依据上面的状态文本判断完成条件是否已达成。只回 JSON：'
+            '{"passed": true 或 false, "reason": "一句话依据"}'
+        )
+        verdict = llm_judge.chat_json(self.brain_cfg, _VERIFY_JUDGE_SYSTEM, user, timeout=15.0)
+        if not isinstance(verdict, dict) or "passed" not in verdict:
+            return False, "判定器不可用（LLM 判定失败，可稍后重试）"
+        passed = bool(verdict.get("passed"))
+        reason = str(verdict.get("reason") or "").strip()
+        return passed, (reason or ("条件已达成" if passed else "条件未达成"))
 
     def _recheck_batch(self, prev_results, world) -> None:
         """T4.4（U5c）：对标记 ``need_verify`` 的子任务批次做二次校验（下一轮前）。
@@ -554,8 +566,7 @@ class ToolLoop(
         """组装给大脑的用户消息。首轮仅含**任务目标与完成条件**；后续轮次仅一句中性继续。
 
         §9 / B1（loop 只编排、不替模型观察）：**不命令模型何时观察**——
-        感知工具（observe / read_screen_text / …）与其它工具平级，由模型按需自主调用；
-        环境身份已由 system prompt 的「运行时上下文 - 当前环境」给出。
+        感知工具（observe / read_screen_text / …）与其它工具平级，由模型按需自主调用。
         """
         if step == 0:
             base = (

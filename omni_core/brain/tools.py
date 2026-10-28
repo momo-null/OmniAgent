@@ -54,8 +54,8 @@ VERIFY_TOOL_SCHEMA = {
     "type": "function",
     "function": {
         "name": "verify",
-        "description": "校验当前环境是否已达成某条件（环境自定的命中语义）。需要确认子任务进展时调用；"
-                       "连续失败会触发升级，把子任务交回主 agent / 编排层。",
+        "description": "校验完成条件是否已达成（语义判定：依据当前世界状态文本由判定器裁决）。"
+                       "需要确认子任务进展时调用；连续失败会触发升级，把子任务交回主 agent / 编排层。",
         "parameters": {
             "type": "object",
             "properties": {

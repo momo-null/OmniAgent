@@ -691,6 +691,13 @@ class _HumanInjection:
         with self._lock:
             self._pending.append({"role": "user", "content": text})
 
+    def push_message(self, msg: Dict[str, Any]) -> None:
+        """推入一条完整消息 dict（如带图片附件的多模态 user 内容块，见 S9 视觉主链路）。"""
+        if not isinstance(msg, dict) or not msg:
+            return
+        with self._lock:
+            self._pending.append(msg)
+
     def take_messages(self) -> List[Dict[str, Any]]:
         with self._lock:
             msgs, self._pending = self._pending, []
@@ -902,10 +909,10 @@ def _mk_verify(state: SubtaskState, gate: Any,
                on_state: Optional[Callable[[str], None]]) -> FunctionTool:
     @sdk_function_tool(strict_mode=False, failure_error_function=None)
     def verify(condition: str = "") -> dict:
-        """校验当前环境是否已达成某条件。
+        """校验完成条件是否已达成（依据当前世界状态文本做语义判定）。
 
         Args:
-            condition: 期望出现的文本条件；留空则用任务完成条件
+            condition: 期望达成的条件文本；留空则用任务完成条件
         """
         if on_state:
             on_state("VERIFYING")
@@ -1385,6 +1392,9 @@ def _assemble_agent_stack(
     prune_tail: int = 0,
     # M8（修复）：运行期人类软注入通道——人类 user 消息在下一请求边界注入（不依赖 checkpoint）
     human_injection: Optional[_HumanInjection] = None,
+    # S9 视觉主链路：工具结果携带的图片附件注入通道（同一「请求级注入」范式；
+    # 通道由调用方按模型视觉能力门控后传入，None = 不注入）
+    tool_attachments: Optional[Any] = None,
     # 基础架构打点：LLM 计时回调（每次模型调用一条，payload 见 _TimingModel）
     on_llm_timing: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Tuple[SubtaskState, Any, Any, bool, Optional[_RepeatGuard]]:
@@ -1424,6 +1434,9 @@ def _assemble_agent_stack(
     # checkpoint，后者单次 ainvoke 不回读）。仅当通道非空时包装。
     if human_injection is not None:
         model = _HumanInjectionModel(model, human_injection)
+    if tool_attachments is not None:
+        # S9：附件走同一「请求级注入」范式（take_messages 契约与人类注入通道一致）。
+        model = _HumanInjectionModel(model, tool_attachments)
     use_compaction = bool(max_input_tokens and max_input_tokens > 0 and summarize is not None)
     if use_compaction:
         _thr = int(max_input_tokens * compress_threshold) if compress_threshold and compress_threshold > 0 \
@@ -1552,6 +1565,8 @@ def run_subtask_sdk(
     on_compaction: Optional[Callable[[], None]] = None,
     # M8（修复）：运行期人类软注入通道（透传给 _assemble_agent_stack）
     human_injection: Optional[Any] = None,
+    # S9 视觉主链路：工具结果携带的图片附件注入通道（None = 不注入）
+    tool_attachments: Optional[Any] = None,
     # 基础架构打点：LLM 计时回调（每次模型调用一条，payload 见 _TimingModel；主链 traj 落轨迹）
     on_llm_timing: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
@@ -1590,6 +1605,7 @@ def run_subtask_sdk(
         prune_head=prune_head,
         prune_tail=prune_tail,
         human_injection=human_injection,
+        tool_attachments=tool_attachments,
         on_llm_timing=on_llm_timing,
     )
     # 「方案 B（纯文本收尾）」的例外标记：本块是否调用过 verify 元工具。

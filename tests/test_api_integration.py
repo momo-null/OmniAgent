@@ -202,32 +202,31 @@ class TestMemoryGate:
 
 # === M3 工具插件层枚举（前端 Skills&Tools 面板数据源） ===
 class TestToolsEndpoint:
-    def test_tools_lists_three_classes(self, client):
-        """GET /api/runtime/tools 枚举三类：环境（radio）+ 插件（switch）+ 工具（只读）。"""
+    def test_tools_lists_plugins_and_tools(self, client):
+        """GET /api/runtime/tools 枚举：插件（switch）+ 工具（只读）；没有环境单选。"""
         r = client.get("/api/runtime/tools")
         assert r.status_code == 200, r.text
         data = r.json()
 
-        # ① 环境：自报标题 + 恰好一个 active
-        kinds = {e["kind"] for e in data["environments"]}
-        assert {"host", "emulator"} <= kinds
-        assert sum(1 for e in data["environments"] if e["active"]) == 1
-        assert all(e.get("title") for e in data["environments"])
+        # ① 无环境概念：响应里没有 environments，也没有 env 来源的工具
+        assert "environments" not in data
+        assert all(t["source"] != "env" for t in data["tools"])
 
-        # ② 插件：自报元数据 + 各自的 enabled（前端只渲染一个开关）
+        # ② 插件：自报元数据 + 各自的 enabled（前端只渲染一个开关）；
+        #    操作电脑 / Android / OCR 与 web / filesystem 同级、默认停用
         plugins = {p["name"]: p for p in data["plugins"]}
-        assert {"filesystem", "web", "vision"} <= set(plugins)
+        assert {"filesystem", "web", "vision", "host", "emulator", "ocr"} <= set(plugins)
         assert "fs_pro" not in plugins, "fs_pro 已并入 filesystem"
         assert plugins["vision"]["enabled"] is False, "vision 默认停用（治'每次都用 vision'）"
+        assert plugins["host"]["enabled"] is False, "host 默认停用（能力显式开启）"
+        assert plugins["emulator"]["enabled"] is False
+        assert plugins["ocr"]["enabled"] is False
         assert plugins["filesystem"]["enabled"] is True
 
-        # ③ 工具：只读清单，来源三类
+        # ③ 工具：只读清单；内核 builtin 在，停用插件的工具不出现
         by_name = {t["name"]: t for t in data["tools"]}
-        assert by_name["press"]["source"] == "env"       # 当前环境（host）自带
-        assert by_name["press"]["unit"] == "host"
-        assert by_name["press"]["server"] is None
-        assert isinstance(by_name["press"]["parameters"], dict)
         assert by_name["shell_exec"]["source"] == "core"  # 内核 builtin
+        assert isinstance(by_name["shell_exec"]["parameters"], dict)
         plugin_tools = [t for t in data["tools"] if t["source"] == "plugin"]
         assert plugin_tools, "应有已启用插件的工具（filesystem / web）"
         assert all(t["source"] != "plugin" or t["unit"] in plugins for t in data["tools"])

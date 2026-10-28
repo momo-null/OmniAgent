@@ -65,9 +65,9 @@ def main():
 
     # 2) 连模拟器 + 截图
     log("step2: 连接 MuMu 模拟器并截图 ...")
-    from devices import ExecutionModule
+    from plugins.emulator.backend import EmulatorBackend
 
-    exec_mod = ExecutionModule()  # config runtime.backend=emulator
+    exec_mod = EmulatorBackend()  # env 概念已退场：直接构造 Android 后端
     shot = exec_mod.screenshot()
     log(f"  screenshot -> {json.dumps(shot, ensure_ascii=False)}")
     if not shot.get("ok"):

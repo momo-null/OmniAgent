@@ -137,9 +137,7 @@ def prime_mcp(mcp_cfg: Optional[Dict[str, Any]] = None) -> None:
                 from omni_core.tools.loader import PluginContext, load_plugins
 
                 full = _config.load_config() or {}
-                _kind = str(((full.get("runtime") or {}).get("backend")) or "host")
-                load_plugins(full, ctx=PluginContext(config=full, wired=True,
-                                                     env_kind=_kind))
+                load_plugins(full, ctx=PluginContext(config=full, wired=True))
                 try:
                     print("[loop_pool] 插件启动预热完成", flush=True)
                 except Exception:

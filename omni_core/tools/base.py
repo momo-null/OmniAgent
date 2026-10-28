@@ -17,9 +17,9 @@
 - 供同步调用方（单测、脚本）按名 invoke。
 它不是"派发器"——派发是 SDK Runner 的事。
 
-工具来源（`ToolPlugin.source`）：``core``（内核内置）/ ``env``（环境自带）/
-``plugin``（``plugins/``）/ ``mcp``（外部 MCP）。是否注册由各自的装载器决定
-（插件按自身 ``enabled``、环境按 ``runtime.backend``）；**本注册表不做过滤**，
+工具来源（`ToolPlugin.source`）：``core``（内核内置）/ ``plugin``（``plugins/`` 下的
+能力插件，host / emulator 与 web / filesystem 同级）/ ``mcp``（外部 MCP）。
+是否注册由各自装载器决定（插件按自身 ``enabled``）；**本注册表不做过滤**，
 只记录"当前进程里存在哪些工具"。
 """
 import json
@@ -36,15 +36,15 @@ from omni_core.async_bridge import run_async
 class ToolPlugin:
     """一个平级 tool 插件：SDK FunctionTool + 来源元数据。
 
-    ``unit``  提供者标识：``core`` / 环境 kind（host、emulator…）/ 插件名 / MCP server 名。
-    ``source`` 来源类别：``core`` | ``env`` | ``plugin`` | ``mcp``。
+    ``unit``  提供者标识：``core`` / 插件名（host、emulator、filesystem…）/ MCP server 名。
+    ``source`` 来源类别：``core`` | ``plugin`` | ``mcp``。
     ``meta``  提供者自声明元数据（如 ``percept="state"/"collected"``，供内核分发世界模型）。
     """
 
     name: str
     tool: FunctionTool
     unit: str = "core"            # 提供者标识（不写死具体名字；由各自装载器赋值）
-    source: str = "core"          # core | env | plugin | mcp
+    source: str = "core"          # core | plugin | mcp
     meta: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -104,8 +104,8 @@ def function_tool(
     Args:
         name: 对外工具名（缺省用函数名）。
         description: 工具描述（缺省用 docstring 首段）。
-        unit: 提供者标识（缺省 "core"；插件/环境由各自装载器覆盖）。
-        source: 来源类别 core | env | plugin | mcp（缺省 "core"）。
+        unit: 提供者标识（缺省 "core"；插件由 loader 覆盖）。
+        source: 来源类别 core | plugin | mcp（缺省 "core"）。
         percept: 世界模型感知类型——``"state"`` → 结果并入环境状态文本；
             ``"collected"`` → 结果并入采集清单。内核据此分发，**零工具名字面量**。
         timeout: 单次工具调用超时（秒）。

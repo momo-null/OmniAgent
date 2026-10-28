@@ -2,5 +2,7 @@
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-q"
+# per-test 硬超时（pytest-timeout）：把「测试卡死挂全套」变成「90s 判负 + 打印卡点栈」，
+# 其余用例照常跑完—— chronic 合跑死锁（async 桥接线程，存量 flaky）不再浪费时间。
+addopts = "-q --timeout=90 --timeout-method=thread"
 asyncio_mode = "auto"

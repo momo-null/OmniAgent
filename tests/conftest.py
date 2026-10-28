@@ -100,7 +100,7 @@ def _unbind_env_tool_backends():
     """
     yield
     for kind in _ENV_KINDS:
-        mod = sys.modules.get(f"environments.{kind}.tools")
+        mod = sys.modules.get(f"plugins.{kind}.tools")
         if mod is not None:
             bind = getattr(mod, "bind", None)
             if callable(bind):

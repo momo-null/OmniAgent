@@ -76,7 +76,7 @@ class _SubtaskGate:
     """L2 门控：完成判定 / 备注写入（供 SDK 元工具 task_done / verify / record 调用）。
 
     属 L2 框架外挂件（设计 §3.5）：不进框架循环，只在框架回调它时做 L2 决策。
-    完成判定统一走 backend.verify_done（去场景化 §9，内核不读感知字段）。
+    完成判定走内核通用 LLM 判定器（core._verify，依据 state_text 语义裁决）。
 
     验证档位（2026-09-17 用户确认，方案 a）：删 LLM-as-judge——judge 验证的是
     world.notes（record 的形式产物）而非真实产出，验证对象错了；内嵌验证四层

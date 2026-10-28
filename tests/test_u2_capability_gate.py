@@ -10,32 +10,22 @@
 """
 
 
-def test_tools_endpoint_exposes_three_classes(client):
+def test_tools_endpoint_exposes_plugins_and_tools(client):
     g = client.get("/api/runtime/tools").json()
-    assert {"environments", "plugins", "tools", "mcp"} <= set(g)
-    # 环境单选：恰好一个 active
-    assert sum(1 for e in g["environments"] if e["active"]) == 1
-    # 环境 / 插件自报标题与状态（前端零硬编码）
-    assert all(e.get("title") for e in g["environments"])
+    assert {"plugins", "tools", "mcp"} <= set(g)
+    # env 概念已退场：没有环境单选，也没有 env 来源的工具
+    assert "environments" not in g
+    assert all(t["source"] != "env" for t in g["tools"])
+    # 插件自报标题与状态（前端零硬编码）
     assert all("enabled" in p and p.get("title") for p in g["plugins"])
     # 工具只读：无 per-tool 禁用字段
     assert all("disabled" not in t for t in g["tools"])
 
 
-def test_environment_patch_validates_kind(client):
-    r = client.patch("/api/runtime/tools/environment", json={"kind": "not_an_env"})
-    assert r.status_code == 400
-    assert "未知环境" in r.json()["error"]
-
-
-def test_environment_patch_persists_kind(client):
-    from backend.api.routers.helpers import config
-
-    r = client.patch("/api/runtime/tools/environment", json={"kind": "emulator"})
-    assert r.status_code == 200, r.text
-    assert r.json()["environment"] == "emulator"
-    backend = ((config.load_config() or {}).get("runtime") or {}).get("backend")
-    assert backend == "emulator"
+def test_environment_patch_endpoint_removed(client):
+    """env 单选端点已随 env 概念删除（404）。"""
+    r = client.patch("/api/runtime/tools/environment", json={"kind": "host"})
+    assert r.status_code in (404, 405)
 
 
 def test_plugin_patch_validates_name(client):

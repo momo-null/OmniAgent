@@ -19,7 +19,7 @@ def _load_host_env_tools():
     刻意不用 ``activate_environment``：那会构造并绑定**真实** HostBackend，
     用例若漏了 ``_bind`` 就会操作真实桌面（也慢）。这里只登记，由用例自绑 fake。
     """
-    from environments.host import tools  # noqa: F401  (import 即注册工具)
+    from plugins.host import tools  # noqa: F401  (import 即注册工具)
 
 
 class _FakeBackendInner:
@@ -42,7 +42,7 @@ class _FakeExec:
     # --- 感知 ---
     def observe(self):
         self.calls.append(("observe",))
-        return {"ok": True, "percept": "fake"}
+        return dict(self._percept)
 
     def read_screen_text(self):
         self.calls.append(("read_screen_text",))
@@ -72,7 +72,7 @@ class _FakeExec:
 
 def _bind(exec_mod):
     """把 fake 后端注入 host 环境工具面（工具经 `_BACKEND` 调用原语）。"""
-    from environments.host import tools as host_tools
+    from plugins.host import tools as host_tools
 
     host_tools.bind(exec_mod)
     return exec_mod
@@ -91,8 +91,9 @@ def test_host_env_tools_registered():
     ):
         assert name in TOOL_REGISTRY, f"{name} 应为 host 环境工具"
         plugin = TOOL_REGISTRY[name]
-        assert plugin.unit == "host", f"{name} 应属 host 环境"
-        assert plugin.source == "env", f"{name} 来源应为 env"
+        assert plugin.unit == "host", f"{name} 应属 host 插件"
+        # 直接 import 工具模块时 source 为装饰器缺省 core；经 loader 装载后被归一为 plugin
+        assert plugin.source in ("core", "plugin"), f"{name} 来源应为 core/plugin"
 
     for name in (
         "ocr_screenshot", "get_ui_tree", "tap_by_id", "tap_text",
@@ -138,10 +139,21 @@ def test_drag_routes_to_backend(approve_all_sink):
 
 
 def test_perception_routes_to_backend():
+    """observe 路由到后端并产出 state_text；read_screen_text 走 OCR capability。"""
     fake = _bind(_FakeExec(percept={"ocr_text": ["登录"]}))
-    assert call_tool("observe", {})["ok"] is True
-    assert call_tool("read_screen_text", {}) == {"ocr_text": ["登录"]}
-    assert ("read_screen_text",) in fake.calls
+    res = call_tool("observe", {})
+    assert res["ok"] is True
+    assert res["state_text"] and "登录" in res["state_text"]
+    # OCR 插件未启用：read_screen_text 明确报错（可选增强，不是必经链路）
+    assert call_tool("read_screen_text", {})["ok"] is False
+    from omni_core.tools.capability import register_capability, unregister_capability
+    register_capability("ocr", lambda path: ["登录", "开始"])
+    try:
+        res = call_tool("read_screen_text", {})
+        assert res["ok"] is True and res["ocr_text"] == ["登录", "开始"]
+        assert "登录" in res["state_text"]
+    finally:
+        unregister_capability("ocr")
 
 
 # --- 通用件 -----------------------------------------------------------------

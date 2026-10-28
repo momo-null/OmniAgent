@@ -12,8 +12,9 @@
 # ============================================================================
 
 runtime:
-  # 执行后端：host（宿主机屏幕）| emulator（Android，需用户自行提供 adb_serial 才启用）。
-  backend: host
+  # 注：runtime.backend（env 单选）已废弃——操作电脑 / Android 是普通插件
+  # （plugins/host、plugins/emulator，各自 enabled 开关，写 ~/.omniagent/plugins/<name>.yaml）。
+  # 残留的 backend 键被静默忽略。
   # 升级/终止判定（缺省见 omni_core/local/tool_loop.py 的 _DEFAULT_ESCALATION）
   escalation:
     verify_fail_max: 3        # verify 连续失败达此次数 → 升级

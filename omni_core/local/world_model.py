@@ -1,11 +1,12 @@
 """世界模型（M4b.1：内存 + 磁盘持久化 + checkpoint）。
 
 去场景化（§9）：世界状态不绑定任何感知形状（屏幕/结构化/终端…）。
-内部只持有 backend 产出的原始 percept + 其文本化结果 state_text，
+内部只持有感知工具产出的原始结果（current_percept）+ 其文本化结果 state_text
+（由感知工具所在插件按 ``state_text`` 约定产出自带字段，内核透传），
 内核（tool_loop / summary / snapshot）只消费 state_text，永不读取感知字段名。
 
 职责：
-- 保存 backend 产出的当前 percept（current_percept）+ 文本化快照（state_text）
+- 保存感知工具产出的当前结果（current_percept）+ 文本化快照（state_text）
 - 维护最近 K 步动作结果的 ring buffer
 - 积累已知事实（facts，供大脑规划/反思注入）
 - 磁盘持久化：``tasks/<task_id>/world_model.md``
@@ -90,8 +91,8 @@ class WorldModel:
     def __init__(self, task_id: str = "", history_k: int = 8):
         self.task_id = task_id
         self.history_k = history_k
-        self.current_percept: Dict[str, Any] = {}        # backend 原始 percept，内核不解读
-        self.state_text: str = ""                        # backend.text_of(percept) 的文本化
+        self.current_percept: Dict[str, Any] = {}        # 感知工具原始结果，内核不解读
+        self.state_text: str = ""                        # 插件产出的文本化状态（state_text 约定）
         self.actions: "deque[Dict[str, Any]]" = deque(maxlen=history_k)
         self.facts: List[str] = []
         # M6 溯源：facts 仍是纯文本列表（对外契约不变），来源另存 text -> {source, ts}
@@ -145,15 +146,16 @@ class WorldModel:
     def _checkpoint_dir(self) -> Path:
         return self._dir() / "checkpoints"
 
-    # --- 状态更新（委托 backend 文本化） -------------------------------------
-    def update(self, percept: Dict[str, Any], backend=None) -> None:
-        """写入 backend 产出的原始 percept，并由 backend.text_of 文本化。
+    # --- 状态更新（state_text 通用约定） -------------------------------------
+    def update(self, percept: Optional[Dict[str, Any]] = None, state_text: str = "") -> None:
+        """写入感知工具产出的结果 + **已文本化**的状态文本。
 
-        内核不读取 percept 内部字段——文本化完全由 backend 负责。
+        文本化由感知工具所在**插件**完成（结果自带 ``state_text`` 字段，内核按
+        通用约定透传）——本模型不持有任何 backend，也不解读 percept 内部字段。
         """
         with self._lock:
             self.current_percept = percept or {}
-            self.state_text = backend.text_of(percept) if backend else ""
+            self.state_text = str(state_text or "")
 
     def log_action(self, call: Dict[str, Any], result: Any) -> None:
         with self._lock:

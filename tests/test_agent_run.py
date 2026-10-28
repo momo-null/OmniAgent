@@ -148,12 +148,12 @@ def test_runtime_context_export_includes_run_config():
         assert exported["config_hash"] == "abc123def456"
         assert exported["project_id"] == "p_demo"
 
-        # 阶段 1 目标 3：工具 registry 与设备后端也随运行体导出（完整运行配置）
+        # 阶段 1 目标 3：工具 registry 与已装载插件也随运行体导出（完整运行配置）
         ctx.tool_registry = {"click": 1, "shell_exec": 1}
-        ctx.execution_backend = type("B", (), {"kind": "host"})()
+        ctx.loaded_plugins = ["host"]
         exported2 = ctx.export()
         assert exported2["tool_names"] == ["click", "shell_exec"]
-        assert exported2["execution_backend"] == "host"
+        assert exported2["loaded_plugins"] == ["host"]
 
         # 运行表也能按复合键导出同一份完整配置
         assert RR.manager.get(tid, RR.AGENT_MAIN).export()["config_hash"] == "abc123def456"

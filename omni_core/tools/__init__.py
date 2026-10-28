@@ -5,9 +5,9 @@
 - 这里提供隔离「定义 / 注册 / 派发 / 回填」四跳的轻量基础设施。
 
 工具来源（`ToolPlugin.source`）：
-- ``core``   内核内置（shell 执行 / skill / 环境适配）
-- ``env``    环境自带（host / emulator 的工具面，见 ``environments/``）
-- ``plugin`` ``plugins/`` 下的自包含插件（自持 ``enabled`` 开关）
+- ``core``   内核内置（shell 执行 / skill / 场景读取等）
+- ``plugin`` ``plugins/`` 下的自包含插件（自持 ``enabled`` 开关；host / emulator
+  与 web / filesystem 完全同级）
 - ``mcp``    外部 MCP server（与自研平级）
 """
 from omni_core.tools.base import (
@@ -23,7 +23,6 @@ from omni_core.tools.base import (
     build_plugin_registry,
 )
 from omni_core.tools.shell_tool import shell_exec, configure as configure_shell
-from omni_core.tools.env_loader import activate_environment, active_kind
 from omni_core.tools.mcp_servers import build_mcp_servers
 from omni_core.tools.skill_tool import (
     load_skill,
@@ -55,8 +54,6 @@ __all__ = [
     "build_plugin_registry",
     "shell_exec",
     "configure_shell",
-    "activate_environment",
-    "active_kind",
     "build_mcp_servers",
     "load_skill",
     "set_skill_task_context",

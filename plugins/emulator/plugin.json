@@ -1,0 +1,8 @@
+{
+  "name": "emulator",
+  "version": "1.0.0",
+  "title": "Android 模拟器操作",
+  "description": "控制 Android 设备（uiautomator2 / ADB）：触控 / 按键码 / 层级树 / 截图 / 文件。启用后 agent 可直接操作该设备。",
+  "enabled": false,
+  "permissions": ["fs_read"]
+}

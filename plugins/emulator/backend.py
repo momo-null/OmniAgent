@@ -40,10 +40,6 @@ from utils import get_logger
 
 
 class EmulatorBackend:
-    kind = "emulator"
-    #: 平台展示名（环境自报，供 system prompt 对齐语义；内核零硬编码）
-    platform = "Android"
-
     def __init__(self, config: Optional[dict] = None):
         self.logger = get_logger("execution.emulator")
         self.config = config or {}
@@ -403,7 +399,15 @@ class EmulatorBackend:
                 save_path = str(task_tmp_dir() / "emulator_screenshot.png")
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             self.d.screenshot(save_path)
-            return {"ok": True, "path": save_path}
+            res: Dict[str, Any] = {"ok": True, "path": save_path}
+            # 视觉主链路：原图（压缩后）作为附件回传，由内核在下一请求边界投进
+            # 多模态模型消息；压缩失败不影响截图本身的可用性。
+            try:
+                from utils.image_utils import image_to_data_url
+                res["attachments"] = [{"type": "image", "data_url": image_to_data_url(save_path)}]
+            except Exception as e:
+                self.logger.warning(f"截图附件生成失败（仅返回路径）: {e}")
+            return res
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
@@ -508,34 +512,6 @@ class EmulatorBackend:
             return str(res), None
         return str(out), getattr(res, "exit_code", None)
 
-    # --- 去场景化（§9）：感知文本化 / 完成判定，emulator 以 OCR 为主 ----------
-    def text_of(self, percept: Dict[str, Any]) -> str:
-        """emulator 感知文本化：以 ocr_text（层级树/图像 OCR 文字）为主，
-        保留 active_window 上下文。"""
-        if not isinstance(percept, dict):
-            return str(percept)
-        parts = []
-        if percept.get("active_window"):
-            parts.append(f"[窗口] {percept['active_window']}")
-        ocr = percept.get("ocr_text")
-        if ocr:
-            ocr_list = ocr if isinstance(ocr, list) else [str(ocr)]
-            parts.append("[文字] " + " / ".join(ocr_list))
-        return "\n".join(parts)
-
-    def verify_done(self, condition: str, percept: Dict[str, Any]) -> tuple:
-        """复刻原 tool_loop._verify 的 OCR 完成判定（行为不变）：
-        condition 按 '|' 拆多候选，逐个在 ocr_text 列表中做元素命中。"""
-        if not condition:
-            return False, "无可校验条件"
-        ocr_text = percept.get("ocr_text") or []
-        if isinstance(ocr_text, str):
-            ocr_text = [ocr_text]
-        candidates = [c.strip() for c in str(condition).split("|") if c.strip()]
-        for c in candidates:
-            if c in ocr_text:
-                return True, f"OCR 命中条件: {c}"
-        return False, f"未在屏幕找到完成条件: {condition}"
-
-    # 注：M4 起本后端不再声明 tool_schemas —— 能力暴露的唯一来源是
-    # agent 外层 tool 插件层（omni_core/tools/device_tool.py）。
+    # 注：感知文本化（state_text）由本插件工具面负责；完成判定走内核 LLM 判定器。
+    # OCR（utils/ocr）仅服务 tap_text / _ocr_with_bbox / ocr_screenshot 的**功能内
+    # 消费**（bbox 精确定位），不属于状态文本链路。

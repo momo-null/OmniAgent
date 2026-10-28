@@ -1,11 +1,12 @@
-"""工具管理接口：/tools（只读枚举）+ 环境单选 + 插件开关。
+"""工具管理接口：/tools（只读枚举）+ 插件开关。
 
-新模型：
-- **环境**（`environments/<kind>/`）：单选（`runtime.backend`），自带工具面 → 前端 radio；
-- **插件**（`plugins/<name>/`）：每个一个 on/off（`~/.omniagent/plugins/<name>.yaml`）→ 前端 switch；
-- **工具**：只读清单（来源 env / plugin / core / mcp），无逐工具开关。
+模型：
+- **插件**（`plugins/<name>/`）：每个一个 on/off（`~/.omniagent/plugins/<name>.yaml`）
+  → 前端 switch；操作电脑（host）/ Android（emulator）与 web / filesystem 同级，
+  没有独立的"环境"概念，也没有单选。
+- **工具**：只读清单（来源 plugin / core / mcp），无逐工具开关。
 
-前端不硬编码任何环境 / 插件名：所有标题 / 说明 / 状态都来自后端自报。
+前端不硬编码任何插件名：所有标题 / 说明 / 状态都来自后端自报。
 """
 from __future__ import annotations
 
@@ -19,27 +20,18 @@ router = APIRouter(tags=["runtime"])
 
 @router.get("/tools")
 async def list_tools():
-    """枚举：环境（radio）+ 插件（switch）+ 工具（只读）+ MCP。"""
+    """枚举：插件（switch）+ 工具（只读）+ MCP。"""
     try:
         import config as app_config
 
-        from devices import list_environments, registered_kinds
-        from omni_core.tools import activate_environment
         from omni_core.tools.base import TOOL_REGISTRY
-        from omni_core.tools.env_loader import active_kind
         from omni_core.tools.loader import PluginContext, list_plugins, load_plugins
         from omni_core.tools.mcp_servers import build_mcp_servers
         from omni_core.async_bridge import run_async
 
         cfg = app_config.load_config() or {}
-        env_kind = active_kind(cfg)
-        # 激活当前环境以登记其工具（只读枚举路径，与运行一致）
-        try:
-            activate_environment(cfg)
-        except Exception:
-            pass
         # 幂等装载插件（只读枚举：wired=False，插件不得做破坏性动作）
-        load_plugins(cfg, ctx=PluginContext(config=cfg, wired=False, env_kind=env_kind))
+        load_plugins(cfg, ctx=PluginContext(config=cfg, wired=False))
 
         tools = []
         for p in TOOL_REGISTRY.values():
@@ -47,17 +39,13 @@ async def list_tools():
             tools.append({
                 "name": p.name,
                 "description": fn.get("description", "") or "",
-                "source": p.source,          # core | env | plugin | mcp
+                "source": p.source,          # core | plugin | mcp
                 "unit": p.unit,              # 提供者标识
                 "server": p.meta.get("server") if p.source == "mcp" else None,
                 "parameters": fn.get("parameters") or {},
             })
 
-        environments = [
-            {"kind": e["kind"], "title": e["title"], "active": e["kind"] == env_kind}
-            for e in list_environments()
-        ]
-        plugins = list_plugins(cfg, env_kind=env_kind)
+        plugins = list_plugins(cfg)
 
         mcp_cfg = config.load_mcp_config()
 
@@ -113,7 +101,6 @@ async def list_tools():
             })
 
         return JSONResponse({
-            "environments": environments,
             "plugins": plugins,
             "tools": tools,
             "mcp": {
@@ -128,39 +115,6 @@ async def list_tools():
         return JSONResponse(
             {"ok": False, "error": f"工具枚举失败: {type(e).__name__}: {e}"}, status_code=500
         )
-
-
-@router.patch("/tools/environment")
-async def set_environment(request: Request):
-    """切换当前环境（写 ``runtime.backend``）；重启生效。
-
-    - body: ``{"kind": "host"}``（必须是已注册的环境）。
-    """
-    import config as app_config
-    from devices import registered_kinds
-
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
-    kind = (body or {}).get("kind")
-    if not isinstance(kind, str) or kind not in registered_kinds():
-        return JSONResponse(
-            {"ok": False, "error": f"未知环境: {kind!r}（可选 {registered_kinds()}）"},
-            status_code=400,
-        )
-    try:
-        existing = app_config.load_settings() or {}
-        rt = existing.get("runtime") or {}
-        rt["backend"] = kind
-        existing["runtime"] = rt
-        app_config.save_settings(existing)
-        app_config.reload_config()
-    except Exception as e:
-        return JSONResponse(
-            {"ok": False, "error": f"持久化失败: {type(e).__name__}: {e}"}, status_code=500
-        )
-    return JSONResponse({"ok": True, "environment": kind})
 
 
 @router.patch("/tools/plugins")

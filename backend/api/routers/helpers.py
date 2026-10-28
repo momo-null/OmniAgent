@@ -555,7 +555,7 @@ def _call_skill(task_id: str, skill_name: str):
     _push("system", f"▶ 调用技能：{skill_name}  (task={task_id})")
     try:
         from omni_core.local.skill_library import SkillLibrary
-        from devices import ExecutionModule
+        from omni_core.tools.base import call_tool
 
         sl = SkillLibrary(task_id=task_id)
         skill = sl.load(skill_name)
@@ -565,7 +565,6 @@ def _call_skill(task_id: str, skill_name: str):
         _push("agent",
               f"技能「{skill.name}」\n目标模式：{skill.objective_pattern}\n"
               f"状态：{skill.metadata.status}  成功率：{skill.metadata.success_count}/{skill.metadata.total_uses}")
-        exec = ExecutionModule()
         for i, sub in enumerate(skill.substeps, 1):
             tool = sub.tool
             args = sub.args or {}
@@ -574,8 +573,9 @@ def _call_skill(task_id: str, skill_name: str):
                 continue
             _push("system", f"  · 执行 [{i}] {tool}({json.dumps(args, ensure_ascii=False)})")
             try:
-                fn = getattr(exec, tool)
-                res = fn(**args) if args else fn()
+                # 走工具注册表按名派发（与 agent 同一函数工具；提供方插件未启用
+                # 时返回 unknown tool 错误，不崩）
+                res = call_tool(tool, dict(args or {}))
                 _push("agent", f"    结果：{json.dumps(_trim(res), ensure_ascii=False)[:300]}")
             except Exception as e:
                 _push("agent", f"    ⚠ 执行失败：{type(e).__name__}: {e}")

@@ -312,16 +312,10 @@ export interface ApprovalCardInfo {
 export interface ToolInfo {
   name: string;
   description: string;
-  source: "core" | "env" | "plugin" | "mcp";
-  unit: string; // 提供者标识：环境 kind / 插件名 / "core" / MCP server 名
+  source: "core" | "plugin" | "mcp";
+  unit: string; // 提供者标识：插件名 / "core" / MCP server 名
   server: string | null; // 外部 MCP 工具所属 server；其余为 null
   parameters: Record<string, unknown>;
-}
-
-export interface EnvironmentInfo {
-  kind: string;
-  title: string;
-  active: boolean;
 }
 
 export interface PluginInfo {
@@ -329,8 +323,6 @@ export interface PluginInfo {
   title: string;
   description: string;
   enabled: boolean;
-  requires_env: string[];
-  available: boolean;
 }
 
 export interface McpServerInfo {
@@ -343,7 +335,6 @@ export interface McpServerInfo {
 }
 
 export interface ToolsResponse {
-  environments: EnvironmentInfo[];
   plugins: PluginInfo[];
   tools: ToolInfo[];
   mcp: {

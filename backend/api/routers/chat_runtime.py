@@ -195,13 +195,15 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         _pid = _meta.get("project_id", "") if _meta else ""
         _sid = _meta.get("session_id", "") if _meta else ""
 
-        # 阶段 1：把运行级配置快照哈希、project_id、工具 registry、环境后端
+        # 阶段 1：把运行级配置快照哈希、project_id、工具 registry、已装载插件
         # 写入 context，使「每个 run 可完整导出运行配置」成立（阶段 1 验收项 + 目标 3）。
         if rec is not None:
             rec.config_hash = _config_hash(cfg)
             rec.project_id = _pid
             rec.tool_registry = TOOL_REGISTRY
-            rec.execution_backend = loop.exec
+            rec.loaded_plugins = sorted({
+                p.unit for p in TOOL_REGISTRY.values() if p.source == "plugin"
+            })
 
         # B3：用服务端会话记录（含结构化 steps）重建模型上下文，使模型记得上一轮做了什么。
         # 前端回传的 history 只有扁平 role/content，不含 steps，故以会话存储为准。

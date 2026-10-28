@@ -91,13 +91,13 @@ def _make_loop(monkeypatch):
             pass
 
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", _FakeBrain)
-    install_fake_env(monkeypatch, _FakeBackend)
+    _fb = install_fake_env(monkeypatch, _FakeBackend)
     loop = ToolLoop(
         {"model": "brain", "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
         executor_cfg={"enabled": False},
     )
-    loop.exec.ocr = ["ALL"]  # verify 门控：屏幕含 done_when="ALL"
+    _fb.ocr = ["ALL"]  # verify 门控：屏幕含 done_when="ALL"
     return loop
 
 

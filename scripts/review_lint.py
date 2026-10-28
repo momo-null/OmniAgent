@@ -8,8 +8,6 @@
       当作数据访问（字典 key / .get / 属性调用），而非注释说明。
   R2 具体工具名分支：内核文件里对具体设备工具名做 if 分支
       （内核元工具 verify/plan/task_done/record/collect_list 豁免）。
-  R3 text_of 非抽象：devices/base.py 里 text_of / verify_done 仍有默认实现体
-      （必须用 @abstractmethod，内核不预设感知读法/完成判定）。
   R4 记忆注入回流：内核里出现尾部每步重发机制的记号（_TailInjectModel/tail_inject*），
       或在 scene_executor 之外调用 load_scene_text/read_scene_full（L2 全文只准经
       read_scene 工具按需进上下文——见 doc/plans/memory-architecture.md §5）。
@@ -18,7 +16,6 @@
   KERNEL_DIRS   omni_core/**/*.py        -> 强制 R1 + R2
   PLUGIN_EXEMPT omni_core/tools/**       -> 豁免（L1 能力插件层，本就是能力实现）
   CAPA_EXEMPT   —— 无（SoM/VLM 实现已随 §5.4 迁到 plugins/vision/runtime.py）
-  DEVICE_DIRS   devices/**/*.py          -> 豁免 R1/R2（设备驱动）；base.py 额外强制 R3
 
 用法：
   python scripts/review_lint.py            # 扫描内核目录，打印违规
@@ -34,7 +31,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 KERNEL_DIRS = ["omni_core"]
-DEVICE_DIRS = ["devices"]
 
 # L1 能力层豁免（相对仓库根的目录前缀 / 具体文件）
 PLUGIN_EXEMPT_DIRS = ["omni_core/tools"]   # L1 能力插件层（视觉/设备/Python 等实现，§5.4）；视觉运行时现位于 plugins/vision/runtime.py
@@ -123,23 +119,6 @@ def check_r2_tool_branch(lines: list[str], path: Path, findings: list[str]) -> N
             )
 
 
-def check_r3_abstract_backend(lines: list[str], path: Path, findings: list[str]) -> None:
-    """仅设备抽象基类：text_of / verify_done 必须是 @abstractmethod。"""
-    rel = _posix(path)
-    text = "\n".join(lines)
-    for method in ("text_of", "verify_done"):
-        m = re.search(rf"def\s+{method}\s*\(", text)
-        if not m:
-            continue
-        segment = text[: m.start()]
-        last_def = segment.rfind("def ")
-        before = segment[last_def:] if last_def != -1 else segment
-        if not ABSTRACT_RE.search(before):
-            findings.append(
-                f"[R3] {rel} `{method}` 仍有默认实现体 "
-                f"（应改为 @abstractmethod，内核不预设感知读法/完成判定）"
-            )
-
 
 def check_r4_memory_placement(lines: list[str], path: Path, findings: list[str]) -> None:
     """记忆注入 placement 三不变量（TAM 对齐）：禁尾部重发记号回流、禁 L2 全文进注入路径。"""
@@ -202,14 +181,9 @@ def main() -> int:
         check_r2_tool_branch(lines, p, findings)
         check_r4_memory_placement(lines, p, findings)
 
-    # 设备驱动层：豁免 R1/R2（本就是设备实现），但对抽象基类强制 R3
-    for p in discover_files(DEVICE_DIRS):
-        if p.name == "base.py":
-            check_r3_abstract_backend(_read(p), p, findings)
-
     scanned = ", ".join(f"{len(kernel_files)} 内核文件" for _ in [0])
     if not findings:
-        print(f"OK: 内核未检测到红线违规（已扫描 {scanned} + devices/）。")
+        print(f"OK: 内核未检测到红线违规（已扫描 {scanned}）。")
         return 0
 
     print(f"\n发现 {len(findings)} 处红线风险：\n")
@@ -218,7 +192,8 @@ def main() -> int:
     print(
         "\n说明：R1=屏幕字段泄露 / R2=具体工具名分支 / R3=text_of非抽象 / "
         "R4=记忆注入placement回流。"
-        "L1 能力层（omni_core/tools/**）与设备层（devices/**）豁免 R1/R2/R4。"
+        "L1 能力层（omni_core/tools/**）豁免 R1/R2/R4；"
+        "R3（text_of 非抽象）随 env 概念退场移除。"
     )
     return 1 if args.strict else 0
 

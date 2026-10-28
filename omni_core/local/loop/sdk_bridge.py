@@ -219,6 +219,12 @@ class SdkBridgeMixin:
         from omni_core.brain.sdk_loop import run_subtask_sdk
 
         gate = _SubtaskGate(self, spec, world)
+        # S9 视觉主链路：本 run 的附件注入通道。仅在模型声明原生视觉时创建；
+        # 每 run 独立一个（主/子互不串味，消息在请求边界被取走，不跨 run 泄漏）。
+        attach_channel = None
+        if bool((getattr(self, "brain_capabilities", None) or {}).get("vision")):
+            from omni_core.brain.sdk_loop import _HumanInjection
+            attach_channel = _HumanInjection()
         # 主 agent（allow_dispatch=True）自动接入待办持久化（tasks/<task_id>/todo.json）；
         # 子 agent 不暴露 todo_write，因此不构造 store。外部可显式注入 todo_store 覆盖。
         if todo_store is None and allow_dispatch:
@@ -411,12 +417,13 @@ class SdkBridgeMixin:
             world.log_action({"name": tool_name, "args": _args_payload_to_dict(args_raw)}, result)
             # 世界模型分发：按工具**自声明的 percept 元数据**，内核零工具名字面量。
             # 注册表外工具（MCP 等动态工具）无静态 percept 声明，此处自然跳过——
-            # 其动作仍由下方 world.log_action 落盘，不丢可观测性（percept 需环境
-            # backend 的 text_of，MCP 不绑定 backend，故不强行富化）。
+            # 其动作仍由下方 world.log_action 落盘，不丢可观测性。
+            # state_text 通用约定：感知工具结果自带**已文本化**的状态（文本化在其
+            # 所在插件内完成），内核只透传给世界模型，不认识任何感知字段。
             from omni_core.tools.base import TOOL_REGISTRY
             _percept = getattr(TOOL_REGISTRY.get(tool_name), "meta", {}).get("percept")
             if _percept == "state":
-                world.update(result, self.exec)
+                world.update(result, state_text=str(result.get("state_text") or ""))
             elif _percept == "collected":
                 try:
                     world.add_collected_bulk(result.get("entries") or [])
@@ -424,6 +431,18 @@ class SdkBridgeMixin:
                     pass
             if result.get("no_confidence"):
                 gate.no_confidence = True
+            # S9 视觉主链路：工具结果自带的图片附件（如截图）在本 run 的下一请求
+            # 边界作为 user 消息注入模型——一次性（投后即清，不进会话历史）。
+            # 通道仅在模型具备原生视觉时创建（见 _run_via_sdk 装配处），这里零判断。
+            _atts = result.get("attachments")
+            if isinstance(_atts, list) and _atts and attach_channel is not None:
+                try:
+                    attach_channel.push_message({
+                        "role": "user",
+                        "content": build_user_content("（最新截图已附加，可直接查看）", _atts),
+                    })
+                except Exception:
+                    pass
 
         def _summarize(old_items: List[Any], system_instructions: Optional[str] = None):
             """长任务压缩：复用大脑自身做摘要（与旧循环同一套语义）。
@@ -564,6 +583,7 @@ class SdkBridgeMixin:
             todo_store=todo_store,
             skill_catalog=skill_catalog,
             human_injection=human_injection,
+            tool_attachments=attach_channel,
             on_llm=on_llm,
             on_llm_delta=on_llm_delta,
             on_turn_end=on_turn_end,

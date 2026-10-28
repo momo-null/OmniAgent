@@ -284,14 +284,13 @@ def test_two_layer_world_model_persistence(monkeypatch, tmp_path):
         EXEC: [_auto_observe_then_done("ok")],
     })
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", fb)
-    install_fake_env(monkeypatch, _FakeBackend)
-
     loop = ToolLoop(
         {"model": BRAIN, "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
         executor_cfg={"enabled": True, "model": EXEC, "base_url": "http://y", "capabilities": {"vision": True}},
     )
-    loop.exec.ocr = ["S1", "S2", "ALL"]  # M4a.3 verify 门控需要（含主 agent 的 done_when）
+    loop._fake_backend = install_fake_env(monkeypatch, _FakeBackend)
+    loop._fake_backend.ocr = ["S1", "S2", "ALL"]  # M4a.3 verify 门控需要（含主 agent 的 done_when）
     _redirect(tmp_path)
 
     res = loop.run_task(
@@ -319,14 +318,13 @@ def test_two_layer_world_model_early_save_on_abort(monkeypatch, tmp_path):
         EXEC: [_observe()],  # observe → world 有 OCR → verify 通过 → success
     })
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", fb)
-    install_fake_env(monkeypatch, _FakeBackend)
-
     loop = ToolLoop(
         {"model": BRAIN, "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
         executor_cfg={"enabled": True, "model": EXEC, "base_url": "http://y", "capabilities": {"vision": True}},
     )
-    loop.exec.ocr = ["S1"]  # verify 通过
+    loop._fake_backend = install_fake_env(monkeypatch, _FakeBackend)
+    loop._fake_backend.ocr = ["S1"]  # verify 通过
     _redirect(tmp_path)
 
     res = loop.run_task(

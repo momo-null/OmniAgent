@@ -83,7 +83,6 @@ def _think():
 def _make_loop(monkeypatch, tmp_path, brain_mapping, executor_mapping=None):
     fb = _fake_brain_factory({BRAIN: brain_mapping, EXEC: executor_mapping or []})
     monkeypatch.setattr("omni_core.local.loop.core.LLMClient", fb)
-    install_fake_env(monkeypatch, _FakeBackend)
     loop = ToolLoop(
         {"model": BRAIN, "base_url": "http://127.0.0.1:9", "capabilities": {}},
         verbose=False,
@@ -91,6 +90,7 @@ def _make_loop(monkeypatch, tmp_path, brain_mapping, executor_mapping=None):
                       "capabilities": {"vision": True}},
     )
     loop.traj_dir = str(tmp_path)
+    loop._fake_backend = install_fake_env(monkeypatch, _FakeBackend)
     return loop
 
 
@@ -130,7 +130,7 @@ def test_two_layer_no_planning_state(monkeypatch, tmp_path):
         brain_mapping=[_dispatch([{"desc": "a", "done_when": "A"}]), _task_done()],
         executor_mapping=[_observe(), _task_done()],
     )
-    loop.exec.ocr = ["A"]  # M4a.3: observe 后屏幕含 done_when → verify 通过
+    loop._fake_backend.ocr = ["A"]  # M4a.3: observe 后屏幕含 done_when → verify 通过
     res = loop.run_task(TaskSpec(objective="o"))
     assert res["success"] is True
     assert "PLANNING" not in loop._state_seq   # 不再有固定规划阶段

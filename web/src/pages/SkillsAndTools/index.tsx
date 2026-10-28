@@ -14,7 +14,6 @@ import {
   TextField,
   Button,
   Switch,
-  Radio,
   FormControlLabel,
   Paper,
   Tooltip,
@@ -129,19 +128,6 @@ function ToolsTab() {
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState("");
 
-  const setEnv = async (kind: string) => {
-    setBusy(true); setSaved("");
-    try {
-      await runtimeApi.setEnvironment(kind);
-      await reload();
-      setSaved(`已切换环境：${kind}（重启后生效）`);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const togglePlugin = async (name: string, enabled: boolean) => {
     setBusy(true); setSaved("");
     try {
@@ -162,24 +148,10 @@ function ToolsTab() {
   return (
     <Box>
       <Alert severity="info" sx={{ mb: 2 }}>
-        三类：<b>环境</b>（单选，自带整套工具，写 <code>runtime.backend</code>）、
-        <b>插件</b>（各自一个开关，写 <code>~/.omniagent/plugins/&lt;name&gt;.yaml</code>）、
-        <b>工具</b>（只读）。切换 / 开关重启后生效。
+        两类：<b>插件</b>（各自一个开关，写 <code>~/.omniagent/plugins/&lt;name&gt;.yaml</code>；
+        操作电脑 / Android 也是普通插件，默认关闭）、
+        <b>工具</b>（只读）。开关重启后生效。
       </Alert>
-
-      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-        <Typography variant="subtitle2" gutterBottom>环境（单选）</Typography>
-        <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-          {data.environments.map((e) => (
-            <FormControlLabel key={e.kind} sx={{ mr: 0 }}
-              control={<Radio size="small" disabled={busy} checked={e.active}
-                onChange={() => { if (!e.active) void setEnv(e.kind); }} />}
-              label={<Chip size="small" variant={e.active ? "filled" : "outlined"} label={e.title}
-                color={e.active ? "primary" : "default"}
-                sx={{ opacity: e.active ? 1 : 0.6 }} />} />
-          ))}
-        </Stack>
-      </Paper>
 
       <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
         <Typography variant="subtitle2" gutterBottom>插件（各自一个开关）</Typography>
@@ -214,7 +186,7 @@ function ToolsTab() {
               </Tooltip>
               <Chip size="small" variant="outlined" label={t.source} />
               {/* unit = 提供者标识：环境 kind / 插件名；core 源与 source 重复不显示 */}
-              {(t.source === "env" || t.source === "plugin") && <Chip size="small" variant="outlined" label={t.unit} />}
+              {t.source === "plugin" && <Chip size="small" variant="outlined" label={t.unit} />}
               {t.source === "mcp" && t.server && <Chip size="small" label={t.server} variant="outlined" />}
             </Stack>
           ))}

@@ -46,7 +46,7 @@ from backend.api.routers.chat_runtime import (  # noqa: F401
     api_wake, live, stream,
 )
 from backend.api.routers.tools_api import (  # noqa: F401
-    list_tools, set_environment, set_plugin_enabled,
+    list_tools, set_plugin_enabled,
 )
 from backend.api.routers.tasks_api import (  # noqa: F401
     api_skill_delete, api_skill_run, create_task, delete_task, get_task,

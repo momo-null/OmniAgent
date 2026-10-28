@@ -2,7 +2,7 @@
 
 覆盖：
 装载/派发、**插件自持配置**（`~/.omniagent/plugins/<name>.yaml` → `configure(cfg)`）、
-钩子顺序与 PluginContext（只读 `config` / `wired` / `env_kind`）、失败隔离与回滚、
+钩子顺序与 PluginContext（只读 `config` / `wired`）、失败隔离与回滚、
 保留名与重名保护、manifest 校验、`enabled` 开关、`requires_env` 环境绑定、
 目录过滤、幂等、last_report、shutdown，以及真实装载仓库 ``plugins/``。
 
@@ -70,10 +70,10 @@ _HOOK_ORDER_BODY = """
 
     def startup(ctx):
         ORDER.append("startup")
-        CTX["env_kind"] = getattr(ctx, "env_kind", "MISSING")
+        CTX["wired"] = bool(getattr(ctx, "wired", "MISSING"))
         CTX["wired"] = getattr(ctx, "wired", "MISSING")
         CTX["config_is_dict"] = isinstance(getattr(ctx, "config", None), dict)
-        # 环境厚句柄已删：插件只拿得到只读 env_kind
+        # 插件只拿只读 ctx（config / wired）；env 概念已退场，无 env_kind
         CTX["has_execution"] = hasattr(ctx, "execution")
 
     @function_tool(description="回声", unit="demo")
@@ -213,16 +213,15 @@ def test_hook_order_and_plugin_context(tmp_path):
     _make_plugin(tmp_path, "demo", _HOOK_ORDER_BODY, {"name": "demo"})
     report = loader.load_plugins(
         _cfg(tmp_path),
-        ctx=loader.PluginContext(config={"k": 1}, wired=True, env_kind="host"),
+        ctx=loader.PluginContext(config={"k": 1}, wired=True),
     )
     assert report.loaded == ["demo"]
     module = loader.plugin_module("demo")
     assert module.ORDER == ["configure", "startup"]
     assert module.CTX == {
-        "env_kind": "host",
         "wired": True,
         "config_is_dict": True,
-        "has_execution": False,  # 环境厚句柄已删
+        "has_execution": False,  # 插件拿不到内核厚句柄
     }
 
 
@@ -317,19 +316,6 @@ def test_yaml_disabled_overrides_manifest(tmp_path):
     assert "demo_echo" not in TOOL_REGISTRY
 
 
-# ⑩b requires_env 环境绑定：不匹配则不装载 --------------------------------
-def test_requires_env_filters_by_current_env(tmp_path):
-    _make_plugin(tmp_path, "emu_only", _ECHO_BODY,
-                 {"name": "emu_only", "requires_env": ["emulator"]})
-    report = loader.load_plugins(_cfg(tmp_path), ctx=loader.PluginContext(env_kind="host"))
-    assert report.loaded == []
-    assert [s["name"] for s in report.skipped] == ["emu_only"]
-    assert "demo_echo" not in TOOL_REGISTRY
-    # 匹配的环境则装载
-    report2 = loader.load_plugins(_cfg(tmp_path), ctx=loader.PluginContext(env_kind="emulator"))
-    assert report2.loaded == ["emu_only"]
-
-
 # ⑩c list_plugins 自报元数据（前端「一个开关」的数据源） -------------------
 def test_list_plugins_self_reports_metadata(tmp_path):
     _make_plugin(tmp_path, "demo", _ECHO_BODY,
@@ -337,8 +323,7 @@ def test_list_plugins_self_reports_metadata(tmp_path):
     row = next(r for r in loader.list_plugins(_cfg(tmp_path)) if r["name"] == "demo")
     assert row["title"] == "演示插件"
     assert row["description"] == "说明"
-    assert row["enabled"] is True and row["available"] is True
-    assert row["requires_env"] == []
+    assert row["enabled"] is True
 
     _write_plugin_cfg("demo", {"enabled": False})
     row2 = next(r for r in loader.list_plugins(_cfg(tmp_path)) if r["name"] == "demo")
@@ -379,7 +364,8 @@ def test_missing_plugin_dir_gives_empty_report(tmp_path):
 
 # ⑭ 保留名集合定义 --------------------------------------------------------
 def test_reserved_tool_names_defined():
-    expected = {"shell_exec", "task_done", "verify", "escalate", "record", "plan"}
+    expected = {"shell_exec", "task_done", "verify", "escalate", "record", "plan",
+                "search_skill", "replay_skill", "read_scene"}
     assert expected == set(loader.RESERVED_TOOL_NAMES)
 
 

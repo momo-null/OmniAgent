@@ -233,8 +233,9 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
         },
     },
     "runtime": {
-        # 执行后端：host（宿主机屏幕）| emulator（Android，需自行提供 adb_serial）
-        "backend": "host",
+        # 注：runtime.backend（env 单选）已随 env 概念退场废弃——操作电脑 /
+        # Android 是普通插件（plugins/host、plugins/emulator，各自 enabled 开关）。
+        # 残留的 backend 键被静默忽略。
         # 升级/终止判定（缺省见 tool_loop._DEFAULT_ESCALATION）
         "escalation": {
             "verify_fail_max": 3,       # verify 连续失败达此次数 → 升级

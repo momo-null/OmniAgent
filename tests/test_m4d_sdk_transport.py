@@ -310,11 +310,10 @@ def test_end_to_end_via_local_openai_compatible_server(monkeypatch):
 
         # observe 是 **host 环境**的工具：先把它注册（import 即注册），
         # 再把 fake 后端绑给工具面，并让内核拿到 fake 环境句柄。
-        from environments.host import tools as host_tools
+        from tests._env import install_fake_env
 
         fake = _FakeBackend()
-        host_tools.bind(fake)
-        monkeypatch.setattr("omni_core.local.loop.core.activate_environment", lambda *a, **k: fake)
+        install_fake_env(monkeypatch, fake)
         loop = ToolLoop(
             {"model": "stub", "base_url": f"http://127.0.0.1:{port}/v1",
              "capabilities": {}, "api_key": "stub-key"},

@@ -54,9 +54,9 @@ class RuntimeContext:
     config_snapshot: Optional[Dict[str, Any]] = None
     config_hash: str = ""
     cancellation_token: Any = None
-    # 阶段 1 目标 3：工具 registry 与环境后端实例由运行体携带，不再隐式依赖模块级全局对象。
+    # 阶段 1 目标 3：工具 registry 与已装载插件清单由运行体携带，不再隐式依赖模块级全局对象。
     tool_registry: Any = None
-    execution_backend: Any = None
+    loaded_plugins: Optional[List[str]] = None
 
     def export(self) -> Dict[str, Any]:
         """可完整导出运行配置（阶段 1 验收：每个 run 可完整导出运行配置）。"""
@@ -71,7 +71,7 @@ class RuntimeContext:
             "state": self.state,
             "config_hash": self.config_hash,
             "tool_names": sorted(_reg.keys()) if _reg else [],
-            "execution_backend": getattr(self.execution_backend, "kind", "") or "",
+            "loaded_plugins": list(self.loaded_plugins or []),
         }
 
 
@@ -174,7 +174,7 @@ class RuntimeManager:
         return {
             "count": len(recs),
             "running": sum(1 for r in recs if r.running),
-            "with_execution_backend": sum(1 for r in recs if r.execution_backend is not None),
+            "with_plugins": sum(1 for r in recs if r.loaded_plugins),
             "with_config_snapshot": sum(1 for r in recs if r.config_snapshot is not None),
             "with_loop": sum(1 for r in recs if r.loop is not None),
         }
