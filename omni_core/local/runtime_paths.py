@@ -49,15 +49,6 @@ def user_profile() -> Path:
     return _GLOBAL / "memory" / "user_profile.md"
 
 
-def global_memory_db() -> Path:
-    """全局记忆库 ``memory/index.db``（跨 project 共库；与项目记忆库同 schema）。
-
-    存放跨项目仍然成立的记忆（用户偏好、通用工具规律）；真正的隔离单位是
-    库本身（多 agent/多用户各开一个库），库内不分层。
-    """
-    return _GLOBAL / "memory" / "index.db"
-
-
 def character_card() -> Path:
     """单角色助手角色卡 ``character.md``（人格设定，随 system prompt 注入）。"""
     return _GLOBAL / "character.md"

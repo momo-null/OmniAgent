@@ -14,63 +14,37 @@ router = APIRouter(prefix="/api/debug", tags=["debug"])
 
 @router.get("/memory")
 async def debug_memory(request: Request):
-    """记忆库只读转储（查看蒸馏结果）：项目库 + 全局库 atoms，各自按更新时间倒序。
+    """记忆库只读转储（brain.db 单库）：全部 atoms（状态/强度全字段）+ 总览。
 
-    归属解析：优先 ``project_id`` 参数；否则按 ``task_id`` 解析所属项目；
-    都没有 → ``default``。只读，零副作用。
+    只读，零副作用。``task_id``/``project_id`` 参数已无分区语义，保留仅为前端兼容。
     """
     try:
-        from omni_core import memory_tam
-        from omni_core.local.task_store import TaskStore
+        from omni_core import memory_brain
 
-        q = request.query_params
-        task_id = (q.get("task_id") or "").strip()
-        project_id = (q.get("project_id") or "").strip()
-        if not project_id:
-            if task_id:
-                try:
-                    project_id = TaskStore.project_of(task_id) or "default"
-                except Exception:
-                    project_id = "default"
-            else:
-                project_id = "default"
-        state = memory_tam.dump_state(project_id)
-        atoms = state.get("atoms", [])
-        gatoms = state.get("global_atoms", [])
-        return JSONResponse({
-            "ok": True,
-            "project_id": project_id,
-            "project": {"atoms": atoms},
-            "global": {"atoms": gatoms},
-            "counts": {"project": len(atoms), "global": len(gatoms)},
-        })
+        atoms = memory_brain.dump_atoms()
+        return JSONResponse({"ok": True, "atoms": atoms, "count": len(atoms),
+                             "overview": memory_brain.overview_brain()})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
 @router.post("/memory/delete")
 async def debug_memory_delete(request: Request):
-    """人工删除单条记忆 atom（前端右键删除；物理删除，不可恢复）。
+    """人工删除单条记忆（前端右键删除；物理删除，不可恢复）。
 
-    body: {scope: "project"|"global", record_id, project_id?}。
-    scope=global 走全局库；否则按 project_id（缺省 default）走项目库。
-    FTS 索引由 memory_tam.delete_atom 同步清理。
+    body: ``{record_id}``。这是唯一物理删除通道，agent 写入路径不经过这里。
     """
     try:
-        from omni_core import memory_tam
+        from omni_core import memory_brain
         try:
             payload = await request.json()
         except Exception:
             payload = {}
-        payload = payload or {}
-        record_id = str(payload.get("record_id") or "").strip()
-        scope = str(payload.get("scope") or "project")
-        project_id = str(payload.get("project_id") or "default").strip()
+        record_id = str((payload or {}).get("record_id") or "").strip()
         if not record_id:
             return JSONResponse({"ok": False, "error": "record_id 为空"}, status_code=422)
-        ok = memory_tam.delete_atom(record_id, project_id=project_id, scope=scope)
-        if not ok:
+        if not memory_brain.hard_delete(record_id):
             return JSONResponse({"ok": False, "error": "record_id 不存在"}, status_code=404)
-        return JSONResponse({"ok": True, "record_id": record_id, "scope": scope})
+        return JSONResponse({"ok": True, "record_id": record_id})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

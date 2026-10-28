@@ -1,6 +1,7 @@
 """L2 多文件场景执行器 —— TAM scene-extractor 完整移植(agent 循环形态)。
 
-机制总览见 doc/plans/memory-architecture.md §2.3;触发与水位在 memory_tam(薄壳)。
+机制总览见 doc/plans/memory-architecture.md §2.3;触发与水位在本文件 ``maybe_maintain``
+(薄壳),水位存 ``scene_index.json``——该层不依赖任何 L1 记忆库。
 机制(TAM 原样):多文件主题块 ``scene_blocks/*.md`` + 带工具的整理 agent 循环
 (工具白名单硬限 read/write/edit,workspace 钉死本目录)+ 三级容量预警(强制 MERGE)
 + 软删协议(写 ``[DELETED]``,工程侧事后 unlink)+ 文件名归一化 + ``scene_index.json``
@@ -126,7 +127,10 @@ def _unique_path(scene_dir: Path, want: str) -> Path:
 # ---------------------------------------------------------------- 索引(scene_index.json = META 投影缓存)
 
 def sync_scene_index(project_id: str) -> List[Dict[str, Any]]:
-    """全量扫 scene_blocks/*.md 重建索引(唯一写入口;LLM 沙箱碰不到该文件)。"""
+    """全量扫 scene_blocks/*.md 重建索引(唯一写入口;LLM 沙箱碰不到该文件)。
+
+    非 ``scenes`` 的同级键(水位等,L2 自有簿记)原样保留。
+    """
     scene_dir = scene_blocks_dir(project_id)
     entries: List[Dict[str, Any]] = []
     for p in sorted(scene_dir.glob("*.md")):
@@ -137,11 +141,44 @@ def sync_scene_index(project_id: str) -> List[Dict[str, Any]]:
         entries.append({"filename": p.name, "summary": meta["summary"], "heat": meta["heat"],
                         "created": meta["created"], "updated": meta["updated"]})
     entries.sort(key=lambda e: (-int(e["heat"]), e["filename"]))
+    doc = _read_index_doc(project_id)
+    doc["version"] = 1
+    doc["scenes"] = entries
+    _write_index_doc(project_id, doc)
+    return entries
+
+
+# ---- 水位(L2 自有簿记,存 scene_index.json;不依赖任何记忆库) ----
+_L2_MIN_INTERVAL_S = 900    # 最小维护间隔(对齐 TAM l2MinIntervalSeconds)
+_INDEX_LAST_MAINTAIN = "last_maintain_ts"
+
+
+def _read_index_doc(project_id: str) -> Dict[str, Any]:
+    idx = scene_index_path(project_id)
+    if not idx.exists():
+        return {}
+    try:
+        data = json.loads(idx.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _write_index_doc(project_id: str, doc: Dict[str, Any]) -> None:
     idx = scene_index_path(project_id)
     idx.parent.mkdir(parents=True, exist_ok=True)
-    idx.write_text(json.dumps({"version": 1, "scenes": entries}, ensure_ascii=False, indent=2),
-                   encoding="utf-8")
-    return entries
+    idx.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_watermark(project_id: str, key: str = _INDEX_LAST_MAINTAIN) -> str:
+    """读 L2 水位(缺失/损坏 → 空串,即"该做一次")。"""
+    return str(_read_index_doc(project_id).get(key) or "")
+
+
+def set_watermark(project_id: str, value: str, key: str = _INDEX_LAST_MAINTAIN) -> None:
+    doc = _read_index_doc(project_id)
+    doc[key] = value
+    _write_index_doc(project_id, doc)
 
 
 def read_scene_index(project_id: str) -> List[Dict[str, Any]]:
@@ -530,13 +567,62 @@ def maintain_scenes(project_id: str, brain_cfg: Optional[Dict[str, Any]], eviden
             shutil.rmtree(backup.parent, ignore_errors=True)
 
 
+# ---------------------------------------------------------------- 触发薄壳(任务收尾)
+
+def maybe_maintain(project_id: str, brain_cfg: Optional[Dict[str, Any]], digest: str,
+                   task_id: str = "", stats: Optional[Dict[str, Any]] = None) -> None:
+    """任务收尾触发 L2 维护:gate + 900s 水位 + 证据组装,机制全在 maintain_scenes。
+
+    - gate:``runtime.knowledge.memory.enabled``(与 L1 同一总开关)
+    - 水位:``scene_index.json`` 的 last_maintain_ts;空维护不推进(对齐 TAM checkpoint)
+    - 带外信号:场景 agent 的 ``[PERSONA_UPDATE_REQUEST]`` → brain meta,下次巩固强制画像重写
+    - 任何异常静默,绝不阻断收尾
+    """
+    stats = stats if stats is not None else {}
+    try:
+        from omni_core import memory_brain
+        if not memory_brain.enabled() or not project_id or not brain_cfg:
+            return
+        last = get_watermark(project_id)
+        if last:
+            try:
+                if (datetime.now(timezone.utc)
+                        - datetime.fromisoformat(last)).total_seconds() < _L2_MIN_INTERVAL_S:
+                    return
+            except Exception:
+                pass
+        evidence: List[str] = []
+        d = (digest or "").strip()
+        if d:
+            evidence.append("[会话要点]\n" + d[:3000])
+        if task_id:
+            try:
+                wm = rp.task_world_model(task_id)
+                if wm.exists():
+                    wtxt = wm.read_text(encoding="utf-8").strip()
+                    if wtxt:
+                        evidence.append("[世界状态]\n" + wtxt[:2500])
+            except Exception:
+                pass
+        maintain_scenes(project_id, brain_cfg, "\n\n".join(evidence), task_id=task_id, stats=stats)
+        signal = str(stats.get("persona_update_request") or "").strip()
+        if signal:
+            memory_brain.request_profile_update(signal)
+        if not stats.get("empty_maintenance"):
+            set_watermark(project_id, memory_brain._now())
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------- 消费端(导航 / 按需读取)
 
 def load_scene_nav(project_id: str, max_entries: int = 20) -> List[Dict[str, Any]]:
-    """L2 导航段(system 常驻):全部场景块的 摘要+热度(heat 降序)。全文按需 read_scene。"""
+    """L2 导航段(system 常驻):全部场景块清单(heat 降序)。全文按需 read_scene。
+
+    注入只取 filename(M-1),因此不再按 summary 过滤——没有摘要的块也必须可被发现。
+    """
     try:
-        entries = [e for e in read_scene_index(project_id) if e.get("summary")]
-        return entries[:max_entries]
+        return read_scene_index(project_id)[:max_entries]
     except Exception:
         return []
 

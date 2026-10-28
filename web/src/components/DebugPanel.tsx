@@ -14,8 +14,6 @@ import {
   Stack,
   Tab,
   Tabs,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
@@ -156,7 +154,6 @@ export default function DebugPanel({ logs, onClear, taskId }: {
   taskId: string;
 }) {
   const [tab, setTab] = useState<"log" | "memory">("log");
-  const [scope, setScope] = useState<"project" | "global">("project");
   const [mem, setMem] = useState<DebugMemoryResponse | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -176,18 +173,18 @@ export default function DebugPanel({ logs, onClear, taskId }: {
     return () => clearInterval(t);
   }, [tab, loadMemory]);
 
-  const atoms = mem ? (scope === "project" ? mem.project.atoms : mem.global.atoms) : [];
-  const count = mem ? mem.counts[scope] : 0;
+  const atoms = mem?.atoms ?? [];
+  const count = mem?.count ?? 0;
 
   // 右键删除单条记忆：成功后重新拉取（计数随刷新对齐）；失败弹提示
   const handleDeleteAtom = useCallback((atom: DebugMemoryAtom) => {
-    debugApi.deleteMemory(scope, atom.record_id, taskId || undefined)
+    debugApi.deleteMemory(atom.record_id)
       .then(() => loadMemory())
       .catch((e: unknown) => {
         const err = e as { response?: { data?: { error?: string } }; message?: string };
         window.alert(`删除失败：${err?.response?.data?.error || err?.message || e}`);
       });
-  }, [scope, taskId, loadMemory]);
+  }, [loadMemory]);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", minHeight: 0, height: "100%" }}>
@@ -224,18 +221,16 @@ export default function DebugPanel({ logs, onClear, taskId }: {
       ) : (
         <Box sx={{ flexGrow: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ px: 1, py: 0.5, flexShrink: 0 }}>
-            <ToggleButtonGroup
-              size="small"
-              exclusive
-              value={scope}
-              onChange={(_, v) => v && setScope(v)}
-            >
-              <ToggleButton value="project">项目记忆</ToggleButton>
-              <ToggleButton value="global">全局记忆</ToggleButton>
-            </ToggleButtonGroup>
             <Typography variant="caption" color="text.secondary">
-              {mem ? `${mem.project_id} · ${count} 条` : (loading ? "加载中…" : "")}
+              {mem ? `记忆库 · ${count} 条` : (loading ? "加载中…" : "")}
             </Typography>
+            {mem?.overview ? (
+              <Typography variant="caption" color="text.secondary">
+                {Object.entries(mem.overview.by_state)
+                  .map(([k, v]) => `${k} ${v}`)
+                  .join(" / ")}
+              </Typography>
+            ) : null}
           </Stack>
           <ScrollArea sx={{ flexGrow: 1, minHeight: 0 }}>
             <Box sx={{ px: 1, pb: 1, pr: 0.5 }}>

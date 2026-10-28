@@ -247,15 +247,11 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # force 打断的轮次跳过：打断要快，不背 LLM 提炼的尾巴；buffer 保留，随下一轮正常收口
         if not _force:
             try:
-                from omni_core import memory_tam
+                from omni_core import memory_brain
                 _pid = TaskStore.project_of(task_id)
-                _mstat = memory_tam.flush(_pid, brain_cfg, source_task=task_id)
-                _debug_push("memory_flush", {
-                    "title": "记忆沉淀",
-                    **_mstat,
-                    "project_pool": memory_tam.count_atoms(_pid),
-                    "global_pool": memory_tam.count_global_atoms(),
-                })
+                # 收尾：提炼 → 两段判 → brain.db；随后触发 L2 维护与巩固
+                _mstat = memory_brain.flush_brain(_pid, brain_cfg, source_task=task_id)
+                _debug_push("memory_flush", {"title": "记忆沉淀", **_mstat})
             except Exception:
                 pass
         # 把本轮执行轨迹（思考 + 工具调用）连同结论，作为「归属 agent 的一整轮」持久化：

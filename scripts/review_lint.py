@@ -11,7 +11,7 @@
   R3 text_of 非抽象：devices/base.py 里 text_of / verify_done 仍有默认实现体
       （必须用 @abstractmethod，内核不预设感知读法/完成判定）。
   R4 记忆注入回流：内核里出现尾部每步重发机制的记号（_TailInjectModel/tail_inject*），
-      或在 memory_tam 之外调用 load_scene_text/read_scene_full（L2 全文只准经
+      或在 scene_executor 之外调用 load_scene_text/read_scene_full（L2 全文只准经
       read_scene 工具按需进上下文——见 doc/plans/memory-architecture.md §5）。
 
 约束域（M4 起「自动发现」，新增文件默认受约束，不用再手工登记）：
@@ -162,7 +162,7 @@ def check_r4_memory_placement(lines: list[str], path: Path, findings: list[str])
         m = SCENE_FULLTEXT_RE.search(code)
         if m:
             findings.append(
-                f"[R4] {rel}:{n} 内核在 memory_tam 之外读取 L2 场景全文 {m.group(1)!r} "
+                f"[R4] {rel}:{n} 内核在 scene_executor 之外读取 L2 场景全文 {m.group(1)!r} "
                 f"（全文只准经 read_scene 工具按需进上下文，注入路径只准用摘要导航）"
             )
 

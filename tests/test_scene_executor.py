@@ -9,7 +9,7 @@ import json
 import pytest
 import config as config_mod
 from omni_core.brain.llm import BrainReply, ToolCall
-from omni_core import memory_tam
+from omni_core import memory_brain as mb
 from omni_core.local import scene_executor
 from omni_core.local import runtime_paths as _RP
 
@@ -28,11 +28,13 @@ _BLOCK_NEW = (
 
 @pytest.fixture
 def iso(monkeypatch, tmp_path):
-    """隔离用户目录 + 记忆 gate 开(其余键透传缺省)。"""
+    """隔离用户目录 + brain 库 + 记忆 gate 开(其余键透传缺省)。"""
     monkeypatch.setattr(_RP, "_GLOBAL", tmp_path / ".omniagent")
     _RP.ensure_global_dirs()
+    monkeypatch.setattr(mb, "_BRAIN_PATH", str(tmp_path / "brain.db"))
+    monkeypatch.setattr(mb, "_ARCHIVE_DIR", str(tmp_path / "archive"))
     monkeypatch.setattr(config_mod, "get_config",
-                        lambda k, d=None: True if k == memory_tam._GATE else d)
+                        lambda k, d=None: True if k == mb._GATE else d)
     return tmp_path
 
 
@@ -191,10 +193,10 @@ def test_empty_evidence_and_no_blocks_skips_llm(iso, monkeypatch):
 
 def test_gate_off_no_llm(iso, monkeypatch):
     monkeypatch.setattr(config_mod, "get_config",
-                        lambda k, d=None: False if k == memory_tam._GATE else d)
+                        lambda k, d=None: False if k == mb._GATE else d)
     calls = []
     _install_fake_llm(monkeypatch, [], calls)
-    memory_tam._maybe_maintain_scene("d-exec-gate", _BRAIN, "证据", task_id="", stats={})
+    scene_executor.maybe_maintain("d-exec-gate", _BRAIN, "证据", task_id="", stats={})
     assert calls == []
 
 
@@ -211,35 +213,30 @@ def test_watermark_throttles_and_signal_forces_profile(iso, monkeypatch):
     calls = []
     _install_fake_llm(monkeypatch, script, calls)
     stats: dict = {}
-    memory_tam._maybe_maintain_scene(pid, _BRAIN, "证据", task_id="", stats=stats)
+    scene_executor.maybe_maintain(pid, _BRAIN, "证据", task_id="", stats=stats)
     assert calls and stats.get("persona_update_request") is None
-    # 有实际动作 → 水位推进;再调一次被 900s 节流(无新 LLM 调用)
+    # 有实际动作 → 水位推进(scene_index.json);再调一次被 900s 节流(无新 LLM 调用)
+    assert scene_executor.get_watermark(pid), "水位应落在 scene_index.json,不依赖记忆库"
     n_calls = len(calls)
-    memory_tam._maybe_maintain_scene(pid, _BRAIN, "证据2", task_id="", stats={})
+    scene_executor.maybe_maintain(pid, _BRAIN, "证据2", task_id="", stats={})
     assert len(calls) == n_calls
-    # 信号链路:模拟 scene agent 落了画像信号 → 画像维护强制触发(无视 atom 数)
-    from omni_core.local import llm_judge
+    # 信号链路:场景 agent 落画像信号 → 巩固强制重写画像(无视 atom 条数)
     seen = {}
 
-    def fake_chat_json(cfg, system, user, timeout=10.0):
+    def fake_chat_json(cfg, system, user, timeout=60.0):
         seen["user"] = user
         return {"profile": "新画像"}
 
-    monkeypatch.setattr(llm_judge, "chat_json", fake_chat_json)
-    conn = memory_tam.open_db(pid)
-    conn.execute("INSERT OR REPLACE INTO meta(k,v) VALUES(?,?)",
-                 (memory_tam._PERSONA_SIGNAL_KEY, "用户环境从 C 盘迁到 D 盘"))
-    conn.commit()
-    conn.close()
-    memory_tam._maybe_maintain_profile(pid, _BRAIN)
+    monkeypatch.setattr(mb.llm_judge, "chat_json", fake_chat_json)
+    mb.request_profile_update("用户环境从 C 盘迁到 D 盘")
+    assert mb.maintain_profile(_BRAIN) is True
     assert "场景整理请求画像更新" in seen.get("user", ""), "信号应作为优先证据并入"
     from omni_core.local.runtime_paths import user_profile
     assert user_profile().read_text(encoding="utf-8") == "新画像"
-    conn = memory_tam.open_db(pid)
-    row = conn.execute("SELECT v FROM meta WHERE k=?",
-                       (memory_tam._PERSONA_SIGNAL_KEY,)).fetchone()
+    conn = mb.open_brain()
+    row = conn.execute("SELECT v FROM meta WHERE k='persona_update_request'").fetchone()
     conn.close()
-    assert row is None, "信号消费后应清键"
+    assert (row[0] if row else "") == "", "信号消费后应清空"
 
 
 # --- 消费端 --------------------------------------------------------------------

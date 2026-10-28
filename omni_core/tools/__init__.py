@@ -31,6 +31,7 @@ from omni_core.tools.skill_tool import (
     skill_load_limit,
 )
 from omni_core.tools.scene_tool import read_scene, set_scene_task_context
+from omni_core.tools import memory_tool  # noqa: F401  (导入即注册记忆自管工具)
 from omni_core.tools.loader import (
     PluginContext,
     LoadReport,

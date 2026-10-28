@@ -1,4 +1,4 @@
-"""伙伴层读写接口(P0):画像(自动维护在 omni_core.memory_tam.flush)与角色卡。
+"""伙伴层读写接口(P0):画像(自动维护在 omni_core.memory_brain 巩固)与角色卡。
 画像/角色卡的人工入口都在这里,均不校验内容(人可手改是定案)。"""
 from __future__ import annotations
 

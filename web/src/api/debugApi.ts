@@ -9,29 +9,39 @@ export interface DebugMemoryAtom {
   record_id: string;
   content: string;
   kind: string;
+  persona?: string;
+  origin?: string;
   source_task: string;
-  version: number;
+  importance?: number;
+  salience?: number;
+  access_count?: number;
+  state?: string;
   updated: string;
+}
+
+export interface DebugMemoryOverview {
+  total: number;
+  by_state: Record<string, number>;
+  by_kind: Record<string, number>;
+  last_consolidation: string;
+  recent: string[];
 }
 
 export interface DebugMemoryResponse {
   ok: boolean;
-  project_id: string;
-  project: { atoms: DebugMemoryAtom[] };
-  global: { atoms: DebugMemoryAtom[] };
-  counts: { project: number; global: number };
+  atoms: DebugMemoryAtom[];
+  count: number;
+  overview?: DebugMemoryOverview;
   error?: string;
 }
 
 export const debugApi = {
-  // 记忆库只读转储（蒸馏结果）：项目库 + 全局库 atoms
-  memory: (params: { task_id?: string; project_id?: string }) =>
+  // 记忆库只读转储（brain.db 单库）
+  memory: (params?: { task_id?: string }) =>
     http.get<DebugMemoryResponse>("/api/debug/memory", { params }),
-  // 删除单条记忆 atom（scope=project|global；物理删除，不可恢复，无二次确认）
-  deleteMemory: (scope: "project" | "global", recordId: string, projectId?: string) =>
+  // 删除单条记忆（物理删除，不可恢复，无二次确认）
+  deleteMemory: (recordId: string) =>
     http.post<{ ok: boolean; error?: string }>("/api/debug/memory/delete", {
-      scope,
       record_id: recordId,
-      project_id: projectId || "default",
     }),
 };

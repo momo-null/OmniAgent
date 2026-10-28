@@ -15,7 +15,7 @@ import json
 import types
 
 import config as config_mod
-from omni_core import memory_tam as mt
+from omni_core import memory_brain as mb
 from omni_core.brain import sdk_loop as sl
 from omni_core.brain.sdk_loop import run_subtask_sdk
 from omni_core.local import knowledge_inject as ki
@@ -85,7 +85,8 @@ def test_stable_block_scene_nav_and_profile_in_system(monkeypatch):
 
     block, layers = loop._memory_stable_block(False, task_id="tid")
     assert "<scene-navigation>" in block and "</scene-navigation>" in block
-    assert "windows-环境事实.md" in block and "SCENE-SUM" in block and "热度 3" in block
+    assert "windows-环境事实.md" in block
+    assert "SCENE-SUM" not in block, "M-1：摘要常驻已砍，只留文件名清单"
     assert "read_scene" in block, "导航必须指引按需读取（渐进披露）"
     assert "<user-persona>" in block and "PROFILE-TEXT" in block
     assert layers == ["scene_nav", "user_profile"]
@@ -129,10 +130,9 @@ def test_lead_in_from_tam_inject_and_logged(monkeypatch):
     _cfg(monkeypatch)
     monkeypatch.setattr(scene_executor, "load_scene_nav",
                         lambda pid, **k: [{"filename": "a.md", "summary": "SCENE-SUM", "heat": 1}])
-    monkeypatch.setattr(mt, "inject_text",
-                        lambda pid, q: "<relevant-memories>MEMO</relevant-memories>")
-    monkeypatch.setattr(mt, "count_atoms", lambda pid: 0)
-    monkeypatch.setattr(mt, "count_global_atoms", lambda: 0)
+    monkeypatch.setattr(mb, "inject_text_brain",
+                        lambda p, q: ("<relevant-memories>MEMO</relevant-memories>",
+                                      {"hits": 1, "chars": 4, "placement": "lead_in"}))
     monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
 
     captured = {}
@@ -154,7 +154,9 @@ def test_memory_gate_off_zero_injection(monkeypatch):
     _cfg(monkeypatch)
     monkeypatch.setattr(scene_executor, "load_scene_nav",
                         lambda pid, **k: [{"filename": "a.md", "summary": "S", "heat": 1}])
-    monkeypatch.setattr(mt, "inject_text", lambda pid, q: "<relevant-memories>X</relevant-memories>")
+    monkeypatch.setattr(mb, "inject_text_brain",
+                        lambda p, q: ("<relevant-memories>X</relevant-memories>",
+                                      {"hits": 1, "chars": 1, "placement": "lead_in"}))
     monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
 
     captured = {}
@@ -271,7 +273,8 @@ def test_subtask_gets_no_memory_injection(monkeypatch):
     loop.knowledge_cfg["profile"] = True
     monkeypatch.setattr(scene_executor, "load_scene_nav",
                         lambda pid, **k: [{"filename": "a.md", "summary": "S", "heat": 1}])
-    monkeypatch.setattr(mt, "inject_text", lambda pid, q: "<relevant-memories>X</relevant-memories>")
+    monkeypatch.setattr(mb, "inject_text_brain",
+                        lambda p, q: ("<relevant-memories>X</relevant-memories>", {"hits": 1}))
     monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
 
     assert loop._memory_stable_block(True, task_id="t") == ("", [])

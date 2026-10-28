@@ -162,13 +162,13 @@ class InstructionMixin:
                 _pid = TaskStore.project_of(str(task_id)) if task_id else ""
                 _entries = scene_executor.load_scene_nav(_pid)
                 if _entries:
-                    _rows = "\n".join(
-                        f"- {_e['filename']}（热度 {_e['heat']}）：{_e['summary']}"
-                        for _e in _entries)
+                    # M-1：场景只暴露文件名清单（零摘要）——摘要内容经 L1 检索按需进面，
+                    # 杜绝无关场景摘要常驻污染对话
+                    _rows = "\n".join(f"- {_e['filename']}" for _e in _entries)
                     _block = ("<scene-navigation>\n"
-                              "以下是场景记忆索引（摘要）。需要某场景的完整环境事实时，"
-                              "调用 read_scene 工具（scene_name=文件名）读取全文；"
-                              "摘要与实际观测冲突时以观测为准。\n"
+                              "以下是可用场景记忆的文件名清单。仅当用户请求与某场景"
+                              "明显相关时，调用 read_scene 工具（scene_name=文件名）"
+                              "读取该场景；不要在无关请求中主动提及场景内容。\n"
                               f"{_rows}\n</scene-navigation>")
                     parts.append(_block)
                     layers.append("scene_nav")
@@ -255,21 +255,12 @@ class InstructionMixin:
         if is_sub or not self.knowledge_cfg.get("memory"):
             return ""
         try:
-            from omni_core import memory_tam
-            _pid = TaskStore.project_of(str(task_id)) if task_id else ""
-            _mt = memory_tam.inject_text(_pid, query or "")
+            from omni_core import memory_brain
+            # L1 检索 brain.db（融合排序 + 召回强化），零命中也落观测
+            _persona = str(memory_brain._cfg("persona") or "")
+            _mt, _meta = memory_brain.inject_text_brain(_persona, query or "")
             if self.on_debug:
-                try:
-                    _hits = sum(1 for _l in _mt.splitlines() if _l.startswith("- ")) if _mt else 0
-                    self.on_debug("memory_inject", {
-                        "title": "记忆注入",
-                        "pool": memory_tam.count_atoms(_pid)
-                                + memory_tam.count_global_atoms(),
-                        "hits": _hits,
-                        "placement": "lead_in",
-                    })
-                except Exception:
-                    pass
+                self.on_debug("memory_inject", {"title": "记忆注入", **_meta})
             return _mt or ""
         except Exception:
             return ""

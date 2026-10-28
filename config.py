@@ -274,7 +274,7 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
     },
     # 知识层（TAM 移植；现行架构见 doc/plans/memory-architecture.md）
     "knowledge": {
-        # 记忆检索注入 gate（memory_tam；池子 ≥20 条前零注入）
+        # 记忆层总 gate（L1 检索注入 + L2 场景维护 + L3 画像；brain.db 单库）
         "memory": {"enabled": False},
         # 画像：注入开关（默认开）+ 自动维护（新 atoms 攒够 N 条 → LLM 增量重写画像）
         "profile": {
