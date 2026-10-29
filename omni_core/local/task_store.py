@@ -44,14 +44,18 @@ class TaskStore:
         done_when: str = "",
         project_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        title: str = "",
     ) -> Dict[str, Any]:
         """创建服务端生成 ID 的任务元数据。
 
         Args:
-            objective: 用户目标。
+            objective: 用户目标（模型侧的任务目标，可能含通道附加的场合说明）。
             done_when: 可选完成条件。
             project_id: 会话归属；缺省时自动创建项目归属。
             session_id: 会话标识；缺省时生成与任务绑定的会话标识。
+            title: 展示名（**人看的标题**，由通道/调用方自声明；空则前端回退 objective）。
+                与 objective 分离的原因：objective 是喂模型的目标文本（可能带上下文前缀），
+                直接当标题会把括号说明甩进侧栏。
 
         Returns:
             已落盘的任务元数据。
@@ -69,6 +73,7 @@ class TaskStore:
                 "project_id": pid,
                 "session_id": sid,
                 "objective": objective,
+                "title": str(title or ""),
                 "done_when": done_when,
                 "state": "pending",
                 "runs": [],
@@ -88,6 +93,24 @@ class TaskStore:
             if not p.exists():
                 return None
             return json.loads(p.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def find_by_session(project_id: Optional[str], session_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """按 (project, session) 找最近一个任务（聊天窗口 → 单一任务复用）。
+
+        用途：消息通道一个聊天窗口长期只应占一条会话条目——后续消息复用同一
+        task，历史连续，侧栏不堆同名条目。``session_id`` 为空（一次性/定时任务）
+        直接返回 None，不参与复用。归属缺省按 default 项目归一（与 create 一致）。
+        """
+        if not session_id:
+            return None
+        pid = P.validate_identifier(project_id, "project_id") if project_id else P.DEFAULT_PROJECT_ID
+        for meta in TaskStore.list():  # list 已按 created_at 倒序
+            if str(meta.get("session_id") or "") != session_id:
+                continue
+            if str(meta.get("project_id") or "") == pid:
+                return meta
+        return None
 
     @staticmethod
     def list(state: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -113,7 +136,7 @@ class TaskStore:
     @staticmethod
     def update(task_id: str, **fields) -> Dict[str, Any]:
         """更新白名单内的任务元数据。"""
-        allowed = {"objective", "done_when", "state", "success", "runs", "finished_at", "project_id", "session_id", "full_access",
+        allowed = {"objective", "title", "done_when", "state", "success", "runs", "finished_at", "project_id", "session_id", "full_access",
                    # 人格（plan §3.1）：会话激活后持久化，使 handoff 出去的任务与后续轮次
                    # 继承同一人格；owner 是同源的归属标记（user/persona/world，本轮只存不判）。
                    "persona", "owner"}
@@ -128,6 +151,8 @@ class TaskStore:
                 fields["project_id"] = P.validate_identifier(fields["project_id"], "project_id")
             if "session_id" in fields and fields["session_id"]:
                 fields["session_id"] = P.validate_identifier(fields["session_id"], "session_id")
+            if "title" in fields:
+                fields["title"] = str(fields["title"] or "")[:200]
             old_pid = str(meta.get("project_id") or "")
             meta.update(fields)
             if "state" in fields and fields["state"] in ("done", "failed", "aborted"):

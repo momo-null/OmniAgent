@@ -70,9 +70,13 @@ export default function Layout() {
   // 任务右键菜单状态
   const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
   const [menuTaskId, setMenuTaskId] = useState("");
-  // 重命名对话框状态
+  // 重命名对话框状态（任务）
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  // 重命名对话框状态（项目）：只改 display_name（C3），目录 slug 不动
+  const [projRenameOpen, setProjRenameOpen] = useState(false);
+  const [projRenameId, setProjRenameId] = useState("");
+  const [projRenameValue, setProjRenameValue] = useState("");
 
   // 初始化任务列表（仅一次）
   useEffect(() => {
@@ -157,6 +161,23 @@ ${assets}`)) {
     } catch (e: unknown) {
       const err = e as { response?: { data?: { error?: string } }; message?: string };
       window.alert(`删除失败：${err?.response?.data?.error || err?.message || e}`);
+    }
+  };
+
+  // 重命名项目：只改展示名（display_name 存 project.json），目录 slug 不变，
+  // 因此任务归属 / chat_routes 全都不受影响
+  const renameProject = async () => {
+    const pid = projRenameId;
+    const name = projRenameValue.trim();
+    if (!pid || !name) return;
+    try {
+      const r = await projectApi.setAlias(pid, name);
+      if (!r.data?.ok) { window.alert(`重命名失败：${r.data?.error || "未知错误"}`); return; }
+      setProjRenameOpen(false);
+      refreshProjects();
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { error?: string } }; message?: string };
+      window.alert(`重命名失败：${err?.response?.data?.error || err?.message || e}`);
     }
   };
 
@@ -402,6 +423,16 @@ ${assets}`)) {
           </MenuItem>
           <MenuItem onClick={() => {
             const pid = projMenuId;
+            setProjRenameId(pid);
+            setProjRenameValue(displayNameOf(pid));
+            setProjRenameOpen(true);
+            setProjMenuAnchor(null);
+          }}>
+            <ListItemIcon sx={{ minWidth: 32 }}><EditOutlinedIcon fontSize="small" /></ListItemIcon>
+            重命名
+          </MenuItem>
+          <MenuItem onClick={() => {
+            const pid = projMenuId;
             setProjMenuAnchor(null);
             void deleteProject(pid);
           }} sx={{ color: "error.main" }}>
@@ -483,6 +514,29 @@ ${assets}`)) {
           <DialogActions>
             <Button onClick={() => setRenameOpen(false)}>取消</Button>
             <Button onClick={() => { renameTask(menuTaskId, renameValue); setRenameOpen(false); }}>保存</Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* 项目重命名对话框（C3）：只改显示名，目录 slug 不变 */}
+        <Dialog open={projRenameOpen} onClose={() => setProjRenameOpen(false)} maxWidth="xs" fullWidth>
+          <DialogTitle>重命名项目</DialogTitle>
+          <DialogContent>
+            <TextField
+              autoFocus
+              margin="dense"
+              label="项目名"
+              value={projRenameValue}
+              onChange={(e) => setProjRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void renameProject();
+              }}
+              helperText="只改显示名；目录 id 与任务归属不受影响"
+              fullWidth
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setProjRenameOpen(false)}>取消</Button>
+            <Button onClick={() => void renameProject()}>保存</Button>
           </DialogActions>
         </Dialog>
 

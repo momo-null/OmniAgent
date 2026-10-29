@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useMemo, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import {
   Box,
   Paper,
@@ -12,6 +12,7 @@ import {
   Checkbox,
   FormControlLabel,
   Alert,
+  CircularProgress,
   Popover,
 } from "@mui/material";
 import SendOutlinedIcon from "@mui/icons-material/SendOutlined";
@@ -30,6 +31,10 @@ import PublicOutlined from "@mui/icons-material/PublicOutlined";
 import DescriptionOutlined from "@mui/icons-material/DescriptionOutlined";
 import ImageOutlinedIcon from "@mui/icons-material/ImageOutlined";
 import InsertDriveFileOutlined from "@mui/icons-material/InsertDriveFileOutlined";
+import MicOutlinedIcon from "@mui/icons-material/MicOutlined";
+import MicOffOutlinedIcon from "@mui/icons-material/MicOffOutlined";
+import VolumeUpOutlinedIcon from "@mui/icons-material/VolumeUpOutlined";
+import GraphicEqOutlinedIcon from "@mui/icons-material/GraphicEqOutlined";
 import { useTaskStore } from "../../store/taskStore.tsx";
 import ScrollArea, { THUMB_RIGHT, THUMB_WIDTH } from "../../components/ScrollArea.tsx";
 import Markdown from "../../components/Markdown.tsx";
@@ -37,7 +42,8 @@ import ModelPicker from "../../components/ModelPicker.tsx";
 import RightDock from "../../components/RightDock.tsx";
 import { fmtBytes } from "../../components/dock/FilesTab.tsx";
 import type { ArtifactInfo, ChatMsg, ProcessItem, ApprovalCardInfo, ModelsIndex } from "../../types";
-import { characterApi, modelCatalogApi, settingsApi } from "../../api/client";
+import { audioApi, characterApi, modelCatalogApi, settingsApi } from "../../api/client";
+import { HandsFree, startRecording } from "./voiceRecorder";
 
 // 选中模型的本地兜底：后端目录为准，本地只用于首屏即时显示（切换后由后端 defaults 持久化）
 const MODEL_SEL_KEY = "omni.selected_model";
@@ -184,10 +190,7 @@ const MsgRow = memo(function MsgRow({ m, showRole = true, copyable = false }: { 
         }}
       >
         {isReply ? (
-          <>
-            <Markdown>{m.text}</Markdown>
-            {copyable && <CopyButton text={m.text} />}
-          </>
+          <ReplyBody text={m.text} copyable={copyable} />
         ) : (
           <Typography variant="body2" component="span" sx={{ fontSize: 14 }}>
             {m.text}
@@ -197,6 +200,137 @@ const MsgRow = memo(function MsgRow({ m, showRole = true, copyable = false }: { 
     </Box>
   );
 });
+
+// ── 语音播报（/api/audio/tts；voice 插件未启用时点按会弹后端错误） ─────────
+// 全局同时只播一条：新播报挤掉旧的；麦克风按下（打断）时 stopSpeakback 立即停。
+let speakAudio: HTMLAudioElement | null = null;
+let speakPlaying = false; // 免提声学打断的武装信号（HandsFree.isPlayback）
+
+function stopSpeakback() {
+  speakPlaying = false;
+  if (speakAudio) {
+    speakAudio.pause();
+    speakAudio = null;
+  }
+}
+
+function isSpeakbackPlaying() {
+  return speakPlaying;
+}
+
+// 播报统一入口（🔊 按钮与免提自动朗读共用）：全局单播，>480 字截断（端点上限 500）
+async function speakText(text: string): Promise<HTMLAudioElement> {
+  const t = text.length > 480 ? text.slice(0, 480) + "……" : text;
+  const blob = await audioApi.tts(t);
+  stopSpeakback();
+  const audio = new Audio(URL.createObjectURL(blob));
+  speakAudio = audio;
+  audio.onended = () => {
+    if (speakAudio === audio) {
+      speakAudio = null;
+      speakPlaying = false;
+    }
+  };
+  audio.onpause = () => {
+    if (speakAudio === audio) speakPlaying = false;
+  };
+  speakPlaying = true;
+  await audio.play();
+  return audio;
+}
+
+function SpeakButton({ text }: { text: string }) {
+  const [playing, setPlaying] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (!text) return null;
+  const play = async () => {
+    setBusy(true);
+    try {
+      const audio = await speakText(text);
+      audio.addEventListener("ended", () => setPlaying(false));
+      setPlaying(true);
+    } catch (e) {
+      setPlaying(false);
+      window.alert(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+  return (
+    <IconButton
+      size="small"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (playing) {
+          stopSpeakback();
+          setPlaying(false);
+        } else {
+          play();
+        }
+      }}
+      title={playing ? "停止播报" : "朗读这条回复"}
+      aria-label={playing ? "停止播报" : "朗读这条回复"}
+      sx={{
+        width: 24, height: 24, mt: 0.25,
+        color: "text.disabled",
+        "&:hover": { color: "text.primary", bgcolor: "transparent" },
+      }}
+    >
+      {busy ? <CircularProgress size={14} /> : playing ? <StopOutlinedIcon /> : <VolumeUpOutlinedIcon />}
+    </IconButton>
+  );
+}
+
+// ── 按住说话（微信对讲式）：按下打断播报并录 16k WAV，松手转写 → 按当前态投递 ──
+function MicButton({ onPressStart, onText }: {
+  onPressStart: () => void;
+  onText: (t: string) => void;
+}) {
+  const recRef = useRef<{ stop: () => Promise<Blob> } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const release = async () => {
+    const rec = recRef.current;
+    recRef.current = null;
+    if (!rec) return;
+    setBusy(true);
+    try {
+      const blob = await rec.stop();
+      const text = await audioApi.transcribe(blob);
+      if (text.trim()) onText(text.trim());
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  };
+  const press = (e: ReactPointerEvent) => {
+    e.preventDefault();
+    // 指针捕获：按住后拖出按钮，pointerup 仍落回本按钮，不会漏掉松手
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    if (recRef.current) return;
+    onPressStart();
+    startRecording()
+      .then((rec) => { recRef.current = rec; })
+      .catch((err) => {
+        recRef.current = null;
+        window.alert(err instanceof Error ? err.message : String(err));
+      });
+  };
+  return (
+    <IconButton
+      size="small"
+      aria-label="按住说话"
+      title="按住说话，松手发送（转写进当前会话）"
+      disabled={busy}
+      onPointerDown={press}
+      onPointerUp={(e) => {
+        e.preventDefault();
+        release();
+      }}
+      sx={{ width: 36, height: 36, flexShrink: 0, color: "text.secondary" }}
+    >
+      {busy ? <CircularProgress size={18} /> : <MicOutlinedIcon />}
+    </IconButton>
+  );
+}
 
 // ── 对话区实时过程流（思考 + 工具调用），与右栏 debug 日志解耦 ─────────────
 
@@ -290,7 +424,25 @@ const ThinkBlock = memo(function ThinkBlock({ item, streaming }: { item: Process
   );
 });
 
-// 真流式「口播」气泡（问题1/3）：模型每轮自然语言结论，与思考块一起在对话区时间线流式呈现
+// 回复正文的唯一呈现单元：Markdown + 回复级操作条（复制/语音）。
+// 气泡宽度、间距、底色属于「层级」差异，留在各自链路（MsgRow 的普通消息气泡 /
+// MessageBubble 的结构化轮次气泡）；这里只管正文与操作。新增回复级操作
+// （重试/引用/导出…）只改本组件，不要在调用方各写一份。
+const ReplyBody = memo(function ReplyBody({ text, copyable = false }: { text: string; copyable?: boolean }) {
+  return (
+    <>
+      <Markdown>{text}</Markdown>
+      {copyable && (
+        <Box component="span" sx={{ display: "inline-flex", alignItems: "center", gap: 0.25 }}>
+          <CopyButton text={text} />
+          <SpeakButton text={text} />
+        </Box>
+      )}
+    </>
+  );
+});
+
+// 回复气泡：流式「口播」增量、agent turn 里的 message 步骤、以及本轮结论共用。
 const MessageBubble = memo(function MessageBubble({ item, showRole = true, copyable = false }: { item: ProcessItem; showRole?: boolean; copyable?: boolean }) {
   const text = item.content || "";
   return (
@@ -303,9 +455,7 @@ const MessageBubble = memo(function MessageBubble({ item, showRole = true, copya
           wordBreak: "break-word", boxShadow: "none", bgcolor: "transparent",
         }}
       >
-        {/* LLM 口播内容按 markdown 渲染 */}
-        <Markdown>{text}</Markdown>
-        {copyable && <CopyButton text={text} />}
+        <ReplyBody text={text} copyable={copyable} />
       </Paper>
     </Box>
   );
@@ -447,6 +597,17 @@ const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false
       ) : null}
       {/* 产物卡：本轮 agent 实际写出的文件，点击在右侧栏「文件」页预览 */}
       {(m.extra?.artifacts?.length ?? 0) > 0 && <ArtifactCards artifacts={m.extra!.artifacts!} />}
+      {/* 显式发送通道（QQ 等）的投递状态：一眼分清"说出去了"和"只是想了想" */}
+      {m.extra?.send ? (
+        <Typography
+          variant="caption"
+          sx={{ mt: 0.5, color: (m.extra.send.count ?? 0) > 0 ? "success.main" : "text.secondary" }}
+        >
+          {(m.extra.send.count ?? 0) > 0
+            ? `已发送到会话 · ${m.extra.send.count} 条`
+            : "未发送（只留在任务里，对方看不到）"}
+        </Typography>
+      ) : null}
       {meta ? (
         <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
           ✅ 完成：success={meta.success ? "True" : "False"} steps={String(meta.steps)} escalated={String(meta.escalated)} collected={String(meta.collected)}
@@ -586,6 +747,74 @@ export default function Chat() {
     sendMessage(text, fullAccess, modelSel || undefined);
   };
 
+  // 语音（微信对讲式）：转写文本按当前态投递——空闲直发，运行中注入/排队（与打字同路）
+  const handleVoiceText = (text: string) => {
+    const t = (text || "").trim();
+    if (!t) return;
+    if (running) injectOrQueue(t);
+    else sendMessage(t, fullAccess, modelSel || undefined);
+  };
+
+  // 免提（对空气说话）：常开 VAD 自动判句提交 + 回复自动播报 + 播报中声学打断。
+  // 全部复用 /api/audio/* 端点与插件；麦克风经共享引擎（无人订阅即释放）。
+  const [handsFree, setHandsFree] = useState(() => localStorage.getItem("omni.hands_free") === "1");
+  const hfRef = useRef<HandsFree | null>(null);
+  const runningRef = useRef(false);
+  runningRef.current = running;
+  const voiceTextRef = useRef<(t: string) => void>(() => {});
+  voiceTextRef.current = handleVoiceText;
+  const stopTaskRef = useRef(stopTask);
+  stopTaskRef.current = stopTask;
+  const segQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  useEffect(() => {
+    localStorage.setItem("omni.hands_free", handsFree ? "1" : "0");
+    if (!handsFree) {
+      hfRef.current?.stop();
+      hfRef.current = null;
+      return;
+    }
+    const hf = new HandsFree();
+    hfRef.current = hf;
+    hf.start({
+      isPlayback: isSpeakbackPlaying,
+      onBargeIn: () => {
+        stopSpeakback();
+        if (runningRef.current) stopTaskRef.current();
+      },
+      onSegment: (blob) => {
+        // 串行提交保持话语顺序；单条转写失败只提示本条，不关免提
+        segQueueRef.current = segQueueRef.current.then(async () => {
+          try {
+            const text = await audioApi.transcribe(blob);
+            if (text.trim()) voiceTextRef.current(text.trim());
+          } catch (e) {
+            window.alert(e instanceof Error ? e.message : String(e));
+          }
+        });
+      },
+      onError: (msg) => {
+        window.alert(msg);
+        setHandsFree(false);
+      },
+    });
+    return () => {
+      hf.stop();
+      hfRef.current = null;
+    };
+  }, [handsFree]);
+
+  // 免提：回复完成（running 落沿）自动朗读最后一条回复
+  const prevRunningRef = useRef(false);
+  useEffect(() => {
+    const was = prevRunningRef.current;
+    prevRunningRef.current = running;
+    if (!was || running || !handsFree) return;
+    const last = [...messages].reverse().find((m) => m.role === "agent" || m.role === "assistant");
+    const text = (last?.text || "").trim();
+    if (text) speakText(text).catch(() => {});
+  }, [running, handsFree, messages]);
+
   return (
     <Box sx={{ display: "flex", height: "100%", width: "100%", minHeight: 0, overflow: "hidden", bgcolor: "background.default" }}>
       {/* 左：对话区 */}
@@ -599,7 +828,7 @@ export default function Chat() {
       >
         <Stack direction="row" justifyContent="space-between" alignItems="center"
           sx={{ mb: 1, pt: 1, pb: 1, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
-          {/* 顶栏左侧：只显示当前任务 objective（不存在则为空）；新对话也为空 */}
+          {/* 顶栏左侧：显示当前会话名（服务端 title 优先、回退 objective；新对话为空） */}
           <Typography variant="subtitle1" noWrap sx={{ fontWeight: 600 }}>
             {currentTaskId ? (taskObjectives[currentTaskId] || "") : ""}
           </Typography>
@@ -654,8 +883,9 @@ export default function Chat() {
                   node = <MessageBubble item={it} showRole={groupStart} copyable={i === lastReplyIdx} />;
                 else
                   node = <ToolCallCard item={it} />;
-              } else if ((it.role === "agent" || it.role === "assistant") && it.extra?.steps?.length) {
-                // agent 轮若携带结构化 steps，渲染为「思考 + 工具 + 结论」一体的 agent turn
+              } else if ((it.role === "agent" || it.role === "assistant")
+                && (it.extra?.steps?.length || it.extra?.send)) {
+                // agent 轮若携带结构化 steps（或显式发送的投递状态），渲染为一体化 agent turn
                 node = <AgentTurn m={it} showRole={groupStart} copyable={i === lastReplyIdx} />;
               } else {
                 node = <MsgRow m={it} showRole={groupStart} copyable={i === lastReplyIdx} />;
@@ -787,6 +1017,31 @@ export default function Chat() {
               sx={{ mr: 0 }}
             />
             <Stack direction="row" spacing={0.5} alignItems="center">
+              {/* 免提（对空气说话）：开=常开 VAD 自动判句、回复自动播报、说话即声学打断 */}
+              <IconButton
+                onClick={() => setHandsFree((v) => !v)}
+                title={handsFree
+                  ? "免提模式开：对空气说话即可，说完自动发送。点击关闭"
+                  : "免提模式：对空气说话（说完自动发送、回复自动播报、说话即打断）"}
+                aria-label="免提模式"
+                sx={{
+                  width: 36, height: 36, flexShrink: 0,
+                  color: handsFree ? "primary.main" : "text.secondary",
+                  bgcolor: handsFree ? "action.selected" : "transparent",
+                }}
+              >
+                {handsFree ? <GraphicEqOutlinedIcon /> : <MicOffOutlinedIcon />}
+              </IconButton>
+              {/* 按住说话：免提开启时隐藏（避免与自动判句双路重复提交） */}
+              {!handsFree && (
+                <MicButton
+                  onPressStart={() => {
+                    stopSpeakback();
+                    if (running) stopTask();
+                  }}
+                  onText={handleVoiceText}
+                />
+              )}
               {/* 模型选择：靠近发送键，只显示模型名（运行中禁止切换） */}
               <ModelPicker
                 value={modelSel}

@@ -1376,6 +1376,8 @@ def _assemble_agent_stack(
     available_slots: Optional[List[str]] = None,
     # 能力门（运行级）：False = 纯对话运行，不装配任何工具（详见装配处注释）
     tools_enabled: bool = True,
+    # 受限白名单：tools_enabled=False 时仍允许暴露的少数工具（如「显式发送」）
+    tool_allowlist: Optional[List[str]] = None,
     budget_hint_ratio: float,
     max_input_tokens: int,
     compress_threshold: float,
@@ -1474,6 +1476,13 @@ def _assemble_agent_stack(
         _agent_tools: List[FunctionTool] = list(tools) + build_meta_tools(
             state, gate, on_state, allow_dispatch, todo_store, available_slots)
         _stop_behavior: Any = StopAtTools(stop_at_tool_names=stop_tools)
+    elif tool_allowlist:
+        # 受限能力（如消息通道的「显式发送」）：只暴露白名单里的工具，
+        # 不装配核内元工具 / MCP——模型能做的唯一动作就是发送，不会越权。
+        _allow = {str(x) for x in tool_allowlist if str(x)}
+        _mcp_connected = []
+        _agent_tools = [t for t in tools if getattr(t, "name", "") in _allow]
+        _stop_behavior = None
     else:
         _mcp_connected = []
         _agent_tools = []
@@ -1512,6 +1521,8 @@ def run_subtask_sdk(
     gate: Any,
     # 能力门：False = 纯对话运行（工具/MCP/元工具全不装配）
     tools_enabled: bool = True,
+    # 受限白名单：tools_enabled=False 时仍暴露的工具名（如「显式发送」）
+    tool_allowlist: Optional[List[str]] = None,
     mcp_servers: Optional[List[Any]] = None,
     max_steps: Optional[int] = None,
     chunk_turns: int = 0,
@@ -1590,6 +1601,7 @@ def run_subtask_sdk(
         todo_store=todo_store,
         available_slots=available_slots,
         tools_enabled=tools_enabled,
+        tool_allowlist=tool_allowlist,
         budget_hint_ratio=budget_hint_ratio,
         max_input_tokens=max_input_tokens,
         compress_threshold=compress_threshold,

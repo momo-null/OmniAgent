@@ -19,6 +19,7 @@ import {
 import { join } from "node:path";
 import { app } from "electron";
 import { projectPython } from "./project";
+import { serverHost } from "./config";
 
 export interface BackendHandle {
   process: ChildProcess;
@@ -97,9 +98,11 @@ function cleanEnv(): NodeJS.ProcessEnv {
 }
 
 export function startBackend(root: string, port: number): BackendHandle {
+  // PC-0 绑定贯通：host 读 server.host（缺省 127.0.0.1；绑非回环时后端启动安全门
+  // 强制要求 auth_token），不再是硬编码回环——局域网设备才能访问 Web UI
   const args = [
     "-m", "uvicorn", "backend.server:app",
-    "--host", "127.0.0.1",
+    "--host", serverHost(root),
     "--port", String(port),
   ];
   const child = spawn(projectPython(root), args, {
@@ -125,10 +128,14 @@ export function shellLog(msg: string, name = "gateway.log"): void {
  * 凭据未配（如 FEISHU_APP_SECRET 缺失）时网关自身降级为只跑调度器，不影响使用；
  * 配好后重启应用即可连上通道。
  */
-export function startGateway(root: string): ChildProcess {
+export function startGateway(root: string, backendUrl = ""): ChildProcess {
+  // B0 事件桥：网关要知道后端实际端口（桌面端可能取到非 8000 的空闲端口），
+  // 才能在跑完一轮后通知前端刷新；未注入时网关回退 127.0.0.1:8000。
+  const env = cleanEnv();
+  if (backendUrl) env.OMNIAGENT_BACKEND_URL = backendUrl;
   const child = spawn(projectPython(root), ["-m", "gateway.channel_gateway"], {
     cwd: root,
-    env: cleanEnv(),
+    env,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });

@@ -15,6 +15,16 @@ const http = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+// ── 鉴权（PC-0）：局域网/手机访问时后端要求 Bearer token ────────────
+// 来源：页面 URL ?token=<server.auth_token>（首次粘贴带 token 的地址即记住）。
+// 回环访问后端豁免，本机制只在非回环场景生效。
+const _urlToken = new URLSearchParams(window.location.search).get("token");
+if (_urlToken) localStorage.setItem("omni.auth_token", _urlToken);
+export const authToken = localStorage.getItem("omni.auth_token") || "";
+if (authToken) {
+  http.defaults.headers.common["Authorization"] = `Bearer ${authToken}`;
+}
+
 // ── 设置（GET/PUT /api/settings，白名单节） ───────────
 export const settingsApi = {
   get: () => http.get("/api/settings"),
@@ -58,8 +68,9 @@ export const taskApi = {
     http.post("/api/runtime/tasks", body),
   updateState: (taskId: string, body: Record<string, unknown>) =>
     http.post(`/api/runtime/tasks/${taskId}/state`, body),
-  rename: (taskId: string, objective: string) =>
-    http.post(`/api/runtime/tasks/${taskId}/state`, { objective }),
+  // 重命名 = 只改展示名（title）；objective 是模型侧任务目标，不随重命名改动
+  rename: (taskId: string, title: string) =>
+    http.post(`/api/runtime/tasks/${taskId}/state`, { title }),
   remove: (taskId: string) => http.delete(`/api/runtime/tasks/${taskId}`),
   openFolder: (taskId: string) =>
     http.post(`/api/runtime/tasks/${taskId}/open_folder`),
@@ -183,9 +194,15 @@ export const runtimeApi = {
   // 插件开关（写 ~/.omniagent/plugins/<name>.yaml；重启后生效）
   setPluginEnabled: (name: string, enabled: boolean) =>
     http.patch("/api/runtime/tools/plugins", { name, enabled }),
-  // SSE 流地址（EventSource 用，无需 axios）；支持 task_id 订阅特定 task 事件
-  streamUrl: (taskId?: string) =>
-    taskId ? `/api/runtime/stream?task_id=${encodeURIComponent(taskId)}` : "/api/runtime/stream",
+  // SSE 流地址（EventSource 用，无需 axios）；支持 task_id 订阅特定 task 事件。
+  // sub 非空 = 旁路订阅者（按游标读、不清空 outbox）——用于常驻收听跨进程的
+  // tasks_changed（网关跑 QQ 等外部会话时，后端把「变了」推到全局 outbox）。
+  streamUrl: (taskId?: string, sub?: string) => {
+    const qs: string[] = [];
+    if (taskId) qs.push(`task_id=${encodeURIComponent(taskId)}`);
+    if (sub) qs.push(`sub=${encodeURIComponent(sub)}`);
+    return qs.length ? `/api/runtime/stream?${qs.join("&")}` : "/api/runtime/stream";
+  },
 };
 
 export default http;
@@ -217,4 +234,38 @@ export const cronApi = {
   projects: () => http.get("/api/cron/projects"),
   runs: (jobId = "", limit = 100) =>
     http.get(`/api/cron/runs?job_id=${encodeURIComponent(jobId)}&limit=${limit}`),
+};
+
+// ── 语音（/api/audio/*；voice 插件未启用时后端 404） ──────────────
+export const audioApi = {
+  // 录音 WAV → 文本（微信对讲式按住说话）
+  transcribe: async (blob: Blob): Promise<string> => {
+    const res = await fetch("/api/audio/transcribe", {
+      method: "POST",
+      headers: authToken ? { "Content-Type": "audio/wav", Authorization: `Bearer ${authToken}` } : { "Content-Type": "audio/wav" },
+      body: blob,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || `转写失败 (${res.status})`);
+    return String(data.text || "");
+  },
+  // 文本 → WAV 音频（回复播报）
+  tts: async (text: string): Promise<Blob> => {
+    const res = await fetch("/api/audio/tts", {
+      method: "POST",
+      headers: authToken ? { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` } : { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    if (!res.ok) {
+      let msg = `合成失败 (${res.status})`;
+      try {
+        const d = await res.json();
+        if (d?.error) msg = d.error;
+      } catch {
+        // 非 JSON 错误体，用默认消息
+      }
+      throw new Error(msg);
+    }
+    return await res.blob();
+  },
 };

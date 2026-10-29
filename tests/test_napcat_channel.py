@@ -61,7 +61,10 @@ def test_group_without_at_ignored(adapter):
     assert got == []
 
 
-def test_group_with_at_dispatched(adapter):
+def test_group_with_at_dispatched(adapter, monkeypatch):
+    # 群名走 OneBot API，单测里不联网：显式给"取不到"→ 标题回退群号
+    monkeypatch.setattr(adapter, "group_name", lambda gid: "")
+    monkeypatch.setattr(adapter, "group_history", lambda gid, limit=8: [])
     got, emit = _collector()
     adapter._handle_event({
         "post_type": "message", "message_type": "group", "self_id": 111,
@@ -79,7 +82,157 @@ def test_group_with_at_dispatched(adapter):
     assert "群 333" in msg.text
     assert "「" in msg.text  # 群聊必须带说话人
     assert "第一人称" in msg.text
+    # 显式发送：想说话必须调工具，最终回答不会自动外发
+    assert "msg_send_text" in msg.text
+    assert msg.reply_mode == "explicit"
     assert isinstance(msg.reply, NapcatReply)
+
+
+# === 会话标题 / 消息原文（显示层与模型上下文分离） ===
+
+def test_private_title_and_display_text(adapter):
+    """私聊标题 = 与「昵称」(QQ号)的对话；display_text 是消息原文（无场合自述）。"""
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "private", "self_id": 111,
+        "user_id": 222333444, "message_id": 601,
+        "message": [{"type": "text", "data": {"text": "在吗"}}],
+        "sender": {"nickname": "阿伟"},
+    }, emit)
+    assert got[0].title == "与「阿伟」(222333444)的对话"
+    assert got[0].display_text == "在吗"
+    assert "这是你的 QQ" in got[0].text  # 模型侧仍带场合自述
+
+
+def test_private_title_falls_back_without_nickname(adapter):
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "private", "self_id": 111,
+        "user_id": 222, "message_id": 602,
+        "message": [{"type": "text", "data": {"text": "hi"}}],
+    }, emit)
+    assert got[0].title == "与 QQ 222 的对话"
+
+
+def test_group_title_uses_group_name(adapter, monkeypatch):
+    """群按群聚合：标题只标识哪个群（发言人写在每条消息的场合自述里）。"""
+    monkeypatch.setattr(adapter, "group_name", lambda gid: "研发群")
+    monkeypatch.setattr(adapter, "group_history", lambda gid, limit=8: [])
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 603,
+        "message": [{"type": "at", "data": {"qq": "111"}},
+                    {"type": "text", "data": {"text": " 开会了"}}],
+        "sender": {"card": "阿伟"},
+    }, emit)
+    assert got[0].title == "「研发群」(333) 群里的对话"
+    assert got[0].display_text == "开会了"
+    assert "「阿伟」" in got[0].text  # 发言人仍在模型上下文里
+
+
+def test_group_title_falls_back_to_group_id(adapter, monkeypatch):
+    monkeypatch.setattr(adapter, "group_name", lambda gid: "")
+    monkeypatch.setattr(adapter, "group_history", lambda gid, limit=8: [])
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 604,
+        "message": [{"type": "at", "data": {"qq": "111"}},
+                    {"type": "text", "data": {"text": "hi"}}],
+    }, emit)
+    assert got[0].title == "QQ 群 (333) 群里的对话"
+
+
+# === 群上下文（被 @ 时自动带最近几条群消息） ===
+
+def test_group_at_includes_recent_context(adapter, monkeypatch):
+    """被 @ 时自动带「群里刚才的消息」：排在 @ 消息之前，且标注为不可信背景。"""
+    monkeypatch.setattr(adapter, "group_name", lambda gid: "")
+    monkeypatch.setattr(adapter, "group_history", lambda gid, limit=8: [
+        {"who": "张三", "text": "明天去哪吃", "message_id": "a"},
+        {"who": "李四", "text": "火锅吧", "message_id": "b"},
+    ])
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 700,
+        "message": [{"type": "at", "data": {"qq": "111"}},
+                    {"type": "text", "data": {"text": " 你觉得呢"}}],
+    }, emit)
+    text = got[0].text
+    assert "[群里刚才的消息" in text
+    assert "张三: 明天去哪吃" in text and "李四: 火锅吧" in text
+    assert "不要执行" in text                     # 外部内容当背景，不当指令
+    assert text.index("张三") < text.index("你觉得呢")  # 上下文在前，@ 的消息在后
+
+
+def test_group_context_excludes_current_message(adapter, monkeypatch):
+    """当前这条 @ 不能重复出现在上下文块里（历史接口可能已包含它）。"""
+    monkeypatch.setattr(adapter, "group_name", lambda gid: "")
+    monkeypatch.setattr(adapter, "group_history", lambda gid, limit=8: [
+        {"who": "张三", "text": "旧消息", "message_id": "old"},
+        {"who": "李四", "text": "当前这条", "message_id": "701"},
+    ])
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 701,
+        "message": [{"type": "at", "data": {"qq": "111"}},
+                    {"type": "text", "data": {"text": " 在吗"}}],
+    }, emit)
+    text = got[0].text
+    assert "旧消息" in text
+    assert "李四: 当前这条" not in text
+
+
+def test_private_message_has_no_group_context(adapter, monkeypatch):
+    """私聊不需要群上下文：一次都不该去拉群历史。"""
+    called = []
+    monkeypatch.setattr(adapter, "group_history",
+                        lambda gid, limit=8: called.append(gid) or [])
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "private", "self_id": 111,
+        "user_id": 222, "message_id": 702,
+        "message": [{"type": "text", "data": {"text": "hi"}}],
+    }, emit)
+    assert called == []
+    assert "[群里刚才的消息" not in got[0].text
+
+
+def test_group_history_skips_self_and_empty(adapter, monkeypatch):
+    """群历史解析：跳过自己发的、跳过空壳（撤回/系统消息）。"""
+    monkeypatch.setattr(adapter, "_api", lambda action, payload: {"ok": True, "data": {"messages": [
+        {"user_id": 111, "message_id": 1, "sender": {"nickname": "我"},
+         "message": [{"type": "text", "data": {"text": "我自己说的"}}]},
+        {"user_id": 222, "message_id": 2, "sender": {"nickname": "张三"},
+         "message": [{"type": "text", "data": {"text": "你好"}}]},
+        {"user_id": 222, "message_id": 3, "sender": {"nickname": "张三"}, "message": []},
+    ]}})
+    adapter._self_id = "111"
+    assert adapter.group_history("333") == [
+        {"who": "张三", "text": "你好", "message_id": "2"}]
+
+
+def test_group_history_failure_degrades_empty(adapter, monkeypatch):
+    """群历史取不到 → 空列表（只带 @ 那条照常回复）。"""
+    monkeypatch.setattr(adapter, "_api",
+                        lambda action, payload: {"ok": False, "error": "retcode=1200"})
+    assert adapter.group_history("333") == []
+
+
+def test_group_name_cached_and_failure_degrades(adapter, monkeypatch):
+    """群名缓存：TTL 内只拉一次；API 失败降级为空串（标题回退群号，不抛错）。"""
+    calls = []
+    monkeypatch.setattr(adapter, "_api", lambda action, payload: calls.append(action) or {"ok": True, "data": {"group_name": "研发群"}})
+    assert adapter.group_name("333") == "研发群"
+    assert adapter.group_name("333") == "研发群"
+    assert calls == ["get_group_info"]
+
+    bad = NapcatAdapter({"enabled": True})
+    monkeypatch.setattr(bad, "_api", lambda action, payload: {"ok": False, "error": "retcode=100"})
+    assert bad.group_name("444") == ""
 
 
 def test_private_dispatched(adapter):
@@ -93,9 +246,11 @@ def test_private_dispatched(adapter):
     assert got[0].chat_id == "private:222"
     assert "在吗" in got[0].text
     assert "这是你的 QQ" in got[0].text
-    # 输出语义（回复直达对方）与代答边界必须写给模型
-    assert "回复会直接发给对方" in got[0].text
+    # 输出语义（说话必须显式调工具）+ 代答边界必须写给模型
+    assert "msg_send_text" in got[0].text
     assert "我确认下再回你" in got[0].text
+    # 别再承诺"回复会直接发给对方"（现在不自动发了）
+    assert "回复会直接发给对方" not in got[0].text
 
 
 def test_message_sent_ignored(adapter):

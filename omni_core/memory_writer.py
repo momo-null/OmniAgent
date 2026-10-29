@@ -6,9 +6,9 @@
 
 形态（与 plan 一节一一对应）：
 
-    收尾 → 入队 {msgs, persona, project, source_task, did_work, allow_episode}
+    收尾 → 入队 {msgs, persona, project, source_task, did_work}
          → 单 worker 串行消费：
-              flush_brain(...)                    # L1 永远做（闲聊也做，值判会丢大部分）
+              flush_brain(...)                    # L1 永远做（价值判是唯一守门人）
               → scene_executor.maybe_maintain(allow_write=did_work)   # 由 flush_brain 内部调
               → maybe_consolidate(...)                                 # 同上
 
@@ -54,7 +54,7 @@ def _ensure_worker() -> None:
 def enqueue(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
             source_task: str = "", persona: str = "",
             msgs: Optional[List[Dict[str, str]]] = None,
-            did_work: bool = True, allow_episode: bool = True,
+            did_work: bool = True,
             on_done: Optional[Callable[[Dict[str, Any]], None]] = None) -> bool:
     """把一轮收尾压成一条队列项（毫秒级返回）。返回是否入队成功。
 
@@ -68,7 +68,7 @@ def enqueue(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
             msgs = memory_brain.pop_capture(project_id)
         item = {"project_id": project_id, "brain_cfg": brain_cfg,
                 "source_task": source_task, "persona": persona, "msgs": msgs,
-                "did_work": bool(did_work), "allow_episode": bool(allow_episode),
+                "did_work": bool(did_work),
                 "on_done": on_done, "ts": time.time()}
         _ensure_worker()
         try:
@@ -128,7 +128,6 @@ def _process(item: Dict[str, Any]) -> Dict[str, int]:
         item.get("project_id", ""), item.get("brain_cfg"),
         source_task=item.get("source_task", ""), persona=item.get("persona", ""),
         msgs=item.get("msgs") or [],
-        allow_episode=bool(item.get("allow_episode", True)),
         allow_write=bool(item.get("did_work", True)),
     )
     stats["did_work"] = 1 if item.get("did_work") else 0

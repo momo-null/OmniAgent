@@ -426,14 +426,12 @@ _CONSIST_SYSTEM = (
 def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
                 source_task: str = "", persona: str = "",
                 msgs: Optional[List[Dict[str, str]]] = None,
-                allow_episode: bool = True, allow_write: bool = True) -> Dict[str, int]:
+                allow_write: bool = True) -> Dict[str, int]:
     """任务收尾：buffer 摘要 → 提炼 → 价值/kind/importance → 一致性四态 → brain.db。
 
     Args:
         msgs: 已从 capture 缓冲取走的消息（异步写链在入队时取走，worker 后续消费）。
             ``None`` = 就地 pop（同步路径 / 测试）。
-        allow_episode: 是否允许沉淀 ``kind=episode``。chat（闲聊）模式下 False——
-            流水账会把库填满、把真正的事实挤下去（plan §3.3）。
         allow_write: 本轮是否"真的干了活"（did_work），透传给 L2 维护。
     """
     persona = persona or str(_cfg("persona") or "")
@@ -481,13 +479,6 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
         kind = str(it.get("kind") or "fact")
         if kind not in ("fact", "preference", "rule", "episode"):
             kind = "fact"
-        # chat（闲聊）模式不产 episode：一次性的"聊了什么"沉淀成原子记忆只会挤占
-        # 真正的跨会话事实（plan §3.3）。降级为丢弃而非改 kind——改 kind 等于假装
-        # 它是事实，比不写更糟。
-        if kind == "episode" and not allow_episode:
-            stats["dropped"] += 1
-            stats["episode_dropped"] = stats.get("episode_dropped", 0) + 1
-            continue
         try:
             imp = max(0.0, min(1.0, float(it.get("importance", 0.5))))
         except Exception:

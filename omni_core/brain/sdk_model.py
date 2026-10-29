@@ -32,6 +32,13 @@ class _MalformedResponseGuard(Model):
     def __init__(self, inner: Model) -> None:
         self._inner = inner
 
+    def __getattr__(self, item: str):
+        # 透传内层属性（.model / .name 等）：包装只兜协议错误，不遮蔽被包 Model 的公开面。
+        # 以 "_" 开头的属性按正常规则缺失即报错（含 _inner 自身，防未初始化时无限递归）。
+        if item.startswith("_"):
+            raise AttributeError(item)
+        return getattr(self._inner, item)
+
     @staticmethod
     def _is_sdk_tuple_response(e: BaseException) -> bool:
         return isinstance(e, AttributeError) and "has no attribute 'choices'" in str(e)

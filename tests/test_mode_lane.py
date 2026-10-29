@@ -172,29 +172,40 @@ def test_voice_prompt_is_dialog_oriented():
     assert "核心纪律" in work and "【任务目标】" not in work
 
 
-def test_chat_tool_set_is_light(monkeypatch):
-    """chat 档只给轻工具：重执行类不暴露，元工具不受白名单约束。"""
-    assert "shell_exec" not in cr.__dict__.get("_CHAT_TOOLS", set())
-    from omni_core.local.loop.core import _CHAT_TOOLS
+def test_chat_mode_keeps_full_toolset(monkeypatch, enable_plugin):
+    """2026-10-29 mode 收窄：mode 不再裁剪工具面——chat 与 auto 工具集完全一致，
+    重工具同样暴露（可用性归插件 enabled 与 tools_enabled 通道门）。"""
+    from omni_core.local.loop import core as tl
+    from omni_core.tools.loader import load_plugins
+    from tests._env import install_fake_env
 
-    assert {"memory_remember", "msg_send_text", "read_scene",
-            "read_task_digest"} <= set(_CHAT_TOOLS)
-    assert not {"shell_exec", "write_file", "replay_skill"} & set(_CHAT_TOOLS)
+    class _FakeExec:
+        kind = "host"
+
+        def text_of(self, percept):
+            return ""
+
+        def verify_done(self, condition, percept):
+            return (False, "noop")
+
+    install_fake_env(monkeypatch, _FakeExec)
+    enable_plugin("vision")
+    monkeypatch.setattr(tl.config, "load_config", lambda: {})
+    load_plugins({})
+    cfg = {"model": "m", "base_url": "http://localhost:9", "api_key": "test"}
+    auto = tl.ToolLoop(brain_cfg=cfg, mode="auto")
+    chat = tl.ToolLoop(brain_cfg=cfg, mode="chat")
+    assert auto.tool_schemas == chat.tool_schemas
+
+    def _name(s):
+        fn = s.get("function") if isinstance(s, dict) else None
+        return (fn or s).get("name") if isinstance(fn or s, dict) else ""
+    names = {_name(s) for s in chat.tool_schemas}
+    assert "vision_describe" in names, "重工具不再被 mode 档裁剪"
 
 
-def test_mode_brain_cfg_prefers_voice_slot(monkeypatch):
-    """mode=chat 优先 voice 槽；未配置时完全沿用主槽（零回归）。"""
-    from omni_core.brain import router as model_router
-
-    monkeypatch.setattr(hp, "_make_brain_cfg",
-                        lambda model=None: ({"base_url": "http://main", "model": "m"},
-                                            {}))
-    monkeypatch.setattr(model_router, "resolve_slot",
-                        lambda slot, selection=None: ({"base_url": "http://voice",
-                                                       "model": "v"}
-                                                      if slot == "voice" else {}))
-    assert hp._mode_brain_cfg(None, "chat")[0]["base_url"] == "http://voice"
-    assert hp._mode_brain_cfg(None, "task")[0]["base_url"] == "http://main"
-
-    monkeypatch.setattr(model_router, "resolve_slot", lambda slot, selection=None: {})
-    assert hp._mode_brain_cfg(None, "chat")[0]["base_url"] == "http://main"
+def test_mode_brain_cfg_removed():
+    """2026-10-29 mode 收窄：mode 不再选模型槽（chat 的 voice 槽偏好已删），
+    显式 model 选择与主槽路径由 _make_brain_cfg 承担。"""
+    assert not hasattr(hp, "_mode_brain_cfg")
+    assert hasattr(hp, "_make_brain_cfg")

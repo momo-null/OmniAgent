@@ -1,7 +1,8 @@
 """通用消息发送插件（接入设计 v1.1 §2 工具侧）。
 
-- 工具按**行为**命名（msg_send_text / msg_send_card），通道只是参数——
-  接十个通道工具清单不变（通用化红线）。
+- 工具按**行为**命名（msg_send_text / msg_send_voice / msg_send_card），通道只是参数——
+  接十个通道工具清单不变（通用化红线）。用什么方式说（文字/语音）由模型自己选，
+  工具不按通道状态偷偷改写发送形式。
 - 通道实现来自 gateway/channels 注册表（与网关同进程闭环）：
   · channel 缺省 = 当前任务来源通道（dispatch 注入的线程上下文）
   · target  缺省 = 来源会话 / 通道默认会话
@@ -29,10 +30,24 @@ def configure(cfg: Optional[dict]) -> None:
 
 
 def _resolve(channel: str, target: str):
-    """解析 (adapter, chat_id)。返回 (adapter, chat_id, err)。"""
+    """解析 (adapter, chat_id)。返回 (adapter, chat_id, err)。
+
+    **外部可达通道下强制锁死目标**：`context.get_source_external()` 为真（QQ 群/
+    陌生人私聊这类他人能发消息进来的入口）时，忽略模型给的 channel/target，只发回
+    来源会话。否则群里的人可以让它 `channel="feishu"` 或 `target="private:别人"`
+    —— 不碰任何高危工具也能把消息从别的通道发出去，绕过工具白名单做跳板。
+    """
     from gateway.channels import context
 
     cur = context.get_current_reply()
+    if context.get_source_external():
+        if cur is None:
+            return None, None, "外部来源无回发句柄，已拒绝发送（防跨会话外发）"
+        if not (getattr(cur, "channel_name", "") or ""):
+            # 没通道名就会回退到插件配置的 default_channel → 等于跨通道发，直接拒
+            return None, None, "外部来源缺少通道标识，已拒绝发送（防串道）"
+        channel = ""
+        target = getattr(cur, "chat_id", "") or ""
     # 通道名：显式 > 当前来源 > 插件配置缺省
     ch_name = channel or ""
     if not ch_name and cur is not None:
@@ -65,6 +80,21 @@ def _resolve(channel: str, target: str):
     return adapter, chat_id, ""
 
 
+def _external_note(result: Dict[str, Any]) -> Dict[str, Any]:
+    """外部来源下给发送结果补一句说明：channel/target 被忽略、只发回了本会话。
+
+    让模型知道「我指定别的会话没生效」，避免它以为发出去了而实际发在来源群。
+    """
+    try:
+        from gateway.channels import context as _ctx
+
+        if isinstance(result, dict) and result.get("ok") and _ctx.get_source_external():
+            result["note"] = "外部来源：只能发回本会话，channel/target 参数已被忽略"
+    except Exception:  # 非网关进程 / 极端导入失败：不影响发送结果
+        pass
+    return result
+
+
 @function_tool(
     description="发送纯文本消息到消息通道。channel=通道名（如 napcat/feishu）；"
                 "target=会话标识，按通道自身的格式：napcat 为 private:<QQ号> 或 group:<群号>，"
@@ -83,10 +113,102 @@ def msg_send_text(text: str, channel: str = "", target: str = "") -> Dict[str, A
     if err:
         return {"ok": False, "error": err}
     try:
+        from gateway.channels import context as _ctx
+    except Exception:  # 非网关进程/极端导入失败：不影响发送本身
+        _ctx = None
+    try:
         reply = adapter.reply_to(chat_id)
-        return reply.send_text(text)
+        # 只发文本。要发语音走 msg_send_voice——发送方式由模型自己选，
+        # 不在工具里按「入站是不是语音」偷偷改写（否则模型以为发文字、对方却收到语音）。
+        result = reply.send_text(text)
+        # 记账（dispatch 据此判断"已发送/未发送"；工具结果字符串不可靠，别事后解析）
+        if _ctx is not None and isinstance(result, dict) and result.get("ok"):
+            _ctx.note_sent(text)
+        return _external_note(result)
     except Exception as e:
         return {"ok": False, "error": f"发送失败: {e}"}
+
+
+@function_tool(
+    description="发语音消息：把文字朗读成语音发给对方（**说话**，不是唱歌、没有旋律/伴奏；"
+                "只适合口语化短句，不要塞链接/代码/长列表）。对方发来语音、或闲聊短句时用它更自然。"
+                "通道不支持语音会返回明确错误，届时改用 msg_send_text。",
+    unit="messaging",
+)
+def msg_send_voice(text: str, channel: str = "", target: str = "") -> Dict[str, Any]:
+    """发语音（TTS 朗读）。
+
+    Args:
+        text: 要朗读的内容（口语化、简短）。
+        channel: 通道名（缺省=来源通道）。
+        target: 会话 ID（缺省=来源会话/通道默认会话）。
+    """
+    adapter, chat_id, err = _resolve(channel, target)
+    if err:
+        return {"ok": False, "error": err}
+    try:
+        reply = adapter.reply_to(chat_id)
+        send_voice = getattr(reply, "send_voice", None)
+        if not callable(send_voice):
+            return {"ok": False,
+                    "error": f"通道 {getattr(adapter, 'name', '') or '该'} 不支持语音，请改用 msg_send_text"}
+        result = send_voice(text)
+        if not isinstance(result, dict):
+            return {"ok": False, "error": f"语音发送返回异常: {result!r}"}
+        if result.get("ok"):
+            try:
+                from gateway.channels import context as _ctx
+
+                _ctx.note_sent(text)  # 记账：本轮真的发出去了
+            except Exception:  # 记账失败不影响已发出的消息
+                pass
+        return _external_note(result)
+    except Exception as e:
+        return {"ok": False, "error": f"语音发送失败: {e}"}
+
+
+@function_tool(
+    description="看某个群最近的消息（不含你自己发的）：被 @ 但接不上话、想确认大家在聊什么、"
+                "或要总结群里刚聊了什么时用它。只有支持群历史的通道可用（QQ 支持）。",
+    unit="messaging",
+)
+def msg_group_history(group_id: str = "", limit: int = 20, channel: str = "") -> Dict[str, Any]:
+    """群最近消息。
+
+    Args:
+        group_id: 群号（缺省=当前所在群）。
+        limit: 最多几条（1-50，缺省 20）。
+        channel: 通道名（缺省=来源通道）。
+    """
+    adapter, chat_id, err = _resolve(channel, "")
+    if err:
+        return {"ok": False, "error": err}
+    from gateway.channels import context as _ctx
+
+    gid = str(group_id or "").strip()
+    if _ctx.get_source_external():
+        # 外部来源只准看当前群：不能让群里的人借它读机器人所在的其他群
+        kind, _, ident = (chat_id or "").partition(":")
+        if kind != "group":
+            return {"ok": False, "error": "外部来源只允许查看当前群的消息"}
+        if gid and gid != ident:
+            return {"ok": False, "error": "外部来源只能查看当前群的历史（其他群号已拒绝）"}
+        gid = ident
+    elif not gid:
+        kind, _, ident = (chat_id or "").partition(":")
+        if kind != "group":
+            return {"ok": False, "error": "只有群聊有群历史；当前不在群里，需显式传 group_id"}
+        gid = ident
+    fn = getattr(adapter, "group_history", None)
+    if not callable(fn):
+        return {"ok": False, "error": f"通道 {getattr(adapter, 'name', '') or '该'} 不提供群历史"}
+    try:
+        rows = fn(gid, limit)
+    except Exception as e:
+        return {"ok": False, "error": f"取群历史失败: {e}"}
+    rows = list(rows or [])
+    return {"ok": True, "group_id": gid, "count": len(rows),
+            "note": "按时间正序，已跳过你自己发的消息", "messages": rows}
 
 
 @function_tool(
@@ -106,7 +228,7 @@ def msg_send_card(payload: Dict[str, Any], channel: str = "", target: str = "") 
         return {"ok": False, "error": err}
     try:
         reply = adapter.reply_to(chat_id)
-        return reply.send_card(payload)
+        return _external_note(reply.send_card(payload))
     except Exception as e:
         return {"ok": False, "error": f"发送失败: {e}"}
 

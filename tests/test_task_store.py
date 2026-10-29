@@ -46,6 +46,41 @@ def test_task_list_flat_and_sorted():
     assert allm[0]["task_id"] == m2["task_id"]
 
 
+# === 标题（展示名）与 objective 分离 ================================
+
+def test_title_kept_separate_from_objective():
+    """标题是人看的展示名，objective 是喂模型的目标文本（可能带场合自述前缀）。"""
+    meta = TaskStore.create(objective="（这是你的 QQ…）你好", title="与「阿伟」(222)的对话")
+    assert meta["title"] == "与「阿伟」(222)的对话"
+    assert meta["objective"].endswith("你好")
+    assert TaskStore.get(meta["task_id"])["title"] == "与「阿伟」(222)的对话"
+
+
+def test_title_update_allowed_and_truncated():
+    meta = TaskStore.create(objective="x")
+    assert TaskStore.update(meta["task_id"], title="新名字")["title"] == "新名字"
+    assert TaskStore.update(meta["task_id"], title="长" * 500)["title"] == "长" * 200
+
+
+# === 聊天窗口复用：同一 (project, session) 只保留一个 task ============
+
+def test_find_by_session_returns_latest_of_same_project():
+    m1 = TaskStore.create(objective="第一条", session_id="s_qq_aa")
+    m2 = TaskStore.create(objective="第二条", session_id="s_qq_aa")
+    hit = TaskStore.find_by_session(None, "s_qq_aa")  # 缺省归 default 项目
+    assert hit["task_id"] == m2["task_id"]
+    # 显式指定 default 也命中（与 create 的归一规则一致）
+    assert TaskStore.find_by_session(P.DEFAULT_PROJECT_ID, "s_qq_aa")["task_id"] == m2["task_id"]
+    assert m1["task_id"] != m2["task_id"]
+
+
+def test_find_by_session_scoped_by_project_and_requires_session():
+    TaskStore.create(objective="别的项目", project_id="d-other", session_id="s_qq_bb")
+    assert TaskStore.find_by_session(None, "s_qq_bb") is None          # 项目不同不串
+    assert TaskStore.find_by_session(None, "") is None                 # 无会话不参与复用
+    assert TaskStore.find_by_session(None, None) is None
+
+
 def test_task_update_state_finished_at():
     meta = TaskStore.create(objective="x")
     updated = TaskStore.update(meta["task_id"], state="done", success=True)

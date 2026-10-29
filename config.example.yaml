@@ -69,9 +69,12 @@ runtime:
 
 server:
   # 后端监听地址。非回环地址（如 0.0.0.0）必须配置 auth_token，否则拒绝启动。
-  # 改这两项需要重启后端才生效。
+  # 局域网临时无鉴权直连可设 allow_tokenless_lan: true（显式逃生门，自行承担风险）。
+  # 改这三项需要重启后端才生效。
   host: 127.0.0.1
   port: 8000
+  # auth_token: "换成长随机串"   # 非回环访问的 Bearer 凭证（nginx 网关转发时带上即可）
+  # allow_tokenless_lan: false  # true = 允许无 token 局域网直连（有 token 时本项无效）
 
 # 桌面应用（desktop/ Electron 壳）可选项；不写则全部用壳内置默认值。
 # 深合并语义同后端：项目根 config.yaml ← ~/.omniagent/config.yaml 覆盖。

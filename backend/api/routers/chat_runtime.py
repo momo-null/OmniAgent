@@ -20,7 +20,6 @@ from backend.api.routers.helpers import (
     _make_brain_cfg,
     _merge_message_step,
     _merge_thinking_step,
-    _mode_brain_cfg,
     _paths,
     _project_store,
     _read_latest_collected,
@@ -43,6 +42,7 @@ from backend.api.routers.helpers import (
     manager,
     push_chat,
     push_message_stream,
+    push_tasks_changed,
     push_thinking,
     push_thinking_stream,
     push_tool_call,
@@ -126,8 +126,9 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     try:
         from omni_core.local.loop import ToolLoop, TaskSpec
 
-        # mode 决定模型槽（chat → voice 槽，缺省回退主槽），链路本身不变
-        brain_cfg, executor_cfg = _mode_brain_cfg(model, mode)
+        # 模型槽与 mode 解耦（2026-10-29 收窄）：一律主槽（显式 model 选择优先），
+        # 「对话取向要快模型」将来由 persona 绑槽表达
+        brain_cfg, executor_cfg = _make_brain_cfg(model)
         # 阶段 0.5：运行级配置快照——一次性加载，运行期内 ToolLoop 不再重读全局 config
         cfg = config.load_config() or {}
 
@@ -298,8 +299,6 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                     _pid, brain_cfg, source_task=task_id,
                     persona=getattr(loop, "persona", "") or persona,
                     did_work=_dw,
-                    # chat（闲聊）不产 episode：流水账会把库填满、把真事实挤下去
-                    allow_episode=(str(mode or "auto").lower() != "chat"),
                     on_done=lambda _st: _debug_push(
                         "memory_flush", {"title": "记忆沉淀(异步)", **_st}),
                 )
@@ -434,9 +433,11 @@ async def _stream_gen(task_id: str = "", sub: str = ""):
     sse_open()
     try:
         while True:
-            # 全局订阅透明跟随当前运行中的 task，消除订阅竞态丢事件
+            # 全局**主**订阅透明跟随当前运行中的 task，消除订阅竞态丢事件；
+            # 旁路订阅（sub 非空，如前端常驻听 tasks_changed）不跟随——它要的是
+            # 全局事件（跨进程会话变更），跟着跑中的 task 会漏掉全局 outbox 里的事件。
             eff = sub_id
-            if eff == "_global":
+            if eff == "_global" and not _sub:
                 rid = _running_task_id()
                 if rid:
                     eff = rid
@@ -454,6 +455,9 @@ async def _stream_gen(task_id: str = "", sub: str = ""):
                 yield _sse("approval", m)
             for m in parts.get("approval_resolved", []):
                 yield _sse("approval_resolved", m)
+            # 跨进程事件桥（B0）：网关跑完/新建了会话 → 前端刷新列表、按需重拉历史
+            for m in parts.get("tasks_changed", []):
+                yield _sse("tasks_changed", m)
             for m in parts.get("chat", []):
                 yield _sse("chat", m)
             for m in parts.get("debug", []):
@@ -547,6 +551,35 @@ async def stream(task_id: str = "", sub: str = ""):
             return JSONResponse({"ok": False, "error": "task_id 格式不合法"}, status_code=422)
     return StreamingResponse(_stream_gen(task_id, sub), media_type="text/event-stream",
                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+@router.post("/internal/tasks_changed")
+async def internal_tasks_changed(request: Request):
+    """网关进程 → 本进程的事件桥（B0）：外部跑完一轮 / 新建会话后通知 UI 刷新。
+
+    为什么需要：SSE outbox 只在本进程内存里，而 QQ / 飞书消息由 ``gateway`` 进程
+    处理，跑完前端无从得知。网关 POST 这里，本进程推一个 ``tasks_changed`` 事件
+    （目标 task + 全局 outbox），前端收到就刷新任务列表并按需重拉该会话历史。
+
+    仅接受**回环**调用（网关与后端同机）；后端没起 / 被拒时网关静默跳过，通知是
+    尽力而为，绝不影响消息处理本身。``testclient`` 仅供单测的 ASGI 客户端使用。
+    """
+    host = (request.client.host if request.client else "") or ""
+    if host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+        return JSONResponse({"ok": False, "error": "仅限回环调用"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    tid = str(body.get("task_id") or "").strip()
+    if not tid:
+        return JSONResponse({"ok": False, "error": "缺 task_id"}, status_code=422)
+    try:
+        _paths().validate_identifier(tid, "task_id")
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "task_id 格式不合法"}, status_code=422)
+    push_tasks_changed(task_id=tid, project_id=str(body.get("project_id") or ""),
+                       kind=str(body.get("kind") or "run_done"))
+    return JSONResponse({"ok": True})
 
 @router.post("/stop")
 async def api_stop(request: Request):

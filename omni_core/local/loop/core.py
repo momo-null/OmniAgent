@@ -66,35 +66,12 @@ from omni_core.local.loop.finish import FinishMixin
 from omni_core.local.loop import pool as loop_pool
 
 
-# chat 模式的轻工具集（plan §3.1「轻工具 + dispatch」）：只给"说话 / 记东西 / 看场景 /
-# 派活"四类。重执行（shell/文件/技能回放）与检索类工具在这一档不给——语音场景里
-# 它们既慢又危险，真要干活由 dispatch 交给 worker。可被
-# ``runtime.mode.chat_tools`` 覆盖（列表即白名单）。
-# 元工具（task_done / verify / record / dispatch）由 build_meta_tools 单独装配，
-# 不受此白名单约束——它们是收尾与派发机制，不是"能力"。
-_CHAT_TOOLS = frozenset({
-    "msg_send_text", "msg_send_card", "msg_recent",
-    "memory_remember", "memory_recall", "memory_update", "memory_forget",
-    "memory_overview",
-    "read_scene", "read_task_digest",
-})
-
 # verify 判定器的系统提示（S5 通用化）：只做语义判定，零环境知识。
 _VERIFY_JUDGE_SYSTEM = (
     "你是完成条件判定器。给定一条完成条件和当前状态文本，判断条件是否已经达成。"
     "判定必须严格基于状态文本中的证据，不臆测、不脑补；证据不足视为未达成。"
     "只输出 JSON：{\"passed\": true/false, \"reason\": \"一句话依据\"}。"
 )
-
-
-def _schema_name(schema: Any) -> str:
-    """从 OpenAI function schema 视图取工具名（兼容嵌套 / 平铺两种形态）。"""
-    if not isinstance(schema, dict):
-        return ""
-    fn = schema.get("function")
-    if isinstance(fn, dict):
-        return str(fn.get("name") or "")
-    return str(schema.get("name") or "")
 
 
 class ToolLoop(
@@ -118,6 +95,10 @@ class ToolLoop(
         config_snapshot: Optional[dict] = None,
         agent_id: str = "main",
         tools_enabled: bool = True,
+        # 受限能力白名单（运行级）：tools_enabled=False 时，仍然只暴露这里的工具。
+        # 用途：消息通道「显式发送」——纯对话通道不给任何工具，但必须让模型能调
+        # msg_send_text 说话，否则它只能把话写进"最终回答"（那条不再自动外发）。
+        tool_allowlist: Optional[List[str]] = None,
         # 单链路参数化（plan §3.1）：auto(缺省) | chat | task —— 只改参数不改链路。
         # chat：轻工具集 + 人格版 system + 可选 voice 模型槽 + 不产 episode；
         # task/auto：全量工具 + 平台工作台 system + brain 主槽。
@@ -149,6 +130,7 @@ class ToolLoop(
         # MCP / 内核元工具全部不暴露），模型请求里没有 tools 字段，物理上无法产生
         # tool_call。内核只接一个布尔，**不感知消息来源**；谁该关由调用方（网关/通道）决定。
         self.tools_enabled = bool(tools_enabled)
+        self.tool_allowlist = {str(x) for x in (tool_allowlist or []) if str(x)}
         # 模式（plan §3.1）：只决定参数（工具粗集 / system / 模型槽 / 写链取舍），
         # 不新增链路——所有模式跑同一个 run_task。
         _mode = str(mode or "auto").strip().lower()
@@ -205,17 +187,9 @@ class ToolLoop(
                 )
             )
         self.registry = build_plugin_registry()
-        # 工具粗集（plan §3.1 渐进披露第一档）：mode 决定"能给哪一档"。
-        # chat 只给轻工具 + dispatch（不给技能目录、不给重执行工具）；
-        # auto/task 保持全量。白名单可配置（runtime.mode.chat_tools），缺省见 _CHAT_TOOLS。
-        self.tool_allow: Optional[set] = None
-        if self.mode == "chat":
-            _allow = (_rt.get("mode") or {}).get("chat_tools")
-            self.tool_allow = set(_allow if isinstance(_allow, list) and _allow else _CHAT_TOOLS)
-        # schema 视图是嵌套形态 {"type":"function","function":{"name":...}}——
-        # 直接 s.get("name") 恒 None，chat 档会被过滤成 0（踩过）
-        self.tool_schemas = [s for s in self.registry.schemas
-                             if self._tool_allowed(_schema_name(s))]
+        # 工具面 = 注册结果全集（2026-10-29 mode 收窄：mode 只管取向纪律，不裁工具；
+        # 可用性由插件 enabled 与 tools_enabled 通道门控制）。
+        self.tool_schemas = list(self.registry.schemas)
 
         # Layer 0（2026-09-30）：通用派发底座——执行单元注册表 slot→LLMClient。
         # 把「子 agent 是谁」从写死的 self.executor 升级为按逻辑名寻址的注册表；
@@ -345,25 +319,17 @@ class ToolLoop(
                   f"(mode={self.mode}, tools={len(self.tool_schemas)}, "
                   f"mcp={len(self.mcp_servers)})")
 
-    def _tool_allowed(self, name: Optional[str]) -> bool:
-        """工具粗集门（mode 决定档位；None = 全量放行）。
-
-        与 ``tools_enabled`` 的关系：后者是"要不要工具"（外部通道 fail-closed），
-        本方法是"要哪一档"（mode 渐进披露）。两者都与具体平台/来源无关。
-        """
-        if self.tool_allow is None:
-            return True
-        return str(name or "") in self.tool_allow
-
     def _sdk_tools(self) -> List[Any]:
-        """本轮暴露给 SDK 的工具：池化的包装结果 + mode 粗集过滤。
+        """本轮暴露给 SDK 的工具：池化的包装结果（mode 收窄后不再裁剪）。
 
-        ``tools_enabled=False``（外部通道纯对话）→ 空列表（能力门优先于 mode 门）。
+        ``tools_enabled=False``（外部通道纯对话）→ 默认空列表（fail-closed），
+        但 ``tool_allowlist`` 列出的工具仍会暴露（如「显式发送」的 msg_send_text）。
         """
-        if not getattr(self, "tools_enabled", True):
-            return []
-        return [t for t in loop_pool.sdk_tools(self.registry)
-                if self._tool_allowed(getattr(t, "name", ""))]
+        all_tools = list(loop_pool.sdk_tools(self.registry))
+        if getattr(self, "tools_enabled", True):
+            return all_tools
+        allow = getattr(self, "tool_allowlist", None) or set()
+        return [t for t in all_tools if getattr(t, "name", "") in allow]
 
     def _base_prompt(self, runtime_context: Optional[dict] = None) -> str:
         """主链 system 基线：mode 决定「人格版」还是「平台工作台版」（plan §3.1）。
