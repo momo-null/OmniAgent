@@ -17,7 +17,7 @@
 |---|---|---|
 | 内容 | 事实 atoms(L1)+ 场景块(L2)+ 用户画像(L3) | 知识型技能(playbook)+ 可重放宏(substeps) |
 | 存储 | `~/.omniagent/memory/brain.db`(L1 单库) + `projects/<pid>/memory/scene_blocks/` + `scene_index.json`(L2) + `~/.omniagent/memory/user_profile.md`(L3) | `projects/<pid>/skills/` + `~/.omniagent/skills/` |
-| 生产者 | LLM 提炼(价值判 + 一致性四态) / 场景整理 agent / 巩固周期(去重·抽象·画像重写) | 人工维护 + 可选自动宏提取(`skill.auto_distill`,默认关) |
+| 生产者 | LLM 提炼(价值判 + 一致性四态) / 场景整理 agent / 巩固周期(去重·抽象·画像重写) | 人工维护 |
 | 消费者 | 注入(§4 注入面)+ `read_scene` 按需 + agent 自管工具 | 目录 top-3 常驻摘要 + `load_skill`/`search_skill`/`replay_skill` 按需 |
 
 硬约束:**索引内容、存储位置、消费路径三不混**——skill 文件不含纯事实陈述、不进记忆注入块;memory 条目不进技能回放器。
@@ -197,40 +197,23 @@ agent(大脑)──通过──→ memory_remember/recall/update/forget 工具 �
 
 ## 7. skill 轴
 
-### 7.1 身份与晋升
+> **2026-10-30 定位调整**：skill 按**一般模块**处理——只保留人工创建链路（手写
+> SKILL.md），自动蒸馏 / 宏缓存 / 晋升 / 淘汰机器已弃用（`skill.auto_distill` 恒关，
+> 相关代码保留但不再作为能力叙事）。系统重心在记忆轴（L0→L3）。
+> 弃用理由：自动晋级与记忆**共用同一套 LLM 提炼**，产物无论贴 skill 还是 memory
+> 标签，消费端最终都是 prompt 注入；该需求现由记忆轴承载（L1 检索注入 + L2
+> 场景块 + 角色卡），双标签冗余（实测：自动晋级收益有限；唯一非 prompt 的宏回放
+> 同时引入执行风险耦合）。**渊源**：晋升机制最初借鉴 Hermes 的 Background
+> Curator，借鉴时点早于记忆层成为成熟品类。将来若记忆面出现明确缺口，优先扩
+> 记忆而非复活 skill 自动线。
 
-- `entry_id = sha1(归一动作序列)[:16]`;归一白名单:`text/content/query/input/command/url`
-  → `<text>`,`path` → `<path>`,坐标去值,`resource_id/view_id/包名/keycode` 保留,
-  其余字符串值 → `<text>`(易变值不外显)。
-- 晋升:身份优先合并(entry_id → name → objective_pattern 全等兜底);`success_count`
-  **累计**(失败只累加 failure_count),满 3 → active;升全局仅人工 `promote_to_global`。
-
-### 7.2 两种形态(正交)
-
-| | 知识型技能 | 宏缓存(过程性) |
-|---|---|---|
-| 产出 | LLM 提炼:routine(≤12 字动宾短语)/ description / playbook(引导型文字) | `substeps` = 轨迹原始 args 结构化提取 |
-| 身份 | 无 entry_id(手写)或归一哈希 | 归一哈希(缓存键语义:同序列=同宏) |
-| 消费 | 注入目录 + `load_skill` 文字引导 | `replay_skill` 回放执行器;**不进注入块** |
-
-硬禁令:知识型技能不得从执行轨迹机械转录;宏缓存不进注入块。
-
-### 7.3 发现与消费
-
-- **常驻目录**:技能目录 top-3(LLM 选档,无模型按效用序),仅摘要,正文不进常驻块;
-  以固定模板 user 消息在 run 开始注入一次。
-- **按需**:`load_skill`(playbook 正文引导,无正文回退脱敏动作序列)/
-  `search_skill` 检索 / `replay_skill` 白名单硬重放(每步照常过 S2 审批)。
-- **缓存淘汰**:`evict_stale`——candidate TTL 14d / active 闲置 30d 且低效用 →
-  移入 `_archive/` 降级不删;手写技能永不淘汰。
-- **自动宏提取**:`skill.auto_distill` 默认关(降级链:无 brain / 任务未成功 /
-  执行 <2 步 / 标签 LLM 失败 / 防幻觉校验不过,任一命中即不产出)。
-
-### 7.4 有效性验证纪律
-
-- 主指标:**回放命中后任务步数节省**(execution-verified——回放真省步才算命中,
-  「检索到/注入」不算);对照 A=无 skill / B=skill 回放,同任务集交错执行;
-  负结果纪律:连续 2 个任务集 B 不优于 A 即停手。
+- **形态**：手写 SKILL.md（Hermes 风，frontmatter + 正文）；全局
+  `~/.omniagent/skills/` 跨 project 共享，task 私有 `tasks/<task_id>/skills/`；
+  recall 合并两层、task 优先。
+- **消费**：run 开始注入技能目录摘要（仅摘要，正文不进常驻块）；
+  `load_skill` 按需拉正文；`search_skill` 检索。
+- **不做**：自动宏提取、宏缓存晋升 / 淘汰、skill 有效性 A/B 叙事——skill 当一般
+  模块，不作能力宣称（不论有效与否）。
 
 ## 8. 配置总表
 
