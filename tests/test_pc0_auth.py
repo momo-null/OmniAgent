@@ -43,7 +43,7 @@ class TestAuthMiddleware:
         assert r.status_code == 401
 
     def test_health_exempt(self, client, token_on):
-        """手机端探活口：/health 不要求 token。"""
+        """外部客户端探活口：/health 不要求 token。"""
         r = client.get("/health")
         assert r.status_code != 401
 

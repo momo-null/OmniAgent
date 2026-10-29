@@ -15,7 +15,7 @@ const http = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-// ── 鉴权（PC-0）：局域网/手机访问时后端要求 Bearer token ────────────
+// ── 鉴权（PC-0）：局域网/远程访问时后端要求 Bearer token ────────────
 // 来源：页面 URL ?token=<server.auth_token>（首次粘贴带 token 的地址即记住）。
 // 回环访问后端豁免，本机制只在非回环场景生效。
 const _urlToken = new URLSearchParams(window.location.search).get("token");
@@ -238,7 +238,7 @@ export const cronApi = {
 
 // ── 语音（/api/audio/*；voice 插件未启用时后端 404） ──────────────
 export const audioApi = {
-  // 录音 WAV → 文本（微信对讲式按住说话）
+  // 录音 WAV → 文本（对讲式按住说话）
   transcribe: async (blob: Blob): Promise<string> => {
     const res = await fetch("/api/audio/transcribe", {
       method: "POST",

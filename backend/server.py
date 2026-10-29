@@ -139,7 +139,7 @@ async def value_error_handler(request: Request, exc: ValueError):
 
 
 # ── 请求级鉴权（PC-0）：非回环来源访问 API 必须 Bearer server.auth_token ──
-# 豁免：/health（手机端探活）与非 API 路径（静态 UI 要能加载，API 另行拦截）。
+# 豁免：/health（外部客户端探活）与非 API 路径（静态 UI 要能加载，API 另行拦截）。
 # token 为空时放行——非回环绑定被启动安全门强制要求 token，正常运行时该分支只在
 # 回环绑定（本机）下可达；uvicorn CLI 覆盖 --host 的旁路场景以启动门为准。
 @app.middleware("http")
