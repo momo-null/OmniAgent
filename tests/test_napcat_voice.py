@@ -191,25 +191,6 @@ def test_local_decodable_path_skips_roundtrip(adapter, monkeypatch, tmp_path):
     assert data == b"ID3-local"
 
 
-# === TTS 语言码：espeak 中文是 cmn，误用英文码会念成 "Chinese letter" ===
-
-def test_espeak_lang_picks_cmn_for_cjk(monkeypatch):
-    from plugins.voice import plugin as vp
-
-    monkeypatch.setattr(vp, "_cfg", lambda: {})
-    assert vp._espeak_lang("明天天气怎么样") == "cmn"
-    assert vp._espeak_lang("hello world") == "en-us"
-
-
-def test_espeak_lang_config_override(monkeypatch):
-    from plugins.voice import plugin as vp
-
-    monkeypatch.setattr(vp, "_cfg", lambda: {"tts_language": "en-us"})
-    assert vp._espeak_lang("明天天气") == "en-us"
-    monkeypatch.setattr(vp, "_cfg", lambda: {"tts_language": "auto"})
-    assert vp._espeak_lang("明天天气") == "cmn"
-
-
 # === 出站：TTS 语音回发 ===
 
 def test_send_voice_uses_record_segment(adapter, fake_voice_caps, monkeypatch):

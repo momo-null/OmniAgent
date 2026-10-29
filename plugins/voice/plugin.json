@@ -1,8 +1,8 @@
 {
   "name": "voice",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "title": "语音（本地 STT/TTS）",
-  "description": "本地语音转文字与文字转语音（SenseVoice + Kokoro，ONNXRuntime，模型约 1GB 首次调用才加载）。启用后 /api/audio/transcribe 与 /api/audio/tts 可用，Web 会话输入框出现按住说话按钮。",
+  "description": "本地语音转文字（SenseVoice）与文字转语音（CosyVoice2 零样本音色克隆，懒加载，模型约 4GB 另放 ~/.omniagent/models）。启用后 /api/audio/transcribe 与 /api/audio/tts 可用，Web 会话输入框出现按住说话按钮；QQ 通道获得 msg_send_voice 工具。",
   "enabled": false,
   "permissions": []
 }
