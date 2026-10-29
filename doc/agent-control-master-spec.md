@@ -1,5 +1,16 @@
 # OmniAgent X3 控制层架构总规（Master Spec）
 
+> 🔄 **同步更新（2026-10-30）**：本轮同步的事实——① **env 概念整体退场（v4）**：host /
+> emulator / ocr 成为纯插件（`plugins/host`、`plugins/emulator`、`plugins/ocr`），内核零
+> 环境概念，空壳 `devices/` 删除；② **记忆 L1 收敛为单库** `~/.omniagent/memory/brain.db`
+> （TAM 双库退役，FTS5 simple 分词，权威见 `doc/plans/memory-architecture.md`）；③ **语音
+> M3 落地**：对讲式 + 免提（Web 按住说话）、TTS = CosyVoice2 零样本克隆
+> （`plugins/voice` + `plugins/voice/cosyvoice2_rt/`，Kokoro 已移除）、QQ 通道语音与群
+> 上下文；④ **通道网关**（QQ / 飞书 / 企业微信连接器 + 外部来源加固）与**远程客户端契约**
+> （`doc/plans/remote-client-contract-2026-10-30.md`，内网鉴权 PC-0，`memory/sync` 待实现）；
+> ⑤ 实验资产清理：EasyOCR / yolo / qwen 底模与 minesweeper 合并产物已删除，OCR = RapidOCR。
+> 历史段落保留原始表述作为决策留档。
+>
 > 🔄 **同步更新（2026-09-30）**：Layer 0 派发底座已实现（见
 > `doc/plans/implemented/team-mode-layer0-design.md`）——执行单元注册表 + `dispatch`
 > 计划项 `agent` 字段 + 按槽路由 + 门控解绑固定双层。本文相关章节已按现状同步；
@@ -19,23 +30,28 @@
 | 多槽派发底座（Layer 0） | ✅ 已落地 | 执行单元注册表（`runtime.dispatch.agents`）+ dispatch `agent` 字段透传 + 按槽路由 + 门控解绑（`team-mode-layer0-design.md`）；默认 worker 槽 = 主模型兼任 |
 | llama-server 封装 | ✅ 跑通 | M0 修复：llama.cpp 升级 b10107 + Qwen3.5 thinking 关 + ctx 8192 |
 | ModelHub 联通 | ✅ 联通 | M0 完成，warmup≈7.6s |
-| 旧 LoRA 训练链 | ✅ 曾端到端跑通 | minesweeper 合并产物为证；GGUF 当年生成后被删（占空间） |
+| 旧 LoRA 训练链 | ✅ 曾端到端跑通 | minesweeper 合并产物曾为证（产物已于 2026-10-30 随实验资产清理删除，跑通事实留档）；GGUF 当年生成后被删（占空间） |
 | EmulatorBackend(u2/ADB) | ✅ 实现 | M1 落地，GUI 设备真机闭环验证通过（首个端到端场景） |
 | Trajectory / Telemetry / Verify / State | ✅ 实现 | M4a 地基全部完成（79 passed），commit fc145fe + 8c6e48e |
 | world-model 持久化 + checkpoint | ✅ 实现 | M4b.1 落地（commit dbe71e8）：save/load + checkpoint JSON + merge_progress |
-| skill 库（手写维护 + 可选宏缓存，默认关） | ✅ 机制跑通 | M4b.2 链路在：SkillLibrary + `maybe_distill_skill`；早期真机试点零步数收益，有效性未验证，不作为护城河宣称，见 `doc/plans/memory-architecture.md` |
+| skill 库 | ✅ 常规模块 | 人工手写 SKILL.md 链路（全局 + task 私有；目录摘要注入 + `load_skill`）；自动蒸馏 / 宏缓存线已弃用恒关；见 `doc/plans/memory-architecture.md` §7 |
 | M6 子任务状态机（SubtaskStore） | ✅ 已落地 | `task_store.py`：RLock + 原子写 + 白名单 update；`claim`/`claim_next` 原子 CAS（pending→running），落 `tasks/<task_id>/subtasks.json`；WorldModel 管世界认知，TaskStore 管「谁在做什么、做到哪」 |
 | M7 去分层多 agent 编排 | ✅ 已落地 | `graph.py`：通用 agent 注册表 + LangGraph `Send` 并发扇出；主 agent 调 `dispatch` 元工具产出派发计划，框架负责扇出/join；`max_rounds` 防无限派发；删 `orchestration/policy.py`（升级改子 agent 自报 + 主 agent 决断）；`test_m2_orchestration.py` 重写为新图测试 |
 | 权重级 finetune | 🧊 未启用 | 仓库内无训练链代码；知识级两层（world-model / 策略反思）已实现，权重级不启用（说明见 §6.3） |
 | 画像/角色卡/记忆三位一体（P0） | ✅ 已落地+真机验证 | 单角色伙伴：`user_profile.md`（画像，候选→晋升→弱注入）+ `character.md`（角色卡，随 system 注入）+ 前端 Settings→伙伴 Tab；纠偏→候选→晋升→注入闭环真实 apikey 验证通过 |
 | C₃ 人工抽检校准 | ✅ 已落地+验证 | 新增 `PUT /signals/calibration`（收样本→`calibrate_c1c2`→写 `c1_calibration_error`）；该字段由 null 变为可写可读，summary 透传 `calibration_samples`，≤10% 采信 |
+| env 概念退场（v4） | ✅ 已落地 | host / emulator / ocr 纯插件化（`plugins/host`、`plugins/emulator`、`plugins/ocr`），内核零环境概念；空壳 `devices/` 删除 |
+| 记忆 L1 单库化（brain.db） | ✅ 已落地 | TAM 双库退役；`~/.omniagent/memory/brain.db`（SQLite + FTS5 simple 分词）+ L2 场景块 + L3 画像 + 巩固周期；权威见 `doc/plans/memory-architecture.md` |
+| 语音 M3（对讲式 + 免提） | ✅ 已落地+听感验收 | Web 按住说话 / 免提 VAD / 回复播报 / 声学打断；TTS = CosyVoice2 零样本克隆（`plugins/voice` + `cosyvoice2_rt/`，Kokoro 已移除）；QQ 通道语音与群聊上下文；见 `doc/plans/voice-m3-2026-10-29.md` |
+| 通道网关 | ✅ 已落地 | QQ / 飞书 / 企业微信连接器（`gateway/channels/`）+ 群聊上下文注入 + 外部来源加固（发送工具锁死来源会话） |
+| 远程客户端契约 | ✅ 契约冻结 | 内网鉴权（PC-0，非回环 Bearer）+ 5 端点通用契约（`memory/sync` 待实现）；见 `doc/plans/remote-client-contract-2026-10-30.md` |
 
 ---
 
 ## 1. 核心架构立场（原则层）
 
 - **主 agent + 派发底座**：主 agent 规划并执行；互不依赖的并行子任务经 `dispatch` 扇出给按槽位配置的执行单元（模型来自多槽目录，可为本地快模型 + VLM）。
-- **控制流归大脑**：程序退化为工具运行时；OCR / 视觉 = 感知工具，click/type/template = 执行工具，由模型自主决策调用。感知工具三角：`observe`(u2层级树) / `ocr_screenshot`(EasyOCR GPU) / `vision_describe`(4B-vl)，三件并列工具、大脑自主选择，无程序化优先级。
+- **控制流归大脑**：程序退化为工具运行时；OCR / 视觉 = 感知工具，click/type/template = 执行工具，由模型自主决策调用。感知工具三角：`observe`(u2层级树) / `ocr_screenshot`(RapidOCR，ONNXRuntime) / `vision_describe`(本地 VLM)，三件并列工具、大脑自主选择，无程序化优先级。
 - **知识自学、无插件**：world-model + skill 库 = 知识库，agent 运行时自学；领域专属知识不预置。
 - **功能统一（非前端合并）**：模型服务（llama-server）现在给子 agent 槽位**供推理**——旧范式里「模型服务」与「agent 推理」是两条无关线，新范式后端统一。
 - **诚实边界**：自学习只长「知识/策略」，不长「硬件/工具精度」（权重级训练除外，见 §6.3）。
@@ -58,6 +74,11 @@
 ---
 
 ## 3. 执行后端抽象（ExecutionBackend）
+
+> 🔄 **2026-10-30 修订（env 退场 v4）**：`HostBackend` / `EmulatorBackend` 不再是内核层
+> 概念，已平移为**纯插件** `plugins/host` 与 `plugins/emulator`（capability 形态，与
+> ocr / vision 等同层）；空壳 `devices/` 目录删除。以下保留原始设计记录；当前生效
+> 形态以 `plugins/` 为准。
 
 - **`HostBackend`**：pyautogui + mss（本机），保留。
 - **`EmulatorBackend`**：**Android 模拟器 + uiautomator2(ADB)**。API 映射（/Go 通用设备控制范式 → Python `u2`）：
@@ -106,19 +127,15 @@
 
 ## 6. skill 库与记忆层（M4 / M5）
 
-> **2026-10-04 状态修订**：A9（2026-10-03）已删除录像式机械转录整链（`from_run_record` /
-> `review_candidate_skills` / `_derive_skill_name`——下文历史描述保留供追溯）。skill 轴以
-> **可重放宏缓存**形态保留但默认关闭：`substeps_from_trajectory`（轨迹原始 args 双轨；身份 =
-> 归一哈希）+ LLM 短标签（routine/description，`validate_skill_summary` 防幻觉校验）+ 缓存淘汰
-> （candidate TTL 14d / active 闲置 30d 且低效用 → `_archive/`，仿 memory A4 降级不删）+ 消费工具
-> `search_skill` / `replay_skill`（白名单硬重放，S0/S2 审批照常生效）。开关 `skill.auto_distill`
-> 默认关；早期真机试点显示注入 skill 序列**零步数收益**，有效性 A/B 验证未做，因此 skill
-> 自动蒸馏**不作为系统能力对外宣称**。详见 `doc/plans/memory-architecture.md`（知识层现行架构）。
+> **2026-10-30 定位调整**：skill 按**一般模块**处理——只保留人工创建链路（手写
+> SKILL.md），自动蒸馏 / 宏缓存 / 晋升 / 淘汰机器已弃用（`skill.auto_distill` 恒关，
+> 代码保留）；skill 不再作为能力叙事（不论有效与否）。系统重心在记忆轴（§6.4）。
+> 详见 `doc/plans/memory-architecture.md` §7（现行）。更早的历史修订（A9 等）留档如下。
 
 ### 6.1 skill 库（手写维护 + 可选宏缓存，默认关）
 - **格式**：Hermes 风格 `SKILL.md`（Markdown + YAML frontmatter，对齐 agentskills.io 开放标准；与 WorkBuddy 自身 SKILL.md 同构可复用）。
 - **手写维护**：通用 skill 存 `~/.omniagent/skills/<skill>.md`（跨 project 共享）；task 私有 skill 存 `~/.omniagent/tasks/<task_id>/skills/<skill>.md`。recall 合并两层、task 优先。人工维护的通用 skill（带 `scope: global` 标签）落全局；原 `data/skills/<app>/` 与 `app` 分区已随 Plan C 废弃。
-- **可选宏缓存**：`skill.auto_distill` 默认关，任务收尾时可调用 `skill_library.maybe_distill_skill` 从轨迹提取可重放宏，但当前真机零步数收益，未作为系统能力对外宣称。
+- **可选宏缓存**：已弃用——`skill.auto_distill` 恒关（代码保留）；仅人工创建链路生效。
 
 ### 6.3 反思与权重级升级
 1. **world-model 级**：纠正 / 精炼界面理解。
@@ -135,6 +152,11 @@
 > L0 会话 → L1 atoms（SQLite+FTS5 双库 / LLM 提炼 / duplicate-merge-independent
 > 三态判重）→ L2 场景块（agent 循环整理）→ L3 用户画像；机制与注入面见
 > `doc/plans/memory-architecture.md`（唯一事实源）。
+>
+> 🔄 **2026-10-28 起生效**：L1 已收敛为**单库** `~/.omniagent/memory/brain.db`（TAM 双库
+> 退役；FTS5 simple 分词扩展；检索 `search_brain` 融合排序 top_k=8）；L2 场景块多文件
+> 主题化（`scene_executor.py`）+ 巩固周期上线。机制细节一律以
+> `doc/plans/memory-architecture.md` 当前版本为准。
 
 **红线（继承不变）**：内核零场景硬编码；任何语义判断不得写成规则+参数（无模型时降级为
 「不判断」，绝不猜）。
@@ -153,6 +175,11 @@
 
 ## 7. 旧训练链（程序化 LoRA）处置（★已更正）
 
+> 🔄 **2026-10-30 修订**：实验资产清理已完成——`models/qwen_merged/minesweeper`（3.7GB
+> 合并产物）与 `models/qwen`（底模）、`models/yolo`、`models/easyocr` 均已删除，`models/`
+> 实验区目录清空；`requirements-train.txt` 收敛为「训练可选块 + torch」（torch 自
+> 2026-10-30 起是语音插件的运行时依赖）。轨迹采集器（只采不训）保留。
+
 - **全链曾端到端跑通**：`models/qwen_merged/minesweeper/model.safetensors`(3.7GB, Mar16) 是真实合并产物；用户确认 GGUF 当年生成后被删（占空间）。非「从未跑通/末步未完成」。
 - **删除 / 弃**：`Training` 前端页（架构升级不适用）、`requirements-train.txt`。
 - **归档不删**：`minesweeper` 3.7GB 合并产物（真实训练成果 + 潜在 Phase-2 离线 SFT/蒸馏基座）。
@@ -170,6 +197,10 @@
 - **统一 `/chat` 单入口（2026-08-02）**：删除 `/run` 与 `runtimeApi.run`，所有交互统一走 `POST /api/runtime/chat`。一个会话 = 一个 task；首条消息后端自动建 task（落盘）并回填 `task_id`。`/chat` 内部跑双 agent 协作：先 probe planner——无 tool_calls 即纯闲聊（只走主模型，不碰 executor）；有 tool_calls 则转入 `run_task_two_layer`（planner 规划 + executor 执行）。`max_steps` 兜底 + `/stop` 中断。
 - **后端对接端点**：SSE 进展流 `GET /api/runtime/stream`、模型状态 `modelApi`/LLM `llmApi`、任务 `taskApi`（`/api/runtime/tasks`）、项目 `projectApi`（`/api/runtime/projects/meta`）、技能 `skillApi`、设置 `settingsApi`（`GET/PUT /api/settings`，含三通道配置）。
 - **三通道解耦（2026-08-02）**：Settings → 通道 Tab，planner(brain) / executor / vision 三通道各自独立开关 + base_url/model/api_key 配置，替换原「运行模式三态」下拉。`mode`（dual/online_only/local_only）退化为快捷预设（选 online_only 自动关 executor+vision）。内核 `tool_loop.py` 真实消费（详见 §14.3 与 `agent-control-arch-2026-07-26.html` §12.4）。
+- **语音（M3，2026-10-29/30 落地）**：Web 会话页按住说话（对讲式）+ 免提（常开 VAD 自动判句 + 声学打断 + 回复自动朗读）+ 回复旁 🔊 播报；TTS = CosyVoice2 零样本克隆（音色 = `voices/<名字>.wav` 参考音频），STT = SenseVoice；`plugins/voice` 懒加载插件 + `/api/audio/transcribe|tts` 薄壳端点。见 `doc/plans/voice-m3-2026-10-29.md`。
+- **通道网关（2026-10-28 起落地）**：`gateway/channels/`（QQ=NapCat / 飞书 / 企业微信连接器）+ 群聊上下文注入 + 外部来源加固（外部可达通道跑任务时发送工具锁死来源会话、MCP 不连接）+ QQ 语音消息（入站转写保留媒介标记、出站 `msg_send_voice` 工具）。
+- **远程客户端契约（2026-10-30）**：任意外部 HTTP 客户端经内网/远程使用运行时——非回环 Bearer 鉴权（PC-0）+ 5 端点冻结契约（`memory/sync` 待实现）+ SSE `sub` 旁路多播。见 `doc/plans/remote-client-contract-2026-10-30.md`。
+- **桌面壳（v1.0.1+）**：Electron 同壳 spawn 后端与网关、Web UI 过期自动重建、右侧 artifacts dock（files/browser/git/terminal/debug 分页）。
 
 ---
 
@@ -185,7 +216,7 @@
 | **M3b** | §2.1 两层执行编排（在线 plan + 本地 4B 执行 + escalation 升级） | M3 | ✅ 完成 |
 | **M4a** | Trajectory 轨迹落盘 + Telemetry 四指标 + 显式 Verification/task_done 门控 + Agent 状态机 | M3b | ✅ 完成（79 passed） |
 | **M4b.1** | §5/§12.4 world-model 持久化 + 无状态大脑 + 子目标 checkpoint | M4a | ✅ 完成（commit dbe71e8） |
-| **M4b.2** | §6.1 skill 库（手写维护 + 可选宏缓存，默认关） | M4b.1 | ✅ 机制跑通（commit a5fdaa0；真机零步数收益，有效性未验证） |
+| **M4b.2** | §6.1 skill 库（手写维护 + 可选宏缓存，默认关） | M4b.1 | ✅ 完成（commit a5fdaa0；自动蒸馏线 2026-10-30 起弃用恒关，仅人工链路） |
 | **M4b.3** | §6.4 记忆轴 TAM 移植重建（取代原触发式 prune/refine/review/flag_low_quality 静默维护，2026-10-05 退役） | M4b.2 | ✅ 已落地（由 TAM 取代） |
 | **M5** | §6.3 反思与权重级 finetune | — | 🧊 未启用（知识级两层已完成，见 §6.3） |
 | **M6** | 子任务领取/状态机（SubtaskStore），共享黑板 = WorldModel 改造铺垫 | M5 | ✅ 完成（`task_store.py`） |
@@ -201,7 +232,7 @@
 | # | 问题 | 决策 |
 |---|------|------|
 | 1 | 模拟器选型 | **Android + uiautomator2(ADB)** |
-| 2 | 本地模型部署形态 | **llama-server**（OpenAI 兼容 :8085，未验证跑通） |
+| 2 | 本地模型部署形态 | **llama-server**（OpenAI 兼容 :8085；M0 已验证跑通） |
 | 3 | world-model / skill 持久化格式 | **Hermes 风格 Markdown + YAML frontmatter**（agentskills.io） |
 | 4 | 权重级升级触发 | **A：阈值 + 弹提示确认**（硬件受限、训练久） |
 | 5 | 轨迹留存 | **三级：raw 30天 / failures 14天 / GGUF 留 2 版**（采集常开） |
@@ -245,7 +276,7 @@
 
 **持久约束块（压缩之外永远注入）**：大脑每次调用都重注入 `plan + constraints` 块（类 Hermes Layer-1 / CLAUDE.md），早期决策永不滑出窗口；压缩只更新摘要，不丢约束块。
 
-> ⚠️ **关键约束**：brain 为**可换模型**（架构模型无关，`BrainClient` 零改动解析标准 `tool_calls`）。当前 `config.brain` 指向 OpenAI 兼容供应商（`base_url=api.example.com/v1`，`model=demo-model`）做模型通用性验证。无论换哪款，**大概率不是 1M 窗口**（前沿 1M 是 GPT-5.4 / Claude Sonnet 5 / Gemini），token 占比必须相对**当前大脑真实窗口**算。落地 `compress_threshold` / `hard_ceiling` 前须先确认其上下文上限（128K / 200K？），否则阈值定错。
+> ⚠️ **关键约束**：brain 为**可换模型**（架构模型无关，`BrainClient` 零改动解析标准 `tool_calls`）。当前 `config.brain` 指向 OpenAI 兼容供应商（`base_url` / `model` 见 config 示例）做模型通用性验证。无论换哪款，**不要假设 1M 窗口**——token 占比必须相对**当前大脑真实窗口**算；落地 `compress_threshold` / `hard_ceiling` 前先确认其上下文上限，否则阈值定错。
 > 当前 config 落点：`brain.long_task: {enabled:true, max_turns:16, compress:true}`（已落地，作用于**单大脑 run_task 模式**）；`compress_threshold` / `hard_ceiling` 待补（token 占比主触发）。
 
 ### 12.3 子 agent 执行单元层（worker hard-keep-3）
@@ -289,7 +320,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 | `brain.long_task.compress_threshold` | 0.65 | ⏳ 待补（token 占比主触发；落地前需确认 u2 真实窗口） |
 | `brain.long_task.hard_ceiling` | 0.85 | ⏳ 待补（硬上限兜底） |
 | 持�� world-model 落盘 + 子目标 checkpoint | — | ✅ 已落地（M4b.1, dbe71e8：save/load current.md + checkpoint JSON + merge_progress 防 JPEG） |
-| skill 库（手写维护 + 可选宏缓存，默认关） | — | ✅ 机制跑通（M4b.2, a5fdaa0：SkillLibrary + `maybe_distill_skill`；真机零步数收益，有效性未验证） |
+| skill 库（人工手写链路；自动蒸馏线弃用恒关） | — | ✅ 完成（M4b.2, a5fdaa0） |
 
 ### 12.7 红线
 
@@ -301,7 +332,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 
 ## 13. 参考
 
-- **Hermes Agent**（NousResearch, MIT）：自写 SKILL.md + Background Curator + 三层记忆 + ShareGPT 轨迹导出。→ 印证 world-model+skill 自学范式，skill 格式对齐 agentskills.io。
+- **Hermes Agent**（NousResearch, MIT）：自写 SKILL.md + Background Curator + 三层记忆 + ShareGPT 轨迹导出。→ 最初 skill 晋升机制借鉴其 Curator 思路；记忆轴（brain.db 单库）上线后该思路由记忆轴继承，skill 自动线退役；skill 格式对齐 agentskills.io。
 - **UI-TARS / UI-TARS-2**（ByteDance, arXiv 2501.12326 / 2509.02544）：原生 GUI 端到端；System-2 推理；**Iterative Training w/ Reflective Online Traces**（从在线/错误轨迹学、少人工）。→ 印证 §6.3 权重级闭环，端到端训练天花板高于 prompt 包装。
 - **MGA: Memory-Driven GUI Agent**（arXiv 2510.24168）：Observer(qwen-vl)→Memory→Planner→Grounding。→ 近乎本架构论文版（本地快 VLM 感知 + 远程强模型规划）。
 - **OSWorld**（os-world.github.io）：真实电脑环境 369 任务，人类 72% / 最强模型 12–54%；75–94% wall time 花在规划 LLM 调用 → 印证「大脑低频、本地快执行」延迟设计。
@@ -316,7 +347,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 
 | 层 | 路径 | 内容 |
 |----|------|------|
-| 用户全局 | `~/.omniagent/` | `config.yaml`（去明文 key + `local_model.auto_start`）、`character.md`（角色卡）、`skills/`（通用，跨 project）、`memory/`（每会话全量加载；含 `user_profile.md` 画像 / `profile_candidates.md` 候选区 / `signals_aggregate.json` 信号聚合）、`projects/<path-slug>/`（会话历史 jsonl）、`tasks/<task_id>/`（任务资产）、`rules/` |
+| 用户全局 | `~/.omniagent/` | `config.yaml`（去明文 key + `local_model.auto_start`）、`character.md`（角色卡）、`skills/`（通用，跨 project）、`memory/`（L1 单库 `brain.db`（FTS5 simple 分词）+ `user_profile.md` 画像 / `profile_candidates.md` 候选区）、`projects/<path-slug>/`（会话历史 jsonl + L2 场景块）、`tasks/<task_id>/`（任务资产）、`rules/` |
 | 任务资产 | `~/.omniagent/tasks/<task_id>/` | `task.json`（元信息）、`trajectory.jsonl`、`world_model.md`、`collected.json`、`skills/`（任务私有，可选） |
 
 - **project** = 工作目录的逻辑分组，id = 路径 slug（如 `d-AI-OmniAgent`），仅承载会话历史，**不装资产**。
@@ -336,11 +367,11 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 - **三通道解耦（2026-08-02 取代 mode 三态；2026-09-30 Layer 0 派发底座落地）**：planner(brain) / executor(runtime.executor) / vision(runtime.vision) 三个通道**各自独立 enable + base_url/model/api_key**，由 Web 设置面板「通道」Tab 经 `PUT /api/settings`（`router_settings.py`，白名单含 `runtime`/`brain`/`executor`/`vision`/`local_model`）写入 `~/.omniagent/config.yaml`。**现状（Layer 0）**：执行单元来自注册表（`runtime.dispatch.agents` 显式声明参与派发的槽，首个为默认槽），槽 → 模型映射在 `~/.omniagent/models.json` 的 `defaults.<slot>`；`runtime.executor` 是 worker 槽的缺省注入源；未配置任何槽时主模型兼任默认槽（brain 自派发，合法语义）。`/chat` 读 `config.load_config()` 合并后的 settings，即时生效（`PUT` 后 `reload_config()` 失效缓存）。
 - `runtime.mode`（`dual`/`online_only`/`local_only`）**保留为快捷预设**：选中 online_only 自动把 executor/vision 置 `enabled=false`，dual 置 true。行为由三通道开关决定，`mode` 仅作批量预设。
 - `local_model.auto_start`：是否自动拉起本地 llama-server。
-- `runtime.trajectory.dir` / `runtime.world_model.dir`：留空即走默认项目级 `tasks/<task_id>/` 路径（由 `agents/local/runtime_paths.py` 接管）。
+- `runtime.trajectory.dir` / `runtime.world_model.dir`：留空即走默认项目级 `tasks/<task_id>/` 路径（由 `omni_core/local/runtime_paths.py` 接管）。
 
 ### 14.4 路径常量（Plan C 生效）
 
-内核路径统一由 `agents/local/runtime_paths.py` 提供：`global_skills()` / `projects_root()` / `project_dir(pid)` / `tasks_root()` / `task_dir(tid)` / `task_trajectory(tid)` / `task_world_model(tid)` / `task_collected(tid)` / `task_json(tid)` / `slugify_path()`。所有 `app` / `workspace` 分区逻辑已删除，红线自检：`agents/` 全目录搜不到 `app` 作为分区键。
+内核路径统一由 `omni_core/local/runtime_paths.py` 提供：`global_skills()` / `projects_root()` / `project_dir(pid)` / `tasks_root()` / `task_dir(tid)` / `task_trajectory(tid)` / `task_world_model(tid)` / `task_collected(tid)` / `task_json(tid)` / `slugify_path()`。所有 `app` / `workspace` 分区逻辑已删除，红线自检：`omni_core/` 全目录搜不到 `app` 作为分区键。
 
 ---
 
@@ -350,11 +381,13 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 
 ### 15.1 下一步
 
-1. 记忆轴 TAM 移植重建（取代已退役的 M4b.3 触发式静默维护：`prune_trajectories` + `refine_world_model` + `review_candidate_skills` + `flag_low_quality` 等价能力在 §6.4 重建）。
-2. **X3 设计符合性优化（P0–P3）**（已落地）：`/stop` 置 `aborted`、agent 回包持久化、前端标题以服务端 `objective` 为主源、非 loopback 绑定无 `auth_token` 拒绝启动、补 API 集成测试。
-3. 可选：跑真在线分层闭环验证，看 skill 库 + world-model 持久化在真机的产出。
-4. 后续独立项（非阻塞）：管理 / 运行接口的请求级 token 鉴权、模型路径 allow-list。
-5. **画像/角色卡/记忆三位一体 P0 + C₃ 校准**：已落地并真机验证（2026-09-26，见 §0 / §6.5）；后续真实抽检需求出现时用 `PUT /signals/calibration` 填 `c1_calibration_error`。
+1. **远程客户端 `memory/sync` 端点**（契约已冻结，唯一内核待办）：外部客户端离线会话回放，(session_id, seq) 幂等去重，喂入 capture 管线。
+2. **语音真机验收**：Web 按住说话 / 免提 / QQ 语音消息在真实环境跑通（引擎听感已验收）；CosyVoice2 流式化（当前整段合成 RTF≈1.6-2.0）为后续优化项。
+3. **通道插件仓库化**（立项不排期）：QQ / 飞书 / 企业微信连接器拆独立插件仓，主仓只留通用通道接口——具体见 `doc/plans/implemented/message-gateway-2026-10-28.md` 与 Backlog。
+4. 记忆轴：遗忘 dry-run / L3 画像 / hit@8 标注 / 零命中可观测（开着口，见 `doc/plans/memory-architecture.md`）。
+5. 可选：跑真在线分层闭环验证，看 skill 库 + world-model 持久化在真机的产出。
+6. 后续独立项（非阻塞）：模型路径 allow-list。
+7. **画像/角色卡/记忆三位一体 P0 + C₃ 校准**：已落地并真机验证（2026-09-26，见 §0 / §6.5）；后续真实抽检需求出现时用 `PUT /signals/calibration` 填 `c1_calibration_error`。
 
 ### 15.2 风险补充
 

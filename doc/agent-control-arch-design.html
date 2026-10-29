@@ -131,7 +131,7 @@
     <span><i class="sw" style="background:var(--brain)"></i>L3 框架层</span>
     <span><i class="sw" style="background:var(--meta)"></i>L2 框架外挂件</span>
     <span><i class="sw" style="background:var(--mcp)"></i>L1 能力层 (MCP)</span>
-    <span><i class="sw" style="background:var(--exec)"></i>Environment</span>
+    <span><i class="sw" style="background:var(--exec)"></i>环境插件（plugins/host · plugins/emulator）</span>
     <span><i class="sw" style="background:var(--vision)"></i>Vision</span>
   </div>
 
@@ -167,8 +167,8 @@
 
       <!-- Environment -->
       <rect x="300" y="490" width="320" height="60" rx="10" fill="#f1f5f9" stroke="var(--env)" stroke-width="2"/>
-      <text x="460" y="516" font-size="14" font-weight="700" fill="#475569" text-anchor="middle">Environment</text>
-      <text x="460" y="536" font-size="12" fill="#64748b" text-anchor="middle">Android 模拟器（u2/ADB）· 宿主机 OS · 未来浏览器/FS</text>
+      <text x="460" y="516" font-size="14" font-weight="700" fill="#475569" text-anchor="middle">环境插件（env 退场 v4）</text>
+      <text x="460" y="536" font-size="12" fill="#64748b" text-anchor="middle">plugins/host（宿主机键鼠）· plugins/emulator（Android u2/ADB）</text>
 
       <!-- vertical main arrows -->
       <line x1="460" y1="140" x2="460" y2="168" stroke="#475569" stroke-width="2" marker-end="url(#ar)"/>
@@ -194,7 +194,7 @@
     <div class="cap">图 N1 · 总体分层（框架态）。L3 框架驱动循环、L2 框架外挂件通过 lifecycle 钩子挂载、L1 外层插件（自研 tool 与外部 MCP 平级）。主线纵向贯通；工具调用与后处理钩子为旁路。</div>
   </div>
 
-  <div class="fileref">模块锚点：<code>omni_core/</code>（L2：配置 + 钩子注册）· <code>omni_core/brain/llm.py</code>+<code>sdk_model.py</code>（model provider）· <code>omni_core/brain/sdk_loop.py</code>（Agent+Runner 驱动）· <code>omni_core/tools/</code>（L1 插件：device/vision/python/mcp_servers）· <code>devices/</code>（L1 设备驱动）· <code>omni_core/local/world_model.py</code>（WorldModel）</div>
+  <div class="fileref">模块锚点：<code>omni_core/</code>（L2：配置 + 钩子注册）· <code>omni_core/brain/llm.py</code>+<code>sdk_model.py</code>（model provider）· <code>omni_core/brain/sdk_loop.py</code>（Agent+Runner 驱动）· <code>omni_core/tools/</code>（L1 插件：memory/shell/scene/skill/mcp_servers）· <code>plugins/</code>（能力/环境插件：host/emulator/ocr/vision/voice/messaging/filesystem/web）· <code>omni_core/local/world_model.py</code>（WorldModel）</div>
 
   <div class="redline"><b>设计红线：</b>内核（L3+L2 挂载）零场景硬编码、零工具实现；场景差异只通过「tool 插件 / MCP server」与「能力元数据」表达。换模型 / 换环境 / 加能力 = 加一个 tool 插件或一条 MCP server 配置、或改 metadata，不改内核。红线由 <code>scripts/review_lint.py --strict</code> 自动扫描 <code>omni_core/**</code> 并在 CI 拦截。</div>
 </section>
@@ -258,7 +258,7 @@
 
       <!-- Environment -->
       <rect x="30" y="410" width="530" height="48" rx="10" fill="#f1f5f9" stroke="var(--env)" stroke-width="2"/>
-      <text x="295" y="439" font-size="13" font-weight="700" fill="#475569" text-anchor="middle">Environment：MuMu 模拟器 / 宿主机 OS / 未来浏览器 · 文件系统</text>
+      <text x="295" y="439" font-size="13" font-weight="700" fill="#475569" text-anchor="middle">环境插件：plugins/emulator（u2/ADB 模拟器）· plugins/host（宿主机键鼠）</text>
       <line x1="155" y1="380" x2="155" y2="408" stroke="var(--exec)" stroke-width="2" marker-end="url(#ar2)"/>
     </svg>
     <div class="cap">图 N2 · 内核 + 工具调用解耦。Brain 只说话（tool_call），Runner dispatch 到外层插件（自研 function_tool 或外部 MCP tool），插件落地领域逻辑。内核仅作配置 + 钩子注册中心，零派发代码（C1 自然清零）。</div>
@@ -272,7 +272,7 @@
     <tr><td>能力插件</td><td>自研外层 tool / 外部 MCP server</td><td>领域工具实现（设备 / 视觉 / 脚本 / 外部系统）</td><td>否（领域数据走配置/插件）</td></tr>
     <tr><td>L2 框架外挂件</td><td><code>omni_core/local/world_model.py</code> 等</td><td>WorldModel/Trajectory/verify_done，钩子挂载</td><td>否</td></tr>
     <tr><td>内核</td><td><code>omni_core/</code> 配置 + 钩子注册</td><td>能力分组配置 + 后处理钩子；不持 schema、不路由</td><td>否</td></tr>
-    <tr><td>设备驱动</td><td><code>devices/</code>（L1，内核外）</td><td>Host/Emulator 执行原语 + text_of/verify_done 抽象</td><td>—</td></tr>
+    <tr><td>环境插件</td><td><code>plugins/host</code> · <code>plugins/emulator</code>（L1，内核外）</td><td>Host/Emulator 执行原语 + get_state_text/verify 语义（env 退场 v4 后为纯插件）</td><td>—</td></tr>
   </table>
 </section>
 
@@ -348,7 +348,7 @@
   </div>
 
   <div class="note"><b>为何 Verify 是钩子而非内核步骤（C4）：</b>经典 Computer-use 翻车 = 「点了 → 页面变了 → 以为完成」。框架态保留两层校验：① <b>显式 verify 钩子</b>：<code>spec.expected</code> / <code>done_when</code> 命中 → 直接 DONE（不调大模型）；② <b>task_done 门控</b>：大模型调 <code>task_done</code> 时强制 <code>verify_done</code>，通过才接受。verify 逻辑在 L2，内核循环不感知其实现。</div>
-  <div class="note"><b>感知工具三角（延续）：</b>observe（u2 层级树 text，快）/ ocr_screenshot（EasyOCR GPU）/ vision_describe（本地 VLM）三件并列 MCP 工具、无程序化优先级，大模型自主选择何时/用何工具观察。</div>
+  <div class="note"><b>感知工具三角（延续）：</b>observe（u2 层级树 text，快）/ ocr_screenshot（RapidOCR，ONNXRuntime）/ vision_describe（本地 VLM）三件并列 MCP 工具、无程序化优先级，大模型自主选择何时/用何工具观察。</div>
 </section>
 
 <!-- ============ N4 ============ -->
@@ -391,13 +391,13 @@
     <div class="cap">图 N4 · Vision SoM 通道（工具插件态）。本地 VLM 仅作为视觉外层 tool 返回结构化区域，最终点击决策仍由 Brain 做出（tap_by_mark 双路：结构化 ref → tap_by_id；视觉 center → 鼠标点击）；marks 状态自持于插件内 <code>som://last_result</code>。</div>
   </div>
 
-  <div class="note"><b>yolo 修正（设计定稿）：</b>yoyo = <b>yolo（目标检测 / 简单 OCR）</b>，是视觉工具不是推理模型。vision-mcp 内部调用 yolo 检测结果再编号产 marks；<b>yolo 默认不单独暴露给 agent</b>（避免低层 bbox 淹没 agent），仅作 SoM 内部依赖；若需直调，后续可选暴露 <code>detect</code> tool。</div>
+  <div class="note"><b>SoM 编号产出现状（2026-10-30 更新）：</b>编号包围框由视觉插件内部原语完成（OCR / 模板匹配），<b>yolo 权重已随实验资产清理移除</b>（从未进入运行时调用链）；内部原语默认不单独暴露给 agent（避免低层 bbox 淹没 agent），若需直调，后续可选暴露 <code>detect</code> tool。</div>
 </section>
 
 <!-- ============ N5 ============ -->
 <section id="n5">
   <h2 id="s-05-记忆与知识层TAM移植架构"><span class="num">05</span> 记忆与知识层（TAM 移植架构）</h2>
-  <p class="lead">记忆与知识层基于腾讯 TAM（Agent Memory）分层记忆模型，把任务经验沉淀为可消费记忆并注入回上下文。权威设计索引见 <code>doc/plans/memory-architecture.md</code>；本节为架构图集与落地事实。</p>
+  <p class="lead">记忆与知识层源自腾讯 TAM（Agent Memory）分层记忆模型，把任务经验沉淀为可消费记忆并注入回上下文。<b>2026-10-28 起收敛为 brain.db 单库</b>（TAM 双库退役，FTS5 simple 分词）。权威设计索引见 <code>doc/plans/memory-architecture.md</code>；本节为架构图集与落地事实。</p>
 
   <div class="diagram">
     <svg viewBox="0 0 700 662" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
@@ -433,26 +433,21 @@
 
       <!-- ⑤ 落库 -->
       <rect x="60" y="384" width="360" height="52" rx="9" fill="#fff7e6" stroke="#f59e0b" stroke-width="2"/>
-      <text x="240" y="408" font-size="13" font-weight="700" fill="#b45309" text-anchor="middle">⑤ 落库 + FTS5 trigram 同步</text>
-      <text x="240" y="426" font-size="11" fill="#64748b" text-anchor="middle">atoms 表 INSERT/UPDATE + atoms_fts</text>
+      <text x="240" y="408" font-size="13" font-weight="700" fill="#b45309" text-anchor="middle">⑤ 落库 brain.db（FTS5 simple 分词）</text>
+      <text x="240" y="426" font-size="11" fill="#64748b" text-anchor="middle">atoms 表 INSERT/UPDATE + atoms_fts（simple 扩展）</text>
 
       <!-- 分支：落库(右) + 维护(下) -->
       <path d="M420,410 C448,410 450,409 468,409" fill="none" stroke="#f59e0b" stroke-width="2" marker-end="url(#armem)"/>
-      <text x="445" y="402" font-size="10" fill="#b45309" text-anchor="middle">project</text>
+      <text x="445" y="402" font-size="10" fill="#b45309" text-anchor="middle">origin: project</text>
       <path d="M420,418 C470,418 470,500 468,500" fill="none" stroke="#f59e0b" stroke-width="2" marker-end="url(#armem)"/>
-      <text x="452" y="470" font-size="10" fill="#b45309" text-anchor="middle">global</text>
+      <text x="452" y="470" font-size="10" fill="#b45309" text-anchor="middle">origin: global</text>
 
-      <!-- 项目库 -->
-      <rect x="470" y="372" width="200" height="74" rx="9" fill="#f1f5f9" stroke="#94a3b8" stroke-width="2"/>
-      <text x="570" y="398" font-size="12.5" font-weight="700" fill="#334155" text-anchor="middle">项目库 index.db</text>
-      <text x="570" y="416" font-size="10.5" fill="#64748b" text-anchor="middle">projects/&lt;pid&gt;/memory/</text>
-      <text x="570" y="432" font-size="10.5" fill="#64748b" text-anchor="middle">project scope 落此</text>
-
-      <!-- 全局库 -->
-      <rect x="470" y="470" width="200" height="74" rx="9" fill="#f1f5f9" stroke="#94a3b8" stroke-width="2"/>
-      <text x="570" y="496" font-size="12.5" font-weight="700" fill="#334155" text-anchor="middle">全局库 index.db</text>
-      <text x="570" y="514" font-size="10.5" fill="#64748b" text-anchor="middle">~/.omniagent/memory/</text>
-      <text x="570" y="530" font-size="10.5" fill="#64748b" text-anchor="middle">global scope 落此</text>
+      <!-- L1 单库 -->
+      <rect x="470" y="408" width="200" height="94" rx="9" fill="#f1f5f9" stroke="#94a3b8" stroke-width="2"/>
+      <text x="570" y="434" font-size="12.5" font-weight="700" fill="#334155" text-anchor="middle">L1 单库 brain.db</text>
+      <text x="570" y="452" font-size="10.5" fill="#64748b" text-anchor="middle">~/.omniagent/memory/brain.db</text>
+      <text x="570" y="468" font-size="10.5" fill="#64748b" text-anchor="middle">project 仅为 origin 标签</text>
+      <text x="570" y="484" font-size="10.5" fill="#64748b" text-anchor="middle">FTS5 simple 分词</text>
 
       <!-- 维护 L2 -->
       <line x1="240" y1="436" x2="240" y2="462" stroke="#f59e0b" stroke-width="2" marker-end="url(#armem)"/>
@@ -470,7 +465,7 @@
 
       <text x="60" y="648" font-size="10.5" fill="#94a3b8">flush 尾部并行触发 L2 / L3 维护（白卷也跑 L2）；提炼 / 判重 LLM 失败一律 fallback store，异常不打断主流程。</text>
     </svg>
-    <div class="cap">图 N5a · 记忆写链与维护。会话消息先入 buffer，任务收尾才批量提炼；scope 决定落项目库或全局库；L2 场景块与 L3 画像在 flush 尾部独立维护。</div>
+    <div class="cap">图 N5a · 记忆写链与维护。会话消息先入 buffer，任务收尾才批量提炼；project 仅为 origin 标签，全部落 brain.db 单库；L2 场景块在 flush 尾部独立维护。</div>
   </div>
 
   <div class="diagram">
@@ -480,26 +475,26 @@
       </defs>
 
       <rect x="160" y="30" width="380" height="52" rx="9" fill="#e7f6fd" stroke="#0ea5e9" stroke-width="2"/>
-      <text x="350" y="54" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">读链 inject_text(project_id, query)</text>
-      <text x="350" y="72" font-size="11" fill="#64748b" text-anchor="middle">两库合计 atoms &lt; 20 → 零注入（池阈值）</text>
+      <text x="350" y="54" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">读链 inject_text_brain(query, persona)</text>
+      <text x="350" y="72" font-size="11" fill="#64748b" text-anchor="middle">融合排序 top_k=8，floor=0.30 以下不注入</text>
       <line x1="350" y1="82" x2="350" y2="106" stroke="#0ea5e9" stroke-width="2" marker-end="url(#arblue2)"/>
 
       <rect x="160" y="108" width="380" height="66" rx="9" fill="#e7f6fd" stroke="#0ea5e9" stroke-width="2"/>
-      <text x="350" y="132" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">两路检索：search + search_global</text>
-      <text x="350" y="150" font-size="11" fill="#64748b" text-anchor="middle">项目库 + 全局库；FTS5 trigram MATCH</text>
-      <text x="350" y="166" font-size="11" fill="#64748b" text-anchor="middle">→ bm25 归一化得分</text>
+      <text x="350" y="132" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">检索 brain.db（单库）</text>
+      <text x="350" y="150" font-size="11" fill="#64748b" text-anchor="middle">simple 分词（2 字滑窗短语 OR）</text>
+      <text x="350" y="166" font-size="11" fill="#64748b" text-anchor="middle">→ FTS5 MATCH + bm25 归一化</text>
       <line x1="350" y1="174" x2="350" y2="200" stroke="#0ea5e9" stroke-width="2" marker-end="url(#arblue2)"/>
 
       <rect x="160" y="202" width="380" height="52" rx="9" fill="#e7f6fd" stroke="#0ea5e9" stroke-width="2"/>
-      <text x="350" y="226" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">按分合并、topk 截断（默认 5）</text>
-      <text x="350" y="244" font-size="11" fill="#64748b" text-anchor="middle">去重合并后取 topk</text>
+      <text x="350" y="226" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">按分合并、top_k=8 截断</text>
+      <text x="350" y="244" font-size="11" fill="#64748b" text-anchor="middle">去重合并后取 top_k</text>
       <line x1="350" y1="254" x2="350" y2="278" stroke="#0ea5e9" stroke-width="2" marker-end="url(#arblue2)"/>
 
       <rect x="160" y="280" width="380" height="60" rx="9" fill="#e7f6fd" stroke="#0ea5e9" stroke-width="2"/>
       <text x="350" y="306" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">组装 &lt;relevant-memories&gt;</text>
       <text x="350" y="324" font-size="11" fill="#64748b" text-anchor="middle">注入 brain 上下文（仅参考，以观测为准）</text>
     </svg>
-    <div class="cap">图 N5b · 记忆读链。注入前先看两库合计是否过阈值，过阈才检索；项目库与全局库两路召回后按分合并、截 topk，作为参考块注入。</div>
+    <div class="cap">图 N5b · 记忆读链。search_brain 融合排序（top_k=8，floor=0.30）后作为参考块在 run 起始单条注入一次。</div>
   </div>
 
   <h3 id="s-05-0-数据流总览" class="blk">数据流总览（写链 / 读链 / 维护）</h3>
@@ -509,51 +504,47 @@
   <ul class="prin">
     <li><b>capture</b>：会话消息（role / content）实时写入<b>按 project 的 buffer</b>，不在对话中即时提炼，避免打断主流程、也避免单条噪声稀释。</li>
     <li><b>flush</b>：任务收尾（run record 落盘后，<code>loop/finish.py::_finish</code>）触发一次批量提炼；buffer 有效消息少于 2 条不触发。</li>
-    <li><b>提炼</b>：<code>_extract_detail</code> 调 LLM 从对话片段提取陈述句事实，每条标 <code>scope</code>：用户偏好 / 跨项目规律 → <code>global</code>，仅当前项目成立 → <code>project</code>；观察不到规律就交白卷（白卷是正确答案，不是故障）。</li>
-    <li><b>三态判重</b>：<code>_decide</code> 用 FTS5 召回候选，LLM 判 store / duplicate / merge；检索或 LLM 失败一律 <b>store（宁重复不丢）</b>。</li>
-    <li><b>落库</b>：按 scope 写对应库（项目库 <code>projects/&lt;pid&gt;/memory/index.db</code> 或全局库 <code>~/.omniagent/memory/index.db</code>），同时写 <code>atoms_fts</code> 供检索；全局库打不开只写项目库、不阻断。</li>
+    <li><b>提炼</b>：<code>_extract_detail</code> 调 LLM 从对话片段提取陈述句事实，每条带 <code>origin</code> 标签（project 仅为来源标记）；观察不到规律就交白卷（白卷是正确答案，不是故障）。</li>
+    <li><b>一致性判重</b>：价值 / kind / importance → 一致性四态，落 brain.db；失败一律 <b>store（宁重复不丢）</b>。</li>
+    <li><b>落库</b>：全部落 <code>~/.omniagent/memory/brain.db</code> 单库（project 仅为 origin 标签），同时写 <code>atoms_fts</code>（simple 分词）供检索。</li>
   </ul>
 
   <b>维护（flush 尾部并行，白卷也跑 L2）</b>
   <ul class="prin">
-    <li><b>L2 场景块</b>：<code>_maybe_maintain_scene</code> 用「现有 scene.md + 会话摘要 + 世界状态」增量更新 <code>scene_blocks/scene.md</code>，最小间隔 900s；结果<b>常驻注入</b>（不受 20 池阈值约束）——这是满足「消费 = 常驻每步重发」有效前提的载体。</li>
-    <li><b>L3 画像</b>：<code>_maybe_maintain_profile</code> 在新 atoms 累计 ≥ 20 时增量重写 <code>user_profile.md</code>，人工编辑与自动维护共存（保留仍成立内容、先备份 .bak）。</li>
+    <li><b>L2 场景块</b>：<code>scene_executor.py</code> 维护<b>多文件主题块</b>（<code>scene_blocks/</code> + <code>scene_index.json</code>）；<b>不走注入</b>——agent 通过工具按需拉取主题块全文。</li>
+    <li><b>L3 画像</b>：设计就绪（<code>user_profile.md</code>，候选→晋升→弱注入），实现待立项。</li>
   </ul>
 
-  <b>读链（inject_text）</b>
+  <b>读链（inject_text_brain）</b>
   <ul class="prin">
-    <li><b>阈值闸门</b>：项目库 + 全局库合计 atoms &lt; 20 → 直接返回空（零注入），避免记忆稀疏时灌噪声。</li>
-    <li><b>两路检索</b>：<code>search</code>（项目库）+ <code>search_global</code>（全局库），FTS5 trigram MATCH → bm25 归一化得分。</li>
-    <li><b>合并注入</b>：两路结果按分合并、去重、截 topk（默认 5），包成 <code>&lt;relevant-memories&gt;</code> 注入 brain，标注「仅参考，与观测不一致以观测为准」。</li>
+    <li><b>检索</b>：<code>search_brain(query, persona)</code>——simple 分词（2 字滑窗短语 OR）→ FTS5 MATCH → bm25 归一化 + 多信号融合排序。</li>
+    <li><b>注入</b>：top_k=8、floor=0.30；run 起始以单条 user 消息注入一次，标注「仅参考，与观测不一致以观测为准」。</li>
   </ul>
 
-  <h3 id="s-51-全局库与scope路由" class="blk">5.1 全局库与 scope 路由</h3>
+  <h3 id="s-51-全局库与scope路由" class="blk">5.1 单库与 origin 标签（2026-10-28 起）</h3>
   <ul>
-    <li><b>双库</b>：项目库 <code>projects/&lt;pid&gt;/memory/index.db</code> + 全局库 <code>~/.omniagent/memory/index.db</code>（<code>runtime_paths.global_memory_db()</code>），同 schema。</li>
-    <li><b>scope 标注</b>：提炼时 LLM 标 <code>global</code>（用户偏好 / 跨项目规律）或 <code>project</code>；裸字符串按 project 保守处理。</li>
-    <li><b>路由</b>：<code>flush</code> 按 scope 分库各自判重；检索 <code>search_global</code> + 项目库两路，注入阈值按两库合计判断。</li>
-    <li><b>单主文件</b>：全局长期记忆主文件 <code>~/.omniagent/memory/MEMORY.md</code>（机器归纳 + 人工编辑写同一份），经 <code>load_memory_text</code> 注入。</li>
+    <li><b>单库</b>：<code>~/.omniagent/memory/brain.db</code>（TAM 双库退役；旧 <code>index.db</code> 已归档）。</li>
+    <li><b>origin 标签</b>：提炼时 LLM 标来源（用户偏好 / 跨项目规律 vs 仅当前项目成立）；project 只是元数据，不再分库。</li>
+    <li><b>分词</b>：FTS5 <code>simple</code> 扩展（<code>~/.omniagent/ext/simple/</code>，含 simple.dll + dict/）；trigram 为缺省降级。</li>
+    <li><b>system 注入的是角色卡</b>：<code>~/.omniagent/character.md</code>（frontmatter <code>name:</code> + 设定），随 system 组装并入。</li>
   </ul>
 
-  <h3 id="s-52-技能蒸馏生产者" class="blk">5.2 技能蒸馏生产者</h3>
+  <h3 id="s-52-skill-轴" class="blk">5.2 skill 轴（一般模块，人工链路）</h3>
   <ul>
-    <li><b>生产者</b>：<code>skill_library.maybe_distill_skill(task_id, brain_cfg, success, objective)</code>，由 <code>loop/finish.py::_finish</code> 在 run record 落盘后触发。</li>
-    <li><b>默认关</b>：gate <code>skill.auto_distill</code> 默认 <code>False</code>（关 = 零行为变化）。</li>
-    <li><b>回放白名单</b>：<code>not_replayable</code> 前置跳过（配置 <code>skill.replay_allow_tools</code>），避免非可重放轨迹产出机械转录式垃圾 skill。</li>
+    <li><b>形态</b>：手写 SKILL.md（Hermes 风，frontmatter + 正文）；全局 <code>~/.omniagent/skills/</code> 跨 project 共享，task 私有 <code>tasks/&lt;task_id&gt;/skills/</code>；recall 合并两层、task 优先。</li>
+    <li><b>消费</b>：run 开始注入技能目录摘要；<code>load_skill</code> 按需拉正文；<code>search_skill</code> 检索。</li>
+    <li><b>定位（2026-10-30）</b>：skill 按<b>一般模块</b>处理——自动蒸馏 / 宏缓存 / 晋升 / 淘汰机器已弃用恒关（代码保留）；系统重心在记忆轴。见 <code>doc/plans/memory-architecture.md</code> §7。</li>
   </ul>
 
   <h3 id="s-53-有效性边界与诚实声明" class="blk">5.3 有效性边界与诚实声明</h3>
-  <div class="note"><b>三层记忆形态</b>：L1 原子检索（项目库 + 全局库双路 FTS）、L2 场景块常驻注入（<code>_maybe_maintain_scene</code> → <code>scene_blocks/scene.md</code>，不受 20 池阈值约束）、L3 画像（累计 20 原子后激活）。记忆有效性的前提是原料带每步状态摘要且消费为常驻每步重发；检索式注入在 agent 任务负载上不满足该前提，属已知架构取舍。</div>
-  <ul>
-    <li><b>技能自蒸馏</b>：10 次加载零步数改善，无正向证据，按止损口径暂缓、等执行验证通道。</li>
-  </ul>
+  <div class="note"><b>三层记忆形态（现行）</b>：L1 原子记忆（brain.db 单库，run 起始单条注入一次）、L2 场景块（<code>scene_executor.py</code> 多文件主题块，工具按需拉取全文、不走注入）、L3 用户画像（设计就绪，实现待立项）。一致性由注入面纪律保证（system=角色卡稳定段 + L1 起始检索块 + L2 工具拉取），见 <code>doc/plans/memory-architecture.md</code> §4/§5。</div>
   <div class="redline"><b>诚实边界</b>：对外只宣称「链路已实现并真机验证」；<b>不宣称「记忆注入已证明有效」</b>，除非后续 A/B 跑出结论。内核零场景硬编码；能力默认关、需显式开启。</div>
 
   <h3 id="s-54-调试与可见性" class="blk">5.4 调试与可见性</h3>
   <ul>
     <li><b>解耦设计</b>：<code>backend/api/routers/debug_api.py</code> + 前端 <code>DebugPanel.tsx</code> / <code>debugApi.ts</code> 为独立调试通道，与正式接口分离，可整体删除不污染内核。</li>
-    <li><b>三栏</b>：实时日志（toolcall / llm_request / skill_call / memory_inject / memory_flush）/ 记忆（global↔project 切换、15s 轮询）/ 轨迹。</li>
-    <li><b>记忆自检</b>：<code>GET /api/debug/memory?task_id|project_id</code> → <code>memory_tam.dump_state</code>（含 <code>global_atoms</code>）。</li>
+    <li><b>三栏</b>：实时日志（toolcall / llm_request / skill_call / memory_inject / memory_flush）/ 记忆（brain.db 单库转储、15s 轮询）/ 轨迹。</li>
+    <li><b>记忆自检</b>：<code>GET /api/debug/memory</code> → brain.db 单库转储（atoms 含 state / salience）。</li>
   </ul>
 </section>
 
@@ -805,10 +796,10 @@
     <pre style="font-size:12.5px;line-height:1.6;background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:16px;margin:0;overflow-x:auto"><code>~/.omniagent/                     # 用户全局（跨 project，~ = 用户主目录）
   config.yaml                     # 去明文 key + 端点；三通道(planner/executor/vision)由 Web 设置面板写入
   skills/                         # 通用 skill（跨 project 共享，含蒸馏产出 maybe_distill_skill）
-  memory/                         # TAM 记忆子系统：跨会话长期记忆（非「全量加载」）
-    MEMORY.md                     #   全局长期记忆主文件（机器归纳 + 人工编辑，单源）
-    index.db                      #   全局库 TAM 原子（scope 标注 global / project）
-  projects/&lt;path-slug&gt;/           # project = 工作目录逻辑分组（id = 路径 slug）；其 memory/ 存项目库（L1/L2/L3）
+  memory/                         # L1 原子记忆：brain.db 单库（TAM 双库已退役，2026-10-28）
+    brain.db                      #   atoms + atoms_fts（FTS5 simple 分词；project 仅为 origin 标签）
+    user_profile.md               #   L3 用户画像（设计就绪，实现待立项）
+  projects/&lt;path-slug&gt;/           # project = 工作目录逻辑分组（id = 路径 slug）；其 memory/scene_blocks/ 存 L2 场景块
   tasks/&lt;task_id&gt;/                # task 一等实体，独立平铺，含自身全部资产
     task.json                     #   元信息（objective / state / project_id? / runs）
     trajectory.jsonl              #   该 task 轨迹
@@ -822,8 +813,8 @@
     <tr><th>目录</th><th>层级</th><th>内容 / 用途</th></tr>
     <tr><td><code>config.yaml</code></td><td>全局</td><td>真 API key（去仓库）、模型端点、<code>local_model.auto_start</code>、三通道（<code>brain</code> / <code>runtime.executor</code> / <code>runtime.vision</code>，各自独立 enable + base_url/model，由 Web 设置面板「通道」Tab 写入 <code>~/.omniagent/config.yaml</code>）。框架态下三通道仍作为 model provider 接入 SDK。</td></tr>
     <tr><td><code>skills/</code></td><td>全局</td><td>通用 skill 存全局（跨 project 共享）；task 私有 skill 存 <code>tasks/&lt;task_id&gt;/skills/</code>。recall 合并、task 优先。蒸馏生产者提炼的<b>通用</b> skill（带 <code>scope: global</code>）落全局，实现「技能升级跨项目复利」。</td></tr>
-    <tr><td><code>memory/</code></td><td>全局</td><td>TAM 记忆子系统（跨会话长期记忆，非全量加载）：<code>MEMORY.md</code> 全局长期记忆主文件（机器归纳 + 人工编辑，单源）+ <code>index.db</code> 全局库 TAM 原子（scope 标注 global / project）。项目库在 <code>projects/&lt;path-slug&gt;/memory/index.db</code>。注入 = L1 双库检索（阈值按两库合计）+ L2 场景块常驻；默认开启，scope 路由分库。</td></tr>
-    <tr><td><code>projects/&lt;path-slug&gt;/</code></td><td>全局</td><td>project = 工作目录的 slug 分组，承载会话历史 jsonl 与项目记忆库 <code>memory/</code>（L1/L2/L3）；task 自身资产仍落 <code>tasks/&lt;task_id&gt;/</code>。</td></tr>
+    <tr><td><code>memory/</code></td><td>全局</td><td>L1 原子记忆 <code>brain.db</code> 单库（SQLite + FTS5 simple 分词；project 仅为 origin 标签）+ L3 画像 <code>user_profile.md</code>（设计就绪待实现）。注入 = run 起始 <code>search_brain</code> 单条检索块（top_k=8，floor=0.30）；L2 场景块在 <code>projects/&lt;path-slug&gt;/memory/scene_blocks/</code>，模型经工具按需拉取。权威见 <code>doc/plans/memory-architecture.md</code>。</td></tr>
+    <tr><td><code>projects/&lt;path-slug&gt;/</code></td><td>全局</td><td>project = 工作目录的 slug 分组，承载会话历史 jsonl 与 L2 场景块 <code>memory/scene_blocks/</code>（+ scene_index.json）；task 自身资产仍落 <code>tasks/&lt;task_id&gt;/</code>。</td></tr>
     <tr><td><code>tasks/&lt;task_id&gt;/</code></td><td>全局</td><td>task 一等实体：自身含全部资产（trajectory / world_model / collected / skills）+ task.json 元信息。可关联一个 <code>project_id</code>（仅作 cwd 元数据，不影响落点）。</td></tr>
   </table>
 
@@ -895,7 +886,7 @@
     <tr><td><code>pages/Chat/index.tsx</code></td><td>统一对话/任务 + SSE 流式进展 + 插话</td><td>接 <code>runtimeApi.chat()</code> / <code>connectStream</code></td></tr>
     <tr><td><code>pages/SkillsAndTools/index.tsx</code></td><td>Skills / Tools / MCP 三 Tab</td><td>接 <code>skillApi</code> / 工具与 MCP 列表</td></tr>
     <tr><td><code>pages/Settings/index.tsx</code></td><td>通用 / 模型 / 通道 / 关于 四 Tab</td><td>接 <code>settingsApi</code>（三通道配置）、<code>modelApi</code> / <code>llmApi</code></td></tr>
-    <tr><td><code>api/client.ts</code></td><td>typed fetch 封装（各 <code>*Api</code>）</td><td><code>taskApi</code> / <code>projectApi</code> / <code>skillApi</code> / <code>settingsApi</code> / <code>modelApi</code> / <code>llmApi</code> / <code>runtimeApi</code></td></tr>
+    <tr><td><code>api/client.ts</code></td><td>typed fetch 封装（各 <code>*Api</code>）</td><td><code>taskApi</code> / <code>projectApi</code> / <code>skillApi</code> / <code>settingsApi</code> / <code>modelApi</code> / <code>llmApi</code> / <code>runtimeApi</code> / <code>audioApi</code></td></tr>
   </table>
 
   <h3 id="s-102-自研-StoreReact-Context零依赖" class="blk">10.2 自研 Store（React Context，零依赖）</h3>
@@ -931,6 +922,7 @@
     <li><b>C5-A 硬停止</b>：发 <code>POST /api/runtime/stop</code> 置位 <code>ToolLoop.request_stop()</code> 标志位（由 <code>run_subtask_sdk</code> 在块间轮询优雅退出），随后用户输入新指令 → 大模型重新执行。长任务中人工随时可强行接管。</li>
     <li><b>C5-B 软注入插话</b>：流未结束时仍可向 <code>messages</code> 注入用户消息（经框架运行时消息注入队列），实现 human-in-the-loop 纠偏——循环不中断，下一步 agent 改路继续。<b>优先级：人类注入 &gt; L2 自治决策 &gt; 框架默认策略</b>。</li>
     <li><b>两栏布局</b>：左 Sidebar 平铺 task 列表 + 「新建会话」；右主区整页覆盖显示当前 <code>view</code>（chat/skills/settings），无路由跳转。</li>
+    <li><b>语音交互（M3，2026-10-29/30）</b>：Chat 页「按住说话」（对讲式）+ 免提开关（常开 VAD 自动判句 + 声学打断 + 回复自动朗读）+ 回复旁 🔊 播报；前端 <code>voiceRecorder.ts</code> 采集（AudioWorklet + 能量 VAD），转写/合成走 <code>/api/audio/*</code>（CosyVoice2 引擎）。见 <code>doc/plans/voice-m3-2026-10-29.md</code>。</li>
   </ol>
 
   <div class="redline"><b>红线延续：</b>前端不写任何场景 / app / 游戏专属逻辑或文案；所有领域数据来自后端配置与 API。UI 仅做通用 agent 控制台，能力暴露完全由后端 <code>*Api</code> 决定。</div>
