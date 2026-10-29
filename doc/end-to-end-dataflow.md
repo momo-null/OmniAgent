@@ -4,13 +4,23 @@
 
 用户发起会话 → task 触发 → LangGraph 编排图（主 agent \+ Send 扇出子 agent）→ Agents SDK Runner 块循环（LLM 调用 \+ 工具派发）→ 结果落盘与流式呈现 → 刷新恢复
 
+> **多入口（2026-10-30 更新）**：同一 `/chat` 链路现在有三类入口——① Web UI（本文主线）；
+> ② **语音**：Web 按住说话 / 免提经 `POST /api/audio/transcribe` 转写后走同一入口，回复经
+> `/api/audio/tts` 播报（见 `doc/plans/voice-m3-2026-10-29.md`）；③ **通道网关与远程客户端**：
+> QQ / 飞书 / 企业微信连接器（`gateway/channels/`）与任意外部 HTTP 客户端
+> （`doc/plans/remote-client-contract-2026-10-30.md`）复用同一 runtime 契约。
+
 ## 代码定位
 
 - `web/src/store/taskStore.tsx`：前端状态/SSE
 
 - `web/src/pages/Chat/index.tsx`：前端渲染
 
-- `backend/api/router_runtime.py`：REST/SSE/会话线程
+- `backend/api/routers/chat_runtime.py`：REST/SSE/会话线程（`/api/runtime/chat|stream|stop|inject|wake` 等）
+
+- `backend/api/routers/audio_api.py`：语音薄壳端点（`/api/audio/transcribe|tts`，capability 转发）
+
+- `gateway/channels/`：QQ / 飞书 / 企业微信连接器与通用通道基类（`base.py`）
 
 - `omni_core/local/loop/`（core/parts/instructions/sdk_bridge/graph_runner/emitter/finish）：L2 内核 `ToolLoop`（编排注入 \+ 门控），主类位于 `core.py`
 
@@ -95,7 +105,7 @@
 
 - **纪律注入**：加载全局 `AGENTS.md` \+ 任务私有`AGENTS.md` 纪律文件，在任务启动时读取快照并锁定至 system prompt 尾部，单次 run 周期内不重复读取，文件更新仅在下一轮任务生效，同时落盘轨迹日志。
 
-- **记忆注入**：默认通过 `knowledge_inject.compose_injection_block` 在 run 起始以单条 user 消息（`lead_in_message`）注入 L1 检索记忆（TAM 动态段），每轮一次、不每步重发；仅注入起始 items，不污染后续 `to_input_list()` 继承的会话历史。
+- **记忆注入**：默认通过 `knowledge_inject.compose_injection_block` 在 run 起始以单条 user 消息（`lead_in_message`）注入 L1 检索记忆（brain.db 单库动态段，FTS5 simple 分词），每轮一次、不每步重发；仅注入起始 items，不污染后续 `to_input_list()` 继承的会话历史。L2 场景块不走注入——模型通过工具按需拉取全文（见 `doc/plans/memory-architecture.md` §注入面全景）。
 
 # 4\. Agents SDK Runner 核心 API 与块循环机制（`omni_core/brain/sdk_loop.py`）
 
@@ -285,6 +295,7 @@ type Step =
 |GET/POST/DELETE|/tasks 系列接口|任务全量CRUD、状态变更、技能绑定管理|
 |POST|/skill/run /skill/delete|技能回放执行、技能删除管理|
 |GET|/projects 系列接口<br>|项目元数据、会话列表、单会话详情查询|
+|POST|/audio 系列接口（`/api/audio/transcribe` / `/api/audio/tts`，voice 插件）|语音转写与合成（capability 转发；插件未启用 404；模型/引擎失败显式报错并降级文本）|
 
 # 8\. 全链路极简总结
 

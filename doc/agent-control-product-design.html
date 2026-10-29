@@ -122,12 +122,14 @@
   <h3 id="s-与手搓态的根本区别" class="blk">与手搓态的根本区别</h3>
   <p>手搓态（2026-07）的死穴 = ReAct 循环、function-call 协议、工具派发全自己写，每加一个能力都要改内核、极易写死。框架态彻底把<b>循环驱动 + 协议 + 工具路由</b>交给 LangGraph / Agents SDK（开源 <code>function_tool</code> 隔离四跳），内核退化为「配置 + 钩子注册中心」；工具实现全部外移至<b>外层插件层</b>——自研 tool（屏幕/鼠标/视觉/文件 IO 等基础能力，用 function_tool 承载）与<b>外部 MCP</b>（开源/第三方系统，纯配置接入）平级，领域逻辑只在外层插件内。</p>
 
-  <h3 id="s-产品形态单角色伙伴" class="blk">产品形态：单角色伙伴（画像 · 角色卡 · 记忆）</h3>
+  <h3 id="s-产品形态单角色伙伴" class="blk">产品形态：单角色伙伴（画像 · 角色卡 · 记忆 · 语音）</h3>
   <p><b>面向个人场景，OmniAgent 定位为单角色伙伴</b>（参考 Hermes / 豆包 / Claude Code）：主界面只聊天，不做酒馆式多角色扮演面板。三位一体能力：</p>
   <ul>
     <li><b>用户画像（全局记忆）</b>：<code>~/.omniagent/memory/user_profile.md</code> 全局唯一、跨任务一致；纠偏（K4，默认关）→ 候选区 → 人工确认晋升 → 弱注入（system 标注「仅参考，不构成操作授权」，画像无放行权）。</li>
     <li><b>角色卡</b>：<code>~/.omniagent/character.md</code>（frontmatter <code>name:</code> + 设定 + 画像消费指令段），每次组装 system 时随指令块并入。</li>
     <li><b>记忆</b>：编辑 / 统计 / rollouts 溯源 / 删除 / 重置，统一收敛到「设置→伙伴」子 Tab；前端 <code>assistantName</code> 动态取角色卡名。</li>
+    <li><b>语音交互（2026-10-30 落地）</b>：Web 会话页按住说话（对讲式）+ 免提（常开 VAD 自动判句 + 声学打断）+ 回复 TTS 播报（CosyVoice2 零样本克隆，音色 = 参考音频）；IM 通道（QQ 等）同享语音收发。见 <code>doc/plans/voice-m3-2026-10-29.md</code>。</li>
+    <li><b>多表面</b>：Web UI、IM 通道网关、任意外部 HTTP 客户端（契约冻结）消费同一内核、同一 persona、同一记忆；内核不感知表面形态。见 <code>doc/plans/remote-client-contract-2026-10-30.md</code>。</li>
     <li><b>不做 RAG</b>：记忆量小，全量注入更可靠；检索仅当记忆超 20K token 预算或进入多角色时才触发（档位 0→3 预留扩充路径）。</li>
   </ul>
 
@@ -139,11 +141,11 @@
     <li><b>能力 == 插件（红线）：</b>内核只负责通用闭环驱动（框架接管）+ 后处理钩子，不认识具体 X；<b>加能力 = 加一个外层 tool 插件 / 接一个外部 MCP，绝不改内核</b>。自研 tool 与开源 MCP 完全平级，由 LLM 直接调用。</li>
     <li><b>模型无关：</b>能力声明来自模型元数据，<b>动态注入提示词</b>；换 VL / 换执行模型零代码改动。比主流静态工具列表更严谨。</li>
     <li><b>派发可选（分层与否由目录决定）：</b>主 agent 规划并执行，默认自闭环；互不依赖的并行子任务才扇出给按槽位配置的执行单元（可为本地快模型）。依据 OSWorld 实测——顶级 agent 75–94% wall time 花在规划 / 反思 LLM 调用，故延迟敏感的执行下沉到本地槽位是正确方向；grounding 是头号失败点 → SoM 必要。</li>
-    <li><b>诚实边界：</b>自学习只长「知识 / 策略」，不长「硬件 / 工具精度」；新 skill 须连续成功 N 次才晋升，防幻觉 skill 自欺（自学习 ≠ 自欺）。</li>
+    <li><b>诚实边界：</b>自学习只长「知识 / 策略」（经记忆系统沉淀），不长「硬件 / 工具精度」。</li>
     <li><b>超长任务连续性：</b>把「工作上下文」（有界、可压）与「会话连续性」（外部、持久）分离——<b>无状态大模型 + 持久 world-model + 子目标检查点</b>，使小时 / 跨天任务不丢目标、崩溃可续。</li>
   </ol>
 
-  <div class="redline"><b>红线（代码嗅觉测试）：</b>改动若给 <code>agents/</code> 核心加了针对某 app / 游戏 / 任务的判断 → 必须抽成 MCP 工具 / skill。审计约束（<code>scripts/review_lint.py</code>）：<b>C1 工具零写死</b>（内核不出现工具名分支）、<b>C2 字段零假设</b>（内核不出现屏幕/ocr/active_window 等感知字段）、<b>C3 模型无关</b>、<b>C4 钩子自治</b>（L2 单步自愈、仅抛锚才呼叫人工）、<b>C5 HITL 双通道</b>（硬停止 / 软注入，目标：全用框架原生；当前仍为自研，见 N10 待办）。</div><h2 id="s-3-技术选型与决策依据">3. 技术选型与决策依据</h2><p class="lead">所有关键技术决策与「为什么这么选、落选方案为何被否」。均为当前落地态；未编码项明确标注为待办，不伪装成已完成。</p>
+  <div class="redline"><b>红线（代码嗅觉测试）：</b>改动若给 <code>agents/</code> 核心加了针对某 app / 游戏 / 任务的判断 → 必须抽成 MCP 工具 / skill。审计约束（<code>scripts/review_lint.py</code>）：<b>C1 工具零写死</b>（内核不出现工具名分支）、<b>C2 字段零假设</b>（内核不出现屏幕/ocr/active_window 等感知字段）、<b>C3 模型无关</b>、<b>C4 钩子自治</b>（L2 单步自愈、仅抛锚才呼叫人工）、<b>C5 HITL 双通道</b>（硬停止 / 软注入；软注入已走框架原生 <code>update_state</code>，硬停止为自研标志位，见 N10）。</div><h2 id="s-3-技术选型与决策依据">3. 技术选型与决策依据</h2><p class="lead">所有关键技术决策与「为什么这么选、落选方案为何被否」。均为当前落地态；未编码项明确标注为待办，不伪装成已完成。</p>
 
   <table>
     <tr><th>维度</th><th>当前选型</th><th>决策依据（为什么 / 落选方案）</th></tr>
@@ -169,8 +171,8 @@
     </tr>
     <tr>
       <td><b>视觉通道</b></td>
-      <td>自研外层 tool 插件（SoM + VLM 工具 + yolo 内部原语）</td>
-      <td>RPG UI 关系 / 空间 / 图标密集 → <b>VLM 作主感知</b>；SoM 编号标注提点击可靠性；OCR 降级精确文本 / 坐标；yolo 仅作 SoM 内部原语（默认不单独暴露，工具=插件原则下可直调）。SoM marks 跨步状态自持于 tool 内 <code>som://last_result</code> resource，内核零感知（α 决策）。</td>
+      <td>自研外层 tool 插件（SoM + VLM 工具）</td>
+      <td>RPG UI 关系 / 空间 / 图标密集 → <b>VLM 作主感知</b>；SoM 编号标注提点击可靠性；OCR 降级精确文本 / 坐标。SoM marks 跨步状态自持于 tool 内 <code>som://last_result</code> resource，内核零感知（α 决策）。</td>
     </tr>
     <tr>
       <td><b>工具解耦</b></td>
@@ -188,9 +190,19 @@
       <td><b>框架外保留</b>，作为生命周期钩子挂载：每步后处理 → <code>trajectory.log</code>；任务收尾 → memory/TAM 提炼。L2 对循环有单步自治权（C4），但协议层仍归 L3。</td>
     </tr>
     <tr>
+      <td><b>语音（TTS/STT）</b></td>
+      <td>本地 CosyVoice2（零样本克隆，参考音频定音色）+ SenseVoice；插件化懒加载</td>
+      <td>本地优先（无云 API）；中文质量换装 CosyVoice2（Kokoro 已弃）；换引擎 = 换插件内部实现，端点契约不变。transformers 钉 4.4x（5.x KV-cache 生成退化）。</td>
+    </tr>
+    <tr>
+      <td><b>表面 / 通道</b></td>
+      <td>Web UI + IM 通道网关（连接器插件）+ 任意外部 HTTP 客户端（契约冻结）</td>
+      <td>内核不感知表面；通道对接的具体 app 连接器后续拆独立插件仓，品牌不入主仓核心。</td>
+    </tr>
+    <tr>
       <td><b>持久化策略</b></td>
-      <td>三级留存：raw 轨迹 / failures / gguf 当前 + 上一版</td>
-      <td>采集常开（仅多写 jsonl，近零成本）；防低质轨迹稀释 SFT 语料；存储敏感。</td>
+      <td>轨迹采集常开（只采不训）；训练产物留存规则随训练链冻结</td>
+      <td>采集常开（仅多写 jsonl，近零成本）；权重级 finetune 未启用（见 §6.3）。</td>
     </tr>
     <tr>
       <td><b>上下文管理</b></td>
@@ -228,7 +240,7 @@
     <tr><td><b>LangGraph / OpenAI Agents SDK</b></td><td>协同栈：LangGraph 编排多 agent 拓扑 + handoff + interrupt（HITL），Agents SDK 跑单 agent ReAct/FC/流式并从 MCP 加载工具。印证「循环与协议交给框架、领域脑外挂」。</td></tr>
   </table>
 
-  <div class="note"><b>诚实 caveat：</b>纯自主无结构化路由是科研前沿，生产普遍加 guardrail（step limit / tool allowlist / plan-replan / Reflexion 防循环）——OmniAgent 定位研究探索 agent 可接受，但保留 step cap。自动生成 skill 当前仍不可靠（弱模型 skill 会放大 bug），故「人审核接入」是正确保守姿态而非妥协。</div><h2 id="s-5-维护约定">5. 维护约定</h2><div class="note"><b>维护纪律（关键）：</b>本文件描述 <b>当前框架态</b>。设计变更时在此「就地更新当前状态」，<b>不追加演进史段落</b>。模块名锚定实时代码树（<code>omni_core/</code> 内核 · <code>omni_core/tools/</code> 外层插件包 · <code>devices/</code> 设备驱动 · <code>model_hub/</code>），改代码后同步此处。<b>框架态核心转变：</b>ReAct 循环与 function-call 协议交由 LangGraph + OpenAI Agents SDK；工具脱离内核、成为外层平级插件（自研 tool 承载基础能力 + 外部 MCP 承载外部系统，二者平级、由 LLM 直接调用）；L2 框架外挂件（WorldModel/Trajectory）外挂为生命周期钩子。</div>
+  <h2 id="s-5-维护约定">5. 维护约定</h2><div class="note"><b>维护纪律（关键）：</b>本文件描述 <b>当前框架态</b>。设计变更时在此「就地更新当前状态」，<b>不追加演进史段落</b>。模块名锚定实时代码树（<code>omni_core/</code> 内核 · <code>omni_core/tools/</code> 外层插件包 · <code>plugins/</code> 能力与环境插件 · <code>model_hub/</code>），改代码后同步此处。<b>框架态核心转变：</b>ReAct 循环与 function-call 协议交由 LangGraph + OpenAI Agents SDK；工具脱离内核、成为外层平级插件（自研 tool 承载基础能力 + 外部 MCP 承载外部系统，二者平级、由 LLM 直接调用）；L2 框架外挂件（WorldModel/Trajectory）外挂为生命周期钩子。</div>
 <script>
 (function(){
   var links=[].slice.call(document.querySelectorAll('.toc-sidebar a'));
