@@ -582,3 +582,29 @@ def test_wind_down_injection_auto_chain(monkeypatch):
     # 清理：补投线程是桩，不会收尾
     from backend.api.routers.helpers import manager as _mgr, AGENT_MAIN as _main
     _mgr.finish("t_autochain", _main)
+
+
+# === 跨进程事件桥（B0）：网关跑完 QQ 等外部会话 → 通知 Web 刷新 =============
+
+class TestTasksChangedBridge:
+    def test_internal_endpoint_pushes_event(self, client):
+        """内部端点把 tasks_changed 同时推进目标 task 与全局 outbox。"""
+        from backend.api.routers.helpers import outbox_drain
+
+        tid = client.post("/api/runtime/tasks", json={"objective": "x"}).json()["task"]["task_id"]
+        r = client.post("/api/runtime/internal/tasks_changed",
+                        json={"kind": "run_done", "task_id": tid, "project_id": "default"})
+        assert r.status_code == 200 and r.json()["ok"] is True
+
+        own = outbox_drain(tid)["tasks_changed"]
+        assert own and own[-1]["task_id"] == tid and own[-1]["kind"] == "run_done"
+        glob = outbox_drain("_global")["tasks_changed"]
+        assert any(e["task_id"] == tid for e in glob)
+
+    def test_internal_endpoint_rejects_bad_task_id(self, client):
+        r = client.post("/api/runtime/internal/tasks_changed", json={"task_id": "../bad"})
+        assert r.status_code == 422
+
+    def test_internal_endpoint_requires_task_id(self, client):
+        r = client.post("/api/runtime/internal/tasks_changed", json={})
+        assert r.status_code == 422

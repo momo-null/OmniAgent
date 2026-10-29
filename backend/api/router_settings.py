@@ -117,7 +117,6 @@ async def get_settings() -> Dict[str, Any]:
     # 端点真源已收敛到 ~/.omniagent/models.json（模型路由，2026-09-29）：
     # 旧通道 runtime.executor / llm.providers / llm.local_as_tool 不再暴露给前端。
     out.setdefault("runtime", {})
-    out["runtime"].setdefault("vision", {"enabled": False})
     out.setdefault("local_model", {"auto_start": False, "default_model": ""})
     # 技能层开关骨架（缺省即内核默认：自动蒸馏关）
     out.setdefault("skill", {"auto_distill": False})

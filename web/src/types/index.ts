@@ -100,6 +100,7 @@ export interface Task {
   task_id: string;
   project_id: string | null;
   objective: string;
+  title?: string; // 会话展示名（通道自声明；空则用 objective）
   done_when?: string;
   state: "pending" | "running" | "done" | "failed" | "aborted";
   runs: string[];
@@ -220,6 +221,8 @@ export interface ChatMsg {
     final?: boolean; // 是否为最终结论轮（前端以「最终结果」卡片独立呈现）
     // 本轮 agent 实际写出的产物（后端 artifacts.json 按 ts 过滤；点卡片在右侧栏预览）
     artifacts?: ArtifactInfo[];
+    // 显式发送通道（如 QQ）：本轮到底发出去几条（count=0 = 只留在任务里的内部说明）
+    send?: { mode?: string; count?: number };
   };
 }
 

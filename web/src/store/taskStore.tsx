@@ -138,7 +138,8 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       return {};
     }
   });
-  // 服务端主标题源：后端 task.objective（P2.2：标题以服务端为主，localStorage 仅作 rename 覆盖）
+  // 服务端主标题源：后端 task.title（通道自声明）> task.objective；
+  // localStorage 的 taskTitles 仅作 rename 覆盖
   const [taskObjectives, setTaskObjectives] = useState<Record<string, string>>({});
   const [taskProjects, setTaskProjects] = useState<Record<string, string>>({});
   const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
@@ -163,6 +164,9 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const esRef = useRef<EventSource | null>(null);
+  // 常驻旁路订阅（sub=ui）：只听跨进程的 tasks_changed（网关跑 QQ/飞书 会话时，
+  // 事件不在本进程，主订阅收不到）。
+  const globalEsRef = useRef<EventSource | null>(null);
   const runningRef = useRef(false);
   runningRef.current = running;
   // 排队队列：ref 是唯一权威（接力/入队同步改 ref 再镜像 state，防 SSE 连帧双发）
@@ -322,13 +326,15 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   const refreshTasks = useCallback(async () => {
     try {
       const r = await taskApi.list();
-      const d = r.data as { tasks: { task_id: string; objective?: string }[] };
+      const d = r.data as { tasks: { task_id: string; objective?: string; title?: string }[] };
       setTasks((d.tasks || []).map((t) => t.task_id));
-      // P2.2: 服务端 objective 作为标题主源（用户 rename 后用 taskTitles 覆盖）
+      // 显示名主源：服务端 title（通道自声明的会话名，如「与「昵称」(1234)的对话」）
+      // 优先，回退 objective（Web 会话首条消息即目标）；用户 rename 后用 taskTitles 覆盖
       setTaskObjectives((prev) => {
         const next = { ...prev };
         for (const t of d.tasks || []) {
-          if (t.objective) next[t.task_id] = t.objective;
+          const name = (t.title || t.objective || "").trim();
+          if (name) next[t.task_id] = name;
         }
         return next;
       });
@@ -372,6 +378,27 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     const tid = currentTaskIdRef.current;
     const es = new EventSource(runtimeApi.streamUrl(tid || undefined));
     esRef.current = es;
+
+    // 跨进程事件桥（B0）：QQ / 飞书 会话由网关进程处理，事件不进本进程 outbox；
+    // 后端在每轮开始/结束时把 tasks_changed 推进全局 outbox，这里用旁路订阅常驻收听。
+    // 只做「刷新任务列表 + 必要时重拉当前会话历史」，不伪装流式过程。
+    if (!globalEsRef.current) {
+      const ges = new EventSource(runtimeApi.streamUrl(undefined, "ui"));
+      globalEsRef.current = ges;
+      ges.addEventListener("tasks_changed", (ev) => {
+        try {
+          const d = JSON.parse((ev as MessageEvent).data) as { task_id?: string };
+          refreshTasks();
+          const changed = d.task_id || "";
+          // 本进程正在跑的会话以主 SSE 为权威，别被外部事件拉历史覆盖乐观气泡
+          if (changed && changed === currentTaskIdRef.current && !runningRef.current) {
+            loadHistory(changed);
+          }
+        } catch {
+          /* 忽略畸形事件 */
+        }
+      });
+    }
 
     es.addEventListener("chat", (ev) => {
       try {
@@ -600,12 +627,16 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         /* ignore */
       }
     });
-  }, [refreshTasks]);
+  }, [refreshTasks, loadHistory]);
 
   const disconnectStream = useCallback(() => {
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
+    }
+    if (globalEsRef.current) {
+      globalEsRef.current.close();
+      globalEsRef.current = null;
     }
   }, []);
 

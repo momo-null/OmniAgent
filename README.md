@@ -1,256 +1,346 @@
 <a name="top"></a>
 
-# OmniAgent X3 · 通用 Agent 内核
+# OmniAgent · 能聊、能记、能干活的常驻 AI 伙伴
 
 **中文** | [English](#english)
 
-> **OmniAgent** 是一个**通用** Agent 内核：主 agent + graph 自主派发（主 agent 决定派不派、派给哪个执行单元槽位），模型来自多槽模型目录（`~/.omniagent/models.json`）。模型通过调用**工具**完成任务，能做什么完全由工具清单决定，内核不绑定任何场景；GUI / 设备操控只是当前用得最多的场景，而非 agent 的预设身份。
+> 跑在自己电脑上的 AI 伙伴：桌面端陪你聊、跨会话记得你、能替你在 QQ / 飞书 / 企微 里说话、按点把活干了，需要时还能直接操作这台电脑或一台安卓机。
 >
-> **构建方式（诚实说明）**：ReAct 循环与 function-call 协议由 **OpenAI Agents SDK**（`Runner`）承载，多 agent 状态机编排由 **LangGraph** 承载。本项目自研的是 **L2 编排层**（收尾门控 / 升级判定 / 预算与墙钟 / 上下文管理）、**工具运行时与插件层**、**知识层**（世界模型 / 技能 / 全局记忆）与 **执行后端**（设备 / GUI）。因此本项目的贡献是「编排 + 工具 + 知识层」，**不是 agent 循环本身**。
->
-> **技术底座**：`OpenAI Agents SDK` · `LangGraph` · `MCP` · 本地模型生命周期管理 · 知识层（技能库 / 用户画像；记忆轴按 TencentDB Agent Memory 移植重建，机制已真机验证）。
->
-> **版本 X3**：主 agent 规划并执行；可按槽位为子 agent 配置不同模型（含本地快模型做执行与视觉感知）。
-> ⚠️ 免责声明：个人学习项目，不保证稳定性与体验，使用产生的一切后果自行承担。
+> 它不是界面演示：记忆（原子记忆 → 场景块 → 画像）、语音收发、多 IM 通道、定时任务、本地模型、MCP、插件、人工审批都是打通的完整链路。做不到的部分写在[边界](#边界诚实说明)里，不吹。
 
-## 能力与边界（先看这个 · 30 秒了解本项目到哪一步）
+## 30 秒看懂
 
-**已实现并真机验证**
-- 主 agent 执行循环（OpenAI Agents SDK）+ 自主派发：互不依赖的子任务可派给按槽位配置的执行单元。
-- 通用工具运行时：加能力 = 写工具 / Provider，内核零场景硬编码（红线 lint + CI 守护）。
-- 本地模型生命周期管理、MCP 接入、GUI / 设备操控执行后端。
-- **消息通道（gateway）**：常驻网关把外部 IM 归一为入站消息 → 派发 → 回发；新增通道 = 一个适配器文件 + 一段配置，派发与工具零改动。对外通道默认**纯对话**（`tools_enabled=false`，模型侧无任何工具 schema），来源与说话人由通道写进消息本身；`msg_recent` 可跨会话回看往来。见 [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md)。
-- 会话记录增量落盘 + 重放合并（崩溃不丢过程流）；项目级 AGENTS.md 三层纪律注入（global → project → task）；技能库（人工维护 + 按需加载）。
-  （skill 提取链修订：录像式机械转录整链已于 2026-10-03 A9 删除；2026-10-04 skill 轴以**可重放宏缓存**形态保留但默认关闭——结构化提取 + 回放执行器，`skill.auto_distill` 默认关，有效性验证未做，见下。）
+| 你想要 | 它实际做的 |
+|---|---|
+| 有个能连续聊的助手 | 桌面端 / 浏览器单页对话，流式输出、工具过程可见、可打断、可排队、可给单个任务开「完全访问」 |
+| 它记得我 | 每轮对话自动沉淀：原子记忆库 → 场景块 → 用户画像；下次开口就能召回，画像可手改 |
+| 帮我回消息 | QQ（NapCat）、飞书、企微常驻通道，以**主人的身份**代答；群聊需 @，支持语音进 / 语音出、图片理解 |
+| 到点自己干活 | cron 定时任务，跑完把结果推回指定通道，Web 里可增删改查 + 看运行记录 |
+| 真的动手 | 键鼠 / 截图 / 屏幕观测（本机），或 ADB 操作安卓机；文件读写检索、网页抓取、联网搜索开箱可用 |
+| 用我自己的模型 | 云端 API 与本地 llama.cpp（GGUF）混用；可按槽位给子 agent 配不同模型，含本地视觉模型 |
+| 我要接自己的东西 | MCP server（stdio / streamable HTTP）、插件（写一个就能加能力）、新增 IM 通道 = 一个适配器文件 |
 
-**尚未验证（诚实边界）**
-- 记忆轴已按 **TencentDB Agent Memory** 移植重建（现行架构见 `doc/plans/memory-architecture.md`），机制已真机验证，长期有效性观察中。
-- **skill 宏轴（2026-10-04 保留，默认关）有效性未验证**：早期真机试点已收口——机制层跑通（蒸馏链 5/5 成功、entry_id 精确分结构），但**注入技能序列零步数收益**（Δsteps=0，简单 UI 任务）⇒ 价值全系于回放执行器（跳过每步 LLM 决策），收益 A/B 待在 Omni 上以脚本化 / 确定性工具链场景补测；`skill.auto_distill` 默认关。
-- 单域、小样本，非生产级。
-- skill 驱动的角色化团队（team-mode）**规划中**：将复用派发底座的 `agent` 字段与执行单元注册表（见 `doc/plans/`），尚未实现。
+## 三个典型用法
 
-## 文档导航（权威来源）
+### 1. 当日常助手（最快路径）
 
-| 文档 | 角色 |
-|------|------|
-| [`doc/agent-control-product-design.html`](doc/agent-control-product-design.html) | 产品设计（定位 / 原则 / 技术选型 / 行业对标 / 维护约定） |
-| [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | 架构设计（图集 N1–N10） |
-| [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | **架构决策权威（单一事实来源）** |
-| [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | 消息通道（gateway）接入机制：通道协议 / 能力门 / 场合自述 / 跨进程发送 |
-| [`spec/coding_standard.md`](spec/coding_standard.md) | 工程规范（X3 现行编码规范） |
+```bash
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+cd web && npm install && cd ..
+.\start_all.bat      # 后端 :8000 + 前端 :5173
+```
 
-> ⚠️ 上述设计文档均为中文。
+打开 `http://localhost:5173` → **设置 → 模型** 填 API endpoint 与 key（或改成本地 GGUF）→ 直接聊。
+真密钥只存 `~/.omniagent/config.yaml`；仓库里只有 `config.example.yaml`（无任何明文密钥）。
 
-## 1. 产品定位
+不想开两个窗口就用桌面端（见[快速开始](#快速开始)）。
 
-- **它是什么**：通用 Agent 内核（运行时）。控制流归大脑，程序退化为工具运行时（ToolLoop 薄壳）；ReAct 循环由 OpenAI Agents SDK 承载。
-- **能力 == 工具**：加能力 = 写工具 / Provider，绝不改内核。GUI / 设备操控是经工具清单动态注入的能力，而非 agent 身份。
+### 2. 让它替你在 QQ 上说话
 
-> 详细定位、目标用户、与旧版差异见 **产品设计 §1**。
+1. 装 [NapCat](https://github.com/NapNeko/NapCatQQ)，开启 HTTP（默认 `:3000`）与 WebSocket 服务（默认 `:3001`）；
+2. `~/.omniagent/config.yaml` 的 `channels.napcat` 填 `enabled` / `http_url` / `ws_url` / `token`；
+3. 起网关：`python -m gateway.channel_gateway`（桌面端会自动拉起，不用手动跑）；
+4. 私聊直接回；群聊**必须 @ 它**才响应（`require_at`），语音进来会用语音回、图片会真的看懂。
 
-## 2. 核心原则与红线
+外部通道默认**纯对话**（`allow_tools: false`，模型侧连工具清单都没有）：别人给你发消息可以聊天，但碰不到你的文件和电脑。飞书 / 企微同构，各自一段配置即可。
 
-七条不可偏移的原则，是技术选型总依据，也是代码审计「嗅觉测试」：
+### 3. 让它定时干活并回消息
 
-1. **控制流归大脑** — 模型规划并决策调工具，程序退化为工具运行时。
-2. **知识自学，无插件** — world-model + skill 由运行时观测积累，属运行时知识非硬编码。
-3. **能力 == 工具（红线）** — 内核只负责通用闭环，加能力 = 写工具 / Provider。
-4. **模型无关** — 能力声明来自模型元数据，动态注入提示词，换模型零代码改动。
-5. **派发可选** — 是否分层、分层用哪些模型，由模型目录配置决定；不配置即单主 agent 形态。
-6. **诚实边界** — 自学习只长「知识 / 策略」，不长「硬件 / 工具精度」；新 skill 须连续成功 N 次才晋升。
-7. **超长任务连续性** — 无状态大脑 + 持久 world-model + 子目标检查点，使小时 / 跨天任务不丢目标、崩溃可续。
+Web「定时任务」页新建（或改 `~/.omniagent/cron/jobs.json`，热加载不用重启）：写一句 objective + cron 表达式 + 完成条件，选 `notify_channel` 指定结果推到哪个通道。运行记录与失败原因都能在页面看到。
 
-> **红线**：改动若给 `omni_core/` 核心加了针对某 app / 游戏 / 任务的判断 → 必须抽成工具 / skill。`omni_core/` 核心零场景硬编码（不得出现任何具体 app / 游戏 / 业务 / 厂商渠道的专有 token；模型名只允许出现在模型目录等配置数据里，不进文档与代码叙述）；CI 由 `scripts/review_lint.py` 守护（R1 屏幕字段泄露 / R2 具体工具名分支 / R3 缺抽象方法）。详见 **产品设计 §2** 与 **master-spec**。
+## 功能清单
 
-## 3. 技术选型
-
-| 层 | 技术 |
-|----|------|
-| Agent 循环 | **OpenAI Agents SDK**（`Runner` 驱动 ReAct 循环 + 流式事件） |
-| 状态机编排 | **LangGraph**（`Send` 并发扇出 + `update_state` 软注入） |
-| 后端 | Python + FastAPI / uvicorn（`backend/`） |
-| 本地推理 | llama.cpp（`llama-server`），本地模型作子 agent 槽位模型 / VLM |
-| 前端 | TypeScript + React 18 + Vite + MUI + Tailwind（单页 Shell，自研 store） |
-| 视觉 | SoM（Set-of-Marks）+ EasyOCR + YOLO 降级 |
-
-> 选型理由与行业对标（OSWorld / Codex 模式等）见 **产品设计 §3–§4**。
-
-## 架构速览
-
-两层 + Escalation 的通用 Agent Runtime：`Brain（在线规划）` → `Tool Runtime（SDK Runner 内层循环 + LangGraph 编排）` → `tool 插件层（device / vision / python / mcp 平级）` → `执行后端（devices/，L1，内核外）` → `Environment`。知识层旁路：`技能库 + 用户画像 + AGENTS.md 纪律 → 注入消费`（记忆轴已按 TencentDB Agent Memory 移植重建，现行架构见 `doc/plans/memory-architecture.md`）。
-
-> 全部架构图（分层框架 / MCP 解耦 / ReAct 闭环 / Vision SoM / 知识层（TAM）/ 两层执行 Escalation / 上下文管理 / 持久化检查点 / Project-Task 模型 / 前端设计）见 **架构设计 N1–N10**。
-
-## 目录地图
-
-| 路径 | 作用 |
-|------|------|
-| `omni_core/brain/` | 模型客户端 + 工具 schema + providers + SDK 循环（`sdk_loop.py`） |
-| `omni_core/local/` | 世界模型 / 观测 / ToolLoop（`loop/` 五 Mixin）/ skill / trajectory / telemetry / states |
-| `omni_core/tools/` | 四跳隔离工具插件层（device / vision / python / mcp 平级） |
-| `omni_core/orchestration/` | 通用多 agent 编排（LangGraph `Send` 扇出） |
-| `devices/` | 执行后端 L1（EmulatorBackend u2/ADB · HostBackend pyautogui），已从内核迁出 |
-| `llm_runtime/` | 模型无关推理后端（server / llama / api） |
-| `model_hub/` | 模型元数据 + llama-server 启停 / 端口 / `--mmproj` 探测 |
-| `backend/` | 后端 HTTP 服务 + API 路由（`api/routers/` 按域拆分）；`web/dist` 存在时同源承载前端（桌面壳/直连模式） |
-| `web/` | 前端（Chat / SkillsAndTools / Settings 三页，自研 store） |
-| `desktop/` | 桌面壳（Electron）：自动拉起后端 + 系统托盘，窗口加载后端同源 UI |
-| `tests/` | 测试 + 红线守护 |
+| 功能 | 说明 | 默认状态 |
+|---|---|---|
+| 桌面 / Web 对话 | 流式回答、思考与工具步骤可见、随时打断、消息排队、产物可开文件夹 | 开箱 |
+| 长期记忆 | 会话 → 原子记忆（`memory/brain.db`）→ 场景块 → 用户画像；相关性 + 重要度 + 新近度融合召回 | 开箱 |
+| 人格 / 角色卡 | 多角色切换，人格随会话持久化，并作为记忆召回的过滤维度 | 开箱 |
+| 项目与任务 | 项目 = 工作目录 + 项目级知识，任务 = 一次会话；右键改名、保存到项目、删除、打开文件夹 | 开箱 |
+| IM 通道 | QQ / 飞书 / 企微，群 @ 触发、私聊白名单、语音对语音、图片多模态、跨会话回看消息；QQ 侧「想回才回」（模型显式发消息，独白不外发） | 需配通道 |
+| 定时任务 | cron 触发 + 错过补偿 + 结果推送 + 运行记录 | 需跑网关 |
+| 语音 | 本地 SenseVoice 转写 + Kokoro 合成；开启后 Web 输入框按住说话，QQ 语音自动转写并语音回复 | 插件默认关 |
+| 看图 | 截图 / QQ 图片作为当轮图片输入直传模型；可选 OCR（RapidOCR）、可选 SoM 标注点击 | 开箱（模型需支持视觉） |
+| 操作本机 | 键鼠、截图、屏幕观测 | `plugins.host` 默认关 |
+| 操作安卓 | uiautomator2 / ADB：触控、按键、层级树、截图、文件 | `plugins.emulator` 默认关 |
+| 文件与联网 | 文件读 / 写 / 改 / 列举 / 递归检索；HTML 抓取转文本；无密钥联网搜索 | 开箱 |
+| 技能库 | 手写技能按需加载，项目级 / 全局两级，可一键提升为全局 | 开箱 |
+| 模型自由 | 云端 API + 本地 llama.cpp；多槽位模型目录，子 agent 可用不同（含本地快模型） | 开箱 |
+| 扩展 | MCP server、插件（`plugins/`）、新 IM 通道（`gateway/channels/`） | 开箱 |
+| 安全 | 敏感工具可要求人工审批（Web 弹窗，含审计日志）；外部通道默认无工具；每任务「完全访问」开关 | 开箱 |
 
 ## 快速开始
 
+### Windows 一键
+
 ```bash
-python -m venv .venv && .\.venv\Scripts\activate && pip install -r requirements.txt
-cd web && npm install && cd ..    # 前端依赖需手动装一次（脚本只提示不自动装）
-.\start_all.bat        # 后端 :8000 + 前端 :5173 一键起
-# 可选：为 worker 等槽位配置本地模型——llama-server 加载本地 VLM GGUF（默认 :8085）
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+cd web && npm install && cd ..
+.\start_all.bat                        # 后端 :8000 + 前端 :5173
+python -m gateway.channel_gateway      # 可选：IM 通道 + 定时任务
+.\start_all.bat stop                   # 停掉
 ```
 
-- 真 API key 与三通道配置仅存 `~/.omniagent/config.yaml`，仓库 `config.yaml` 已去明文；**首次启动后请先到 Web「设置」页配置模型端点与 API key**，否则对话无法调用模型（后端日志出现「配置文件未找到」属正常）。
-- 默认 `runtime.backend: host`（宿主机屏幕）；emulator 需自备 `adb_serial`。
-- 派发（dispatch）默认开启，单模型即可用（主 agent 自派发，并发与上下文隔离仍有价值）；要分层就两步：在 `~/.omniagent/models.json` 的 `defaults` 里声明槽位（如 `worker` / `researcher`），再在 `~/.omniagent/config.yaml` 的 `runtime.dispatch.agents` 里显式列出参与派发的槽（首个为默认槽）。
-- 前端访问用 `http://localhost:5173`（dev server 监听 IPv6 `::1`，`127.0.0.1` 可能连不上）；后端无窗口运行是刻意的（日志见 `backend.log` / `backend.err`），且**不要给 uvicorn 加 `--reload`**（Windows 下双进程抢绑端口会随机挂起）。
+首次启动后请到 Web「设置」页配置模型端点与 API key，否则对话无法调用模型（后端日志出现「配置文件未找到」属正常）。
 
-### 桌面应用（可选）
-
-不想开两个终端 + 浏览器，可以用 Electron 桌面壳：双击启动 → 自动拉起 `.venv` 后端 → 健康检查通过后加载 UI；关窗口缩到系统托盘（托盘可重启后端/看日志/退出，退出会杀整个后端进程树）。
+### 桌面应用（推荐日常使用）
 
 ```bash
 cd desktop
-npm install            # 首次；.npmrc 已配国内 CDN 镜像
-npm run dev            # 开发模式：vite + 后端 + Electron 三件套一键起
-npm run dist           # 打包：NSIS 安装包 + 免安装 portable exe（desktop/dist/）
+npm install          # 首次；.npmrc 已配国内镜像
+npm run dev          # vite + 后端 + 网关 + Electron 一键起
+npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 ```
 
-- 打包产物是**壳**（几 MB），后端代码与 `.venv` 仍指向本仓库（默认向上两级找，可用环境变量 `OMNIAGENT_HOME` 或 `omniagent.home` 文件指定仓库路径：portable 放 exe 同目录，安装版放 `<安装目录>\resources\`）——换机器需先按上文配好仓库。
-- `web/dist` 存在时后端直接同源 serve 前端（`http://127.0.0.1:8000` 可直开）；改动前端后需 `cd web && npm run build` 刷新。
-- 桌面壳可选项在 `config.yaml` 的 `desktop:` 段（热键 / 托盘开关 / 无边框 / 窗口尺寸），见 `config.example.yaml`。
+也可以回到仓库根目录跑 `pack_desktop.bat`（顺带先构建 `web/dist`）。桌面端会自动拉起后端与网关，关窗口缩到托盘（托盘可重启后端 / 看日志 / 退出）。打包产物是**壳**，后端与 `.venv` 仍指向本仓库（用 `OMNIAGENT_HOME` 或 `omniagent.home` 指定路径）。
 
-## 红线守护
+### 几个容易踩的坑
 
-`scripts/review_lint.py` 扫描 `omni_core/` 与 `devices/`，检测内核是否写死领域假设（R1 屏幕字段泄露 / R2 具体工具名分支 / R3 缺抽象方法），守护「内核零场景硬编码」。任何改动若给核心加场景判断，必须抽成工具 / skill。
+- dev server 监听 IPv6 `::1`，访问用 `http://localhost:5173`（`127.0.0.1` 可能连不上）。
+- 后端无窗口运行是刻意的，日志在 `backend.log` / `backend.err`；**不要给 uvicorn 加 `--reload`**（Windows 下双进程抢端口会随机挂起）。
+- 默认 `runtime.backend: host`（操作本机屏幕）；安卓需自备 `adb_serial`。
+- 派发默认开启，单模型也能用；要分层就在 `~/.omniagent/models.json` 声明槽位（如 `worker` / `researcher`），再在 `config.yaml` 的 `runtime.dispatch.agents` 里列出参与派发的槽。
 
-CI（`.github/workflows/redline-lint.yml`）在每次 push / PR 跑 `python scripts/review_lint.py --strict`（纯标准库、秒级反馈）；**刻意不跑 pytest**（测试依赖 torch / easyocr / opencv / pyautogui 等原生包）。
+## 配置与数据在哪
+
+| 路径 | 内容 |
+|---|---|
+| `~/.omniagent/config.yaml` | 模型端点 / API key、通道凭据、运行时开关（真密钥只在这） |
+| `~/.omniagent/models.json` | 模型目录与槽位（本地 GGUF、上下文、端口、视觉侧注） |
+| `~/.omniagent/cron/jobs.json` | 定时任务（改文件即时生效） |
+| `~/.omniagent/memory/` | 原子记忆库 `brain.db` + 全局用户画像 `user_profile.md` |
+| `~/.omniagent/projects/<project>/` | 会话历史 `*.jsonl`、场景块、技能、项目级 `AGENTS.md` |
+| `~/.omniagent/tasks/<task>/` | 单次任务的轨迹、世界模型、收集结果、任务级技能 |
+
+界面上：项目右键可**重命名**（只改显示名，不动目录与归属）/ 删除（级联删任务）；任务右键可改名、保存到项目、打开文件夹、删除。
+
+## 边界（诚实说明）
+
+- 个人学习项目，Windows 优先、单机部署，**不保证稳定性与体验**；使用后果自负。
+- 记忆机制已真机验证，**长期有效性仍在观察**；不是"过目不忘"。
+- 技能自动蒸馏默认关闭，早期试点未观察到步数收益，A/B 仍待补测。
+- OCR / SoM 是"模型直读图片"的补充手段，不构成通用屏幕理解。
+- 本地模型的效果取决于你选的 GGUF 与显存，不做质量承诺。
+- 外部通道默认无工具、群聊要 @，这是安全设计而非功能缺失。
+
+## 技术架构（给开发者）
+
+一句话链路：**Agent 循环**（OpenAI Agents SDK `Runner`）→ **工具层**（插件 / capability / MCP，平级可插拔）→ **编排**（LangGraph `Send` 扇出 + 子任务板）→ **知识层**（世界模型 / 技能 / 记忆 / 三层 `AGENTS.md` 注入）→ **FastAPI 后端** → **React 前端 / Electron 壳 / 常驻网关（IM + cron）**。
+
+| 层 | 技术 |
+|---|---|
+| Agent 循环 | OpenAI Agents SDK（`Runner` + 流式事件 + StopAtTools 收尾门控） |
+| 状态机编排 | LangGraph（`Send` 并发扇出、`update_state` 软注入） |
+| 后端 | Python + FastAPI / uvicorn |
+| 前端 | TypeScript + React 18 + Vite + MUI + Tailwind（自研 store） |
+| 桌面壳 | Electron（拉起后端 + 网关，托盘常驻） |
+| 本地推理 | llama.cpp `llama-server`（多槽位、`--mmproj` 视觉） |
+| 语音 / 视觉 | SenseVoice + Kokoro（ONNX）；RapidOCR；SoM 标注 |
+
+**核心红线**：内核零场景硬编码——加能力 = 写工具 / 插件，绝不把某个 app / 游戏 / 业务的判断塞进 `omni_core/`。`scripts/review_lint.py`（R1 屏幕字段泄露 / R2 具体工具名分支 / R3 缺抽象方法）由 CI 守护，任何场景分支都必须抽成工具。
+
+**目录地图**
+
+| 路径 | 作用 |
+|---|---|
+| `omni_core/brain/` | 模型客户端、prompt、SDK 循环与工具 schema |
+| `omni_core/local/` | 世界模型、观测、ToolLoop、技能、轨迹、任务/项目仓储、记忆执行 |
+| `omni_core/tools/` | 工具运行时：策略 / 审批、capability 注册、MCP、shell、技能、工作区 |
+| `omni_core/orchestration/` | 多 agent 编排（LangGraph 扇出 + 子任务板） |
+| `plugins/` | 能力插件：`filesystem` `web` `messaging` `host` `emulator` `voice` `ocr` `vision` |
+| `gateway/` | 常驻网关：`channels/`（napcat / feishu / wecom）、派发队列、cron 调度 |
+| `backend/` | HTTP 服务与 API 路由；`web/dist` 存在时同源承载前端 |
+| `web/` | 前端单页（对话 / 定时任务 / 技能与工具 / 设置） |
+| `desktop/` | Electron 壳：自动拉起后端 + 网关、托盘、打包 |
+| `model_hub/` `llm_runtime/` | 模型元数据与 llama-server 生命周期 / 推理后端 |
+| `scripts/` | 红线 lint、真机验证与基准脚本 |
+| `tests/` | 单测与回归 |
+
+**文档导航**
+
+| 文档 | 角色 |
+|---|---|
+| [`doc/agent-control-product-design.html`](doc/agent-control-product-design.html) | 产品设计（定位 / 原则 / 选型 / 对标） |
+| [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | 架构图集 N1–N10 |
+| [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | 架构决策权威（单一事实来源） |
+| [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | 消息通道机制（协议 / 能力门 / 场合自述） |
+| [`doc/plans/memory-architecture.md`](doc/plans/memory-architecture.md) | 记忆架构（L0–L3） |
+| [`spec/coding_standard.md`](spec/coding_standard.md) | 工程规范 |
+
+> 以上设计文档均为中文。许可证见 [LICENSE](LICENSE)。
 
 <a name="english"></a>
 
 ---
 
-# OmniAgent X3 · A General-purpose Agent Kernel
+# OmniAgent · A Resident AI Companion That Chats, Remembers and Gets Things Done
 
 [中文](#top) | **English**
 
-> **OmniAgent** is a **general-purpose** agent kernel: a main agent + graph-driven autonomous dispatch (the main agent decides whether and which executor slot to dispatch to), with models drawn from a multi-slot model catalog (`~/.omniagent/models.json`). The model completes tasks by calling **tools**; what it can do is fully determined by the tool list, and the kernel binds to no particular scenario. GUI / device control is merely the most-used application today, not the agent's predefined identity.
+> An AI companion that runs on your own machine: it chats on the desktop app, remembers you across sessions, speaks on your behalf in QQ / Feishu / WeCom, runs scheduled jobs, and can operate this computer or an Android device when needed.
 >
-> **How it is built (honest note)**: the ReAct loop and the function-call protocol are delegated to the **OpenAI Agents SDK** (`Runner`), and multi-agent state-machine orchestration to **LangGraph**. What this project builds itself is the **L2 orchestration layer** (termination gating / escalation decisions / budget & wall-clock / context management), the **tool runtime & plugin layer**, the **knowledge layer** (world model / skills / global memory) and the **execution backends** (device / GUI). So the contribution here is "orchestration + tools + knowledge layer", **not the agent loop itself**.
->
-> **Version X3**: the main agent plans and executes; sub-agents can be configured with per-slot models (including a local fast model for execution and visual perception).
-> ⚠️ Disclaimer: a personal learning project; stability and UX are not guaranteed; use at your own risk.
+> This is not a UI mock: memory (atomic memories → scene blocks → profile), voice in/out, multi-channel IM, cron, local models, MCP, plugins and human approval are all wired end to end. What it cannot do is listed under [Boundaries](#boundaries-honest-notes).
 
-## Capability & Boundary (read this first · a 30-second overview of where the project stands)
+## At a Glance
 
-**Implemented and verified on real hardware**
-- Main-agent execution loop (OpenAI Agents SDK) + autonomous dispatch: independent subtasks can be delegated to executor units configured per slot.
-- General tool runtime: adding a capability = writing a tool / provider; zero scene-specific logic in the kernel (enforced by a red-line lint + CI).
-- Local model lifecycle management, MCP integration, GUI / device execution backends.
-- **Message channels (gateway)**: a long-running gateway normalizes external IM events → dispatch → reply; adding a channel = one adapter file + one config block, with zero changes to dispatch or tools. External channels default to **chat-only** (`tools_enabled=false`, so the model receives no tool schema at all); source and speaker are written into the message by the channel, and `msg_recent` can look back across sessions. See [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md).
-- Session records are persisted incrementally with replay coalescing (crash-safe); three-layer AGENTS.md discipline injection (global → project → task); skill library (manually maintained + on-demand loading).
-  (Skill-chain revision: the mechanical-transcription chain was deleted on 2026-10-03 (A9); on 2026-10-04 the skill axis was retained as a **replayable macro cache** — default off — with structural extraction + replay executor, `skill.auto_distill` off by default, effectiveness unverified, see below.)
+| What you want | What it actually does |
+|---|---|
+| A continuous assistant | Desktop / browser chat with streaming output, visible tool steps, interrupt & queue, per-task "full access" toggle |
+| It remembers me | Every turn feeds an atomic memory store → scene blocks → user profile; recalled next time, profile editable by hand |
+| Reply for me | Always-on channels for QQ (NapCat), Feishu, WeCom — replies **as you**; groups require an @ mention; voice-in/voice-out; image understanding |
+| Work on schedule | Cron jobs with result push-back to a channel, plus a web UI for CRUD and run history |
+| Actually act | Keyboard/mouse/screenshot on this machine, or ADB on Android; file read/write/search, web fetch and search work out of the box |
+| Use my own models | Cloud APIs and local llama.cpp (GGUF) side by side; per-slot models for sub-agents, including a local vision model |
+| Extend it | MCP servers (stdio / streamable HTTP), plugins (one file = one capability), new IM channel = one adapter file |
 
-**Not yet verified (honest caveat)**
-- The **memory axis** is a direct port of **TencentDB Agent Memory** (current architecture in `doc/plans/memory-architecture.md`); the mechanism is live-verified, long-term effectiveness under observation.
-- **Skill macro axis (retained 2026-10-04, default off) effectiveness unverified**: an early real-device pilot closed with the mechanism validated end-to-end (distillation chain 5/5 runs, entry_id correctly distinguishing structural variants) but **zero step savings from injecting the skill sequence** (Δsteps=0 on a simple UI task) ⇒ value hinges entirely on the replay executor (skipping per-step LLM decisions); the A/B is still pending on Omni in scripted / deterministic-toolchain scenarios; `skill.auto_distill` is off by default.
-- Single domain, small sample size; not production-grade.
-- A skill-driven role-based team (team-mode) is **planned**: it will reuse the dispatch foundation's `agent` field and executor registry (see `doc/plans/`); not yet implemented.
+## Three Typical Setups
 
-## Documentation (authoritative sources)
+### 1. Daily driver (fastest path)
 
-| Document | Role |
-|----------|------|
-| [`doc/agent-control-product-design.html`](doc/agent-control-product-design.html) | Product design (positioning / principles / tech choices / industry comparison / conventions) |
-| [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | Architecture design (diagrams N1–N10) |
-| [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | **Authoritative architecture decisions (single source of truth)** |
-| [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | Message-channel (gateway) design: channel protocol / tool gate / source narration / cross-process send |
-| [`spec/coding_standard.md`](spec/coding_standard.md) | Engineering standard (current X3 coding conventions) |
+```bash
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+cd web && npm install && cd ..
+.\start_all.bat      # backend :8000 + frontend :5173
+```
 
-> ⚠️ The design documents listed above are written in Chinese.
+Open `http://localhost:5173` → **Settings → Models**, enter your endpoint and API key (or switch to a local GGUF), then chat. Real credentials live only in `~/.omniagent/config.yaml`; the repo ships `config.example.yaml` with no plaintext secrets.
 
-## 1. Positioning
+### 2. Speak for you on QQ
 
-- **What it is**: a general-purpose agent kernel (runtime). Control flow lives in the brain; the program degrades to a tool runtime (a thin ToolLoop shell). The ReAct loop itself is provided by the OpenAI Agents SDK.
-- **Capability == tool**: adding a capability = writing a tool / provider — never modifying the kernel. GUI / device control is a capability dynamically injected via the tool list, not the agent's identity.
+1. Install [NapCat](https://github.com/NapNeko/NapCatQQ) with HTTP (`:3000`) and WebSocket (`:3001`) enabled;
+2. Fill `channels.napcat` in `~/.omniagent/config.yaml` (`enabled` / `http_url` / `ws_url` / `token`);
+3. Start the gateway: `python -m gateway.channel_gateway` (the desktop app spawns it for you);
+4. Private chats reply directly; group chats respond only when mentioned (`require_at`). Voice messages are transcribed and answered with voice; images are genuinely understood.
 
-> See **Product Design §1** for detailed positioning, target users and differences from earlier versions.
+External channels are **chat-only** by default (`allow_tools: false`, the model never sees a tool schema): people can talk to it, but cannot touch your files or machine. Feishu / WeCom are structurally identical — one config block each.
 
-## 2. Core Principles & Red Lines
+### 3. Scheduled work with delivery
 
-Seven non-negotiable principles — the basis for all technical choices and a "smell test" for code review:
+Create a job in the web UI (or edit `~/.omniagent/cron/jobs.json` — hot-reloaded): one-line objective + cron expression + optional completion check + `notify_channel` for delivery. Run history and failure reasons are visible in the UI.
 
-1. **Control flow lives in the brain** — the model plans and decides which tools to call; the program is only a tool runtime.
-2. **Knowledge self-learned, no plugins** — the world model + skills are accumulated from runtime observation: runtime knowledge, not hard-coding.
-3. **Capability == tool (red line)** — the kernel only handles the general loop; adding a capability = writing a tool / provider.
-4. **Model-agnostic** — capability declarations come from model metadata and are injected into prompts dynamically; swapping models requires zero code changes.
-5. **Dispatch is optional** — whether to tier and which models each tier uses are decided by the model catalog; unconfigured, the runtime is a single main agent.
-6. **Honest boundary** — self-learning only grows "knowledge / strategy", never "hardware / tool precision"; a new skill must succeed N times in a row before being promoted.
-7. **Ultra-long task continuity** — a stateless brain + a persistent world model + sub-goal checkpoints let hour- or day-scale tasks keep their goal and resume after a crash.
+## Feature List
 
-> **Red line**: if a change adds an app / game / task-specific branch to `omni_core/`, it must be extracted into a tool / skill. `omni_core/` must contain zero scene-specific hard-coding (no proprietary token of any specific app / game / business); this is guarded in CI by `scripts/review_lint.py` (R1 screen-field leakage / R2 concrete-tool branching / R3 missing abstract methods). See **Product Design §2** and **master-spec**.
-
-## 3. Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Agent loop | **OpenAI Agents SDK** (`Runner` drives the ReAct loop + streaming events) |
-| State-machine orchestration | **LangGraph** (`Send` fan-out + `update_state` soft injection) |
-| Backend | Python + FastAPI / uvicorn (`backend/`) |
-| Local inference | llama.cpp (`llama-server`); the local model serves sub-agent slots / VLM |
-| Frontend | TypeScript + React 18 + Vite + MUI + Tailwind (single-page shell, hand-rolled store) |
-| Vision | SoM (Set-of-Marks) + EasyOCR + YOLO fallback |
-
-> Rationale and industry comparison (OSWorld / Codex patterns, etc.) in **Product Design §3–§4**.
-
-## Architecture Overview
-
-A two-tier + Escalation general-purpose agent runtime: `Brain (online planning)` → `Tool Runtime (SDK Runner inner loop + LangGraph orchestration)` → `tool plugin layer (device / vision / python / mcp, all peers)` → `execution backend (devices/, L1, outside the kernel)` → `Environment`. Knowledge-layer side path: `skill library + user profile + AGENTS.md discipline → injection` (the memory axis is a TencentDB Agent Memory port, current architecture in `doc/plans/memory-architecture.md`).
-
-> All architecture diagrams (layered framework / MCP decoupling / ReAct loop / Vision SoM / knowledge layer (TAM) / two-tier execution escalation / context management / persistence checkpoints / Project-Task model / frontend design) are in **Architecture Design N1–N10**.
-
-## Repository Map
-
-| Path | Purpose |
-|------|---------|
-| `omni_core/brain/` | Model clients + tool schema + providers + SDK loop (`sdk_loop.py`) |
-| `omni_core/local/` | World model / observation / ToolLoop (`loop/`, five mixins) / skill / trajectory / telemetry / states |
-| `omni_core/tools/` | Four-hop isolated tool plugin layer (device / vision / python / mcp, all peers) |
-| `omni_core/orchestration/` | General multi-agent orchestration (LangGraph `Send` fan-out) |
-| `devices/` | Execution backend L1 (EmulatorBackend u2/ADB · HostBackend pyautogui), moved out of the kernel |
-| `llm_runtime/` | Model-agnostic inference backend (server / llama / api) |
-| `model_hub/` | Model metadata + llama-server start/stop / ports / `--mmproj` detection |
-| `backend/` | Backend HTTP service + API routes (`api/routers/`, split by domain); serves `web/dist` same-origin when present (desktop shell / direct-access mode) |
-| `web/` | Frontend (Chat / SkillsAndTools / Settings pages, hand-rolled store) |
-| `desktop/` | Electron shell: auto-spawns the backend + system tray, loads the same-origin UI |
-| `tests/` | Tests + red-line guards |
+| Feature | Notes | Default |
+|---|---|---|
+| Desktop / web chat | Streaming, visible reasoning and tool steps, interrupt, message queue, open task folder | On |
+| Long-term memory | Sessions → atomic memory (`memory/brain.db`) → scene blocks → profile; recall ranks by relevance + salience + recency | On |
+| Personas | Multiple character cards; persona persists per session and filters memory recall | On |
+| Projects & tasks | Project = workspace + project knowledge, task = one session; rename / save-to-project / delete / open folder | On |
+| IM channels | QQ / Feishu / WeCom, group @ trigger, private allow-list, voice replies, image input, cross-session lookback; on QQ the model speaks only when it chooses to (explicit send, no inner-monologue leakage) | Needs config |
+| Cron jobs | Trigger + missed-run catch-up + result delivery + run history | Needs gateway |
+| Voice | Local SenseVoice STT + Kokoro TTS; hold-to-talk in the web UI, QQ voice auto-transcribed and answered with voice | Plugin off |
+| Vision | Screenshots / QQ images sent to a multimodal model; optional OCR (RapidOCR), optional SoM clicking | On (model dependent) |
+| Control this PC | Keyboard, mouse, screenshot, screen observation | `plugins.host` off |
+| Control Android | uiautomator2 / ADB: touch, keys, view hierarchy, screenshot, files | `plugins.emulator` off |
+| Files & web | Read / write / edit / list / recursive grep; HTML→text fetch; keyless web search | On |
+| Skills | Hand-written skills loaded on demand, project & global tiers, promote to global | On |
+| Model freedom | Cloud APIs + local llama.cpp; multi-slot catalog; per-sub-agent models | On |
+| Extensibility | MCP servers, plugins (`plugins/`), new IM channel (`gateway/channels/`) | On |
+| Safety | Approval prompts for sensitive tools (with audit log), tool-less external channels, per-task full-access toggle | On |
 
 ## Quick Start
 
+### Windows, one click
+
 ```bash
-python -m venv .venv && .\.venv\Scripts\activate && pip install -r requirements.txt
-cd web && npm install && cd ..    # frontend deps must be installed once (the script only warns)
-.\start_all.bat        # starts backend :8000 + frontend :5173
-# optional: configure a local model for the worker slot — llama-server loading a local VLM GGUF (default :8085)
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+cd web && npm install && cd ..
+.\start_all.bat                        # backend :8000 + frontend :5173
+python -m gateway.channel_gateway      # optional: IM channels + cron
+.\start_all.bat stop                   # stop everything
 ```
 
-- The real API key and three-channel config live only in `~/.omniagent/config.yaml`; the repo's `config.yaml` carries no plaintext secrets. **On first launch, configure your model endpoint and API key in the Web Settings page** before chatting ("config file not found" in backend logs is normal on a fresh setup).
-- Default `runtime.backend: host` (host machine screen); emulator mode requires your own `adb_serial`.
-- Dispatch is enabled by default and works with a single model (the main agent self-dispatches; concurrency and context isolation still add value). To tier it up: declare slots in the `defaults` section of `~/.omniagent/models.json` (e.g. `worker` / `researcher`), then explicitly list the dispatch-enabled slots in `runtime.dispatch.agents` of `~/.omniagent/config.yaml` (the first one is the default slot).
-- Open the frontend at `http://localhost:5173` (the dev server listens on IPv6 `::1`; `127.0.0.1` may not connect). The backend intentionally runs windowless (see `backend.log` / `backend.err`), and **do not add `--reload` to uvicorn** (on Windows the reloader double-binds the port and connections randomly hang).
+Configure the model endpoint and API key in Settings before the first conversation ("config file not found" in backend logs is normal on a fresh setup).
 
-### Desktop app (optional)
+### Desktop app (recommended for daily use)
 
-An Electron shell is available under `desktop/`: one click starts the app, auto-spawns the `.venv` backend, waits for health, then loads the UI; closing the window minimizes to the tray (restart backend / open logs / quit from the tray menu; quitting kills the backend process tree). Run `cd desktop && npm install`, then `npm run dev` (dev) or `npm run dist` (NSIS installer + portable exe into `desktop/dist/`). The packaged shell points at this repo (override with `OMNIAGENT_HOME` or an `omniagent.home` file next to the exe). When `web/dist` exists, the backend serves the frontend same-origin at `http://127.0.0.1:8000`.
+```bash
+cd desktop
+npm install          # first run; China CDN mirror preconfigured
+npm run dev          # vite + backend + gateway + Electron
+npm run dist         # NSIS installer + portable exe (desktop/dist/)
+```
 
-## Red-Line Guard
+Or run `pack_desktop.bat` from the repo root (builds `web/dist` first). The shell auto-spawns backend and gateway and minimizes to the tray. Packages ship the **shell only**; backend code and `.venv` still point at this repo (`OMNIAGENT_HOME` or an `omniagent.home` file overrides the path).
 
-`scripts/review_lint.py` scans `omni_core/` and `devices/` for hard-coded domain assumptions (R1 screen-field leakage / R2 concrete-tool branching / R3 missing abstract methods), guarding "zero scene-specific hard-coding in the kernel". Any change that adds a scene branch to the core must be extracted into a tool / skill.
+### Gotchas
 
-CI (`.github/workflows/redline-lint.yml`) runs `python scripts/review_lint.py --strict` on every push / PR (pure stdlib, sub-second feedback). It deliberately does **not** run pytest (the tests depend on native packages such as torch / easyocr / opencv / pyautogui).
+- The dev server listens on IPv6 `::1` — use `http://localhost:5173` (`127.0.0.1` may fail).
+- The backend is intentionally windowless; logs go to `backend.log` / `backend.err`. **Do not add `--reload` to uvicorn** (the reloader double-binds the port on Windows and hangs).
+- Default `runtime.backend: host` (this machine's screen); Android needs your own `adb_serial`.
+- Dispatch is on by default and works with a single model. To tier it: declare slots in `~/.omniagent/models.json` (`worker` / `researcher`), then list them in `runtime.dispatch.agents`.
+
+## Where Config and Data Live
+
+| Path | Contents |
+|---|---|
+| `~/.omniagent/config.yaml` | Model endpoints / API keys, channel credentials, runtime switches |
+| `~/.omniagent/models.json` | Model catalog and slots (local GGUF, context, port, vision sidecar) |
+| `~/.omniagent/cron/jobs.json` | Cron jobs (hot-reloaded) |
+| `~/.omniagent/memory/` | Atomic memory store `brain.db` + global profile `user_profile.md` |
+| `~/.omniagent/projects/<project>/` | Session `*.jsonl`, scene blocks, skills, project `AGENTS.md` |
+| `~/.omniagent/tasks/<task>/` | Trajectory, world model, collected results, task-level skills |
+
+In the UI: right-click a project to rename (display name only) or delete (cascades to its tasks); right-click a task to rename, save to project, open folder, or delete.
+
+## Boundaries (honest notes)
+
+- Personal learning project, Windows-first, single machine, **no stability or UX guarantee**; use at your own risk.
+- Memory mechanism is live-verified, **long-term effectiveness still under observation**.
+- Automatic skill distillation is off by default: an early pilot showed no step savings, A/B still pending.
+- OCR / SoM complement model-native image reading; they are not general screen understanding.
+- Local model quality depends on the GGUF and your VRAM; no promises.
+- Tool-less external channels and @-only group replies are deliberate safety choices, not missing features.
+
+## Architecture (for developers)
+
+One line: **agent loop** (OpenAI Agents SDK `Runner`) → **tool layer** (plugins / capabilities / MCP, peers) → **orchestration** (LangGraph `Send` fan-out + subtask board) → **knowledge layer** (world model / skills / memory / three-tier `AGENTS.md` injection) → **FastAPI backend** → **React frontend / Electron shell / always-on gateway (IM + cron)**.
+
+| Layer | Tech |
+|---|---|
+| Agent loop | OpenAI Agents SDK (`Runner`, streaming, StopAtTools gating) |
+| Orchestration | LangGraph (`Send` fan-out, `update_state` soft injection) |
+| Backend | Python + FastAPI / uvicorn |
+| Frontend | TypeScript + React 18 + Vite + MUI + Tailwind (hand-rolled store) |
+| Desktop shell | Electron (spawns backend + gateway, tray-resident) |
+| Local inference | llama.cpp `llama-server` (multi-slot, `--mmproj` vision) |
+| Voice / vision | SenseVoice + Kokoro (ONNX); RapidOCR; SoM markup |
+
+**Core red line**: zero scene-specific logic in the kernel — adding a capability means writing a tool / plugin, never hard-coding an app, game or business branch into `omni_core/`. `scripts/review_lint.py` (R1 screen-field leakage / R2 concrete-tool branching / R3 missing abstract methods) runs in CI.
+
+**Repository map**
+
+| Path | Purpose |
+|---|---|
+| `omni_core/brain/` | Model clients, prompts, SDK loop and tool schemas |
+| `omni_core/local/` | World model, observation, ToolLoop, skills, trajectory, task/project stores, memory execution |
+| `omni_core/tools/` | Tool runtime: policy / approvals, capability registry, MCP, shell, skills, workspace |
+| `omni_core/orchestration/` | Multi-agent orchestration (LangGraph fan-out + subtask board) |
+| `plugins/` | Capability plugins: `filesystem` `web` `messaging` `host` `emulator` `voice` `ocr` `vision` |
+| `gateway/` | Always-on gateway: `channels/` (napcat / feishu / wecom), dispatch queue, cron scheduler |
+| `backend/` | HTTP service and API routes; serves `web/dist` same-origin when present |
+| `web/` | Single-page frontend (chat / cron / skills & tools / settings) |
+| `desktop/` | Electron shell: spawns backend + gateway, tray, packaging |
+| `model_hub/` `llm_runtime/` | Model metadata and llama-server lifecycle / inference backends |
+| `scripts/` | Red-line lint, real-device verification and benchmarks |
+| `tests/` | Unit and regression tests |
+
+**Documentation**
+
+| Document | Role |
+|---|---|
+| [`doc/agent-control-product-design.html`](doc/agent-control-product-design.html) | Product design (positioning / principles / tech choices) |
+| [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | Architecture diagrams N1–N10 |
+| [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | Authoritative architecture decisions |
+| [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | Message-channel design (protocol / tool gate / narration) |
+| [`doc/plans/memory-architecture.md`](doc/plans/memory-architecture.md) | Memory architecture (L0–L3) |
+| [`spec/coding_standard.md`](spec/coding_standard.md) | Engineering standard |
+
+> The design documents above are written in Chinese. License: [LICENSE](LICENSE).

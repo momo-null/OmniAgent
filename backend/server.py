@@ -29,6 +29,7 @@ from backend.api.router_system import router as system_router
 from backend.api.routers.debug_api import router as debug_router
 from backend.api.router_settings import router as settings_router
 from backend.api.router_cron import router as cron_router
+from backend.api.routers.audio_api import router as audio_router
 
 # ── 服务配置 ──────────────────────────────────────────────
 _server_cfg = (config.load_config() or {}).get("server", {}) or {}
@@ -40,17 +41,29 @@ PORT: int = int(_server_cfg.get("port", 8000))
 
 
 def _require_auth_for_nonloopback() -> None:
-    """非回环绑定但缺认证 token 时拒绝启动（安全门）。"""
+    """非回环绑定但缺认证 token 时拒绝启动（安全门）。
+
+    显式逃生门：``server.allow_tokenless_lan: true`` = 用户知情选择局域网无鉴权
+    直连（公网面统一走网关鉴权、局域网临时测试等场景），跳过本门并打大字警告。
+    配了 auth_token 时本开关无效果——有 token 永远按 token 校验。
+    """
     host = (HOST or "127.0.0.1").strip().lower()
     is_loopback = host in {"127.0.0.1", "localhost", "::1", "0:0:0:0:0:0:0:1"}
     if is_loopback:
         return
-    # 允许显式"全网卡但需认证"的 0.0.0.0 / 空串（视为非回环，需 token）
+    if _server_cfg.get("allow_tokenless_lan"):
+        print("=" * 66)
+        print("[安全警告] server.allow_tokenless_lan=true：API 未鉴权暴露给局域网")
+        print("           （shell_exec/文件/键鼠等全套能力）。请确认这是你的选择。")
+        print("=" * 66)
+        logger.warning("allow_tokenless_lan=true: API exposed to LAN WITHOUT auth")
+        return
     if not _server_cfg.get("auth_token"):
         raise SystemExit(
             f"[安全] 服务绑定到非回环地址 {HOST!r}，但 server.auth_token 未配置。\n"
-            f"        若需对外暴露，请在 config.yaml 的 server 段设置 auth_token；"
-            f"否则请将 host 改回 127.0.0.1。"
+            f"        若需对外暴露，请在 config.yaml 的 server 段设置 auth_token；\n"
+            f"        局域网临时直连可设 allow_tokenless_lan: true（自行承担风险）；\n"
+            f"        否则请将 host 改回 127.0.0.1。"
         )
 
 
@@ -125,6 +138,25 @@ async def value_error_handler(request: Request, exc: ValueError):
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
 
 
+# ── 请求级鉴权（PC-0）：非回环来源访问 API 必须 Bearer server.auth_token ──
+# 豁免：/health（手机端探活）与非 API 路径（静态 UI 要能加载，API 另行拦截）。
+# token 为空时放行——非回环绑定被启动安全门强制要求 token，正常运行时该分支只在
+# 回环绑定（本机）下可达；uvicorn CLI 覆盖 --host 的旁路场景以启动门为准。
+@app.middleware("http")
+async def _pc0_auth_middleware(request: Request, call_next):
+    path = request.url.path
+    is_api = path.startswith("/api") or path.startswith("/v1")
+    client_host = request.client.host if request.client else ""
+    loopback = client_host in {"127.0.0.1", "::1", "localhost"}
+    if not is_api or loopback:
+        return await call_next(request)
+    token = str(config.get_config("server.auth_token") or "").strip()
+    if not token:
+        return await call_next(request)
+    if request.headers.get("authorization", "") == f"Bearer {token}":
+        return await call_next(request)
+    return JSONResponse({"detail": "需要鉴权"}, status_code=401)
+
 # CORS：允许 web 前端（dev: vite 5173）跨域访问
 app.add_middleware(
     CORSMiddleware,
@@ -141,6 +173,7 @@ app.include_router(llm_router)
 app.include_router(system_router)
 app.include_router(settings_router)
 app.include_router(cron_router)
+app.include_router(audio_router)
 # ── Debug 模块挂载（可整体删除：删本行 + backend/api/routers/debug_api.py +
 #    前端 web/src/components/DebugPanel.tsx 与 web/src/api/debugApi.ts） ──
 app.include_router(debug_router)

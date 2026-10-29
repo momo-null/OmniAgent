@@ -85,7 +85,7 @@ def _ensure_outbox(task_id: str) -> Dict[str, "collections.deque"]:
 _outbox_seq = itertools.count(1)
 _outbox_cursor: Dict[tuple, int] = {}
 _OUTBOX_CHANNELS = ("chat", "debug", "thinking", "toolcall", "message",
-                    "approval", "approval_resolved")
+                    "approval", "approval_resolved", "tasks_changed")
 
 
 def _stamp(entry: dict) -> dict:
@@ -272,6 +272,27 @@ def push_chat(role: str, text: str, extra: Optional[dict] = None, debug: bool = 
     else:
         box["chat"].append(entry)
 
+def push_tasks_changed(task_id: str, project_id: str = "", kind: str = "run_done") -> None:
+    """跨进程事件桥（B0）：外部进程（网关）跑完/新建会话后，通知 Web 端「这个会话变了」。
+
+    背景：SSE outbox 是**本进程内存**队列，而 QQ/飞书等消息由 ``gateway`` 进程处理，
+    它跑完一轮前端完全不知道（只有刷新页面才看到）。网关改为在轮次开始/结束时
+    POST 内部端点，由本进程把这条事实推进 outbox：
+    - 目标 task 的 outbox（前端正打开该会话时能收到）；
+    - ``_global`` outbox（前端通过旁路订阅 ``sub=ui`` 常驻收听）。
+    前端收到只做「刷新任务列表 + 按需重拉该会话历史」，不假装有流式过程。
+    """
+    if not task_id:
+        return
+    entry = _stamp({"task_id": task_id, "project_id": project_id or "", "kind": kind,
+                    "ts": time.time()})
+    for tid in (task_id, "_global"):
+        try:
+            _ensure_outbox(tid)["tasks_changed"].append(dict(entry))
+        except Exception:
+            pass
+
+
 def push_thinking(role: str, content: str, model: str = "", task_id: str = ""):
     """推一条「深度思考」事件到对话区（左栏），经 SSE `thinking` 事件实时渲染。
 
@@ -409,25 +430,6 @@ def _make_brain_cfg(model: Optional[str] = None):
         if not os.environ.get(env_key):
             executor_cfg["api_key"] = "dummy"
     return brain_cfg, executor_cfg
-
-def _mode_brain_cfg(model: Optional[str] = None, mode: str = "auto"):
-    """按 mode 选模型槽（plan §3.1）：chat 优先 ``voice`` 槽，目录未启用则回退主槽。
-
-    ``voice`` 槽与 ``main`` / ``worker`` 同级，都是模型目录里的用途位——语音要的是
-    "快、便宜、能对话"，和"能干活"的主槽是不同取舍。没配就完全沿用主槽（零回归）。
-    """
-    brain_cfg, executor_cfg = _make_brain_cfg(model)
-    if str(mode or "").lower() == "chat":
-        try:
-            from omni_core.brain import router as model_router
-
-            _v = dict(model_router.resolve_slot("voice") or {})
-        except Exception:  # noqa: BLE001
-            _v = {}
-        if _v.get("base_url"):
-            brain_cfg = {**brain_cfg, **_v}
-    return brain_cfg, executor_cfg
-
 
 def _append_task_name(task_id: str, name: str):
     """agent 提炼出的任务名回写 task 索引（仅当有变化）。"""

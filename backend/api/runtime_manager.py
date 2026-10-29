@@ -23,8 +23,9 @@ AGENT_MAIN = "main"
 
 # task-scoped outbox 通道（与前端 SSE 事件类型一一对应）。
 # S2 审批：approval=推卡；approval_resolved=决议/超时/取消（前端据此收起顶置卡）。
+# tasks_changed：跨进程事件桥（网关跑完外部会话 → 通知 UI 刷新，不携带对话内容）。
 _OUTBOX_KEYS = ("chat", "debug", "thinking", "toolcall", "message",
-                "approval", "approval_resolved")
+                "approval", "approval_resolved", "tasks_changed")
 
 
 @dataclass

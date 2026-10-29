@@ -80,6 +80,7 @@ class UpdateTaskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     objective: Optional[str] = Field(default=None, min_length=1, max_length=4000)
+    title: Optional[str] = Field(default=None, max_length=200)  # 会话展示名（UI 标题）
     done_when: Optional[str] = Field(default=None, max_length=2000)
     state: Optional[Literal["pending", "running", "done", "failed", "aborted"]] = None
     full_access: Optional[bool] = None

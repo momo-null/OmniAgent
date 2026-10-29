@@ -242,7 +242,9 @@ function showErrorState(err: Error): void {
 /** 拉起网关并挂自愈链：每次重启的实例都要重新挂 exit 监听（链才不断） */
 function spawnGatewayWithRestart(root: string): void {
   if (quitting) return;
-  gateway = startGateway(root);
+  // 后端端口可能是 findFreePort 拿到的非 8000，交给网关做事件通知的目标地址
+  const backendUrl = backend ? `http://127.0.0.1:${backend.port}` : "";
+  gateway = startGateway(root, backendUrl);
   gateway.once("exit", (code) => {
     if (quitting) return;
     shellLog(`gateway 退出(code=${code})，5s 后自动重启`);

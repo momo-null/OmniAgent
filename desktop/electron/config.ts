@@ -75,3 +75,19 @@ export function loadDesktopConfig(projectRoot: string | null): DesktopConfig {
     },
   };
 }
+
+/** 后端绑定地址（server.host，PC-0 绑定贯通）：与后端 server.py 同源读配置，缺省回环。 */
+export function serverHost(projectRoot: string | null): string {
+  let merged: Record<string, unknown> = {};
+  const sources = [
+    projectRoot ? join(projectRoot, "config.yaml") : null,
+    join(homedir(), ".omniagent", "config.yaml"),
+  ];
+  for (const src of sources) {
+    if (!src) continue;
+    merged = deepMerge(merged, readYaml(src) ?? {});
+  }
+  const s = (merged.server ?? {}) as Record<string, unknown>;
+  const host = typeof s.host === "string" ? s.host.trim() : "";
+  return host || "127.0.0.1";
+}

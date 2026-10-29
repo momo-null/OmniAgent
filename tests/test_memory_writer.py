@@ -34,22 +34,21 @@ def test_enqueue_pops_capture_at_enqueue_time(monkeypatch):
     calls = []
 
     def fake_flush(pid, cfg=None, source_task="", persona="", msgs=None,
-                   allow_episode=True, allow_write=True):
+                   allow_write=True):
         calls.append({"pid": pid, "msgs": msgs, "persona": persona,
-                      "allow_episode": allow_episode, "allow_write": allow_write})
+                      "allow_write": allow_write})
         return {"stored": 1}
 
     monkeypatch.setattr(memory_brain, "pop_capture", fake_pop)
     monkeypatch.setattr(memory_brain, "flush_brain", fake_flush)
     done = []
     assert memory_writer.enqueue("p1", {"m": "x"}, source_task="t1", persona="pp",
-                                 did_work=False, allow_episode=False,
+                                 did_work=False,
                                  on_done=done.append) is True
     assert popped == ["p1"], "入队时就该 pop"
     assert memory_writer.wait_idle(5.0)
     assert calls and calls[0]["msgs"][0]["content"] == "a"
     assert calls[0]["persona"] == "pp"
-    assert calls[0]["allow_episode"] is False
     assert calls[0]["allow_write"] is False, "did_work=False 必须门掉 L2 写"
     assert done and done[0]["stored"] == 1, "on_done 要拿到 stats"
 
@@ -59,7 +58,7 @@ def test_worker_serializes_and_counts(monkeypatch):
     order = []
 
     def fake_flush(pid, cfg=None, source_task="", persona="", msgs=None,
-                   allow_episode=True, allow_write=True):
+                   allow_write=True):
         order.append(source_task)
         time.sleep(0.02)
         return {}
@@ -89,7 +88,7 @@ def test_flush_failure_is_isolated(monkeypatch):
     seen = []
 
     def flaky(pid, cfg=None, source_task="", persona="", msgs=None,
-              allow_episode=True, allow_write=True):
+              allow_write=True):
         seen.append(source_task)
         if source_task == "bad":
             raise RuntimeError("boom")
@@ -114,8 +113,9 @@ def test_enqueue_never_raises_on_bad_input(monkeypatch):
     assert memory_writer.enqueue("p", None) is False
 
 
-def test_flush_brain_respects_allow_episode_and_allow_write(monkeypatch, tmp_path):
-    """端到端：chat 模式（allow_episode=False）丢弃 episode；did_work=False 不跑 L2。"""
+def test_flush_brain_stores_episode_and_gates_l2_by_did_work(monkeypatch, tmp_path):
+    """端到端（2026-10-29 收窄）：episode 无入口门——价值判是唯一守门人，说留就留；
+    did_work=False 仍门掉 L2 写。"""
     from omni_core.local import scene_executor
 
     db = tmp_path / "brain.db"
@@ -127,22 +127,22 @@ def test_flush_brain_respects_allow_episode_and_allow_write(monkeypatch, tmp_pat
     monkeypatch.setattr(scene_executor, "maybe_maintain",
                         lambda *a, **k: l2.append(k.get("allow_write")))
 
-    script = [{"facts": [{"text": "用户在闲聊里提到今天下雨"}]},
+    script = [{"facts": [{"text": "用户上周去了西安看兵马俑"}]},
               {"items": [{"idx": 0, "keep": True, "kind": "episode", "importance": 0.6}]}]
     monkeypatch.setattr(memory_brain.llm_judge, "chat_json",
                         lambda *a, **k: script.pop(0))
 
     stats = memory_brain.flush_brain(
-        "p", {"model": "m"}, msgs=[{"role": "user", "content": "今天下雨了"},
-                                   {"role": "assistant", "content": "是啊"}],
-        allow_episode=False, allow_write=False)
-    assert stats["episode_dropped"] == 1
-    assert stats["stored"] == 0, "episode 被丢弃后不应入库"
+        "p", {"model": "m"}, msgs=[{"role": "user", "content": "我上周去了西安"},
+                                   {"role": "assistant", "content": "兵马俑值得一去"}],
+        allow_write=False)
+    assert stats["stored"] == 1, "episode 无入口门：价值判说留就留"
     assert l2 == [False], "did_work=False 时 L2 收到的 allow_write 必须是 False"
 
     conn = memory_brain.open_brain()
     try:
-        assert conn.execute("SELECT COUNT(*) FROM atoms").fetchone()[0] == 0
+        rows = conn.execute("SELECT kind FROM atoms").fetchall()
+        assert [r[0] for r in rows] == ["episode"]
     finally:
         conn.close()
     memory_brain._buffers.clear()

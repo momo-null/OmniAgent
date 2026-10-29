@@ -94,9 +94,18 @@ def _on_message(msg) -> None:
     # 网关只读通道自声明，不判断"这是谁发的"——判定权在通道适配器。
     dispatch.submit(msg.text, source=f"msg:{msg.channel}", reply=msg.reply,
                     project_id=project_id or None, session_id=session_id or None,
+                    # 标题/历史用通道自声明的「人话」（text 里可能带场合自述前缀，
+                    # 只该喂模型，不该进侧栏标题与会话气泡）
+                    title=str(getattr(msg, "title", "") or ""),
+                    display_text=str(getattr(msg, "display_text", "") or "") or msg.text,
+                    # 回发模式由通道自声明（QQ=explicit 显式发送；飞书/企微=auto 直连）
+                    reply_mode=str(getattr(msg, "reply_mode", "auto") or "auto"),
                     tools_enabled=bool(getattr(msg, "allow_tools", False)),
                     # 多模态附件只作用于当轮（会话记录仍写文本投影，不落 base64）
-                    attachments=list(getattr(msg, "attachments", None) or []))
+                    attachments=list(getattr(msg, "attachments", None) or []),
+                    # 入站是语音：仅 auto 通道（Web/飞书直连）据此自动语音回发；
+                    # explicit 通道（QQ 等）不自动回发，发不发语音由模型调 msg_send_voice 决定。
+                    voice_reply=bool(getattr(msg, "voice", False)))
 
 
 def _route_chat(msg) -> tuple:
@@ -121,11 +130,26 @@ def _route_chat(msg) -> tuple:
     return project_id, session_id
 
 
+def _ensure_plugins() -> None:
+    """预装载插件（幂等）：语音等 capability 在插件 startup 时注册，网关进程必须
+    先装载一次——否则第一条语音消息到达时 capability 还不存在（worker 里 ToolLoop
+    装载发生在派发之后，晚于语音转写）。"""
+    try:
+        import config as _config
+
+        from omni_core.tools.loader import load_plugins
+
+        load_plugins(_config.load_config() or {})
+    except Exception as e:
+        print(f"[gateway] 插件预装载失败（语音等能力可能不可用）: {e}")
+
+
 def main() -> int:
     no_channels = "--no-channels" in sys.argv
     no_scheduler = "--no-scheduler" in sys.argv
     print("[gateway] 启动（Ctrl+C 退出）")
     dispatch.ensure_worker()
+    _ensure_plugins()
 
     n = 0 if no_channels else start_channels()
     if not no_channels and n == 0:

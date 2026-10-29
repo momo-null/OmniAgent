@@ -553,6 +553,8 @@ class SdkBridgeMixin:
             gate=gate,
             mcp_servers=self.mcp_servers if getattr(self, "tools_enabled", True) else [],
             tools_enabled=getattr(self, "tools_enabled", True),
+            # 受限能力白名单：纯对话通道也允许的少数工具（如显式发送）
+            tool_allowlist=sorted(getattr(self, "tool_allowlist", None) or []),
             max_steps=max_steps,
             wallclock_sec=wallclock_sec,
             task_mode=getattr(spec, "task_mode", "oneshot"),
