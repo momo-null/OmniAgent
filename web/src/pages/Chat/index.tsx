@@ -280,7 +280,7 @@ function SpeakButton({ text }: { text: string }) {
   );
 }
 
-// ── 按住说话（微信对讲式）：按下打断播报并录 16k WAV，松手转写 → 按当前态投递 ──
+// ── 按住说话（对讲式）：按下打断播报并录 16k WAV，松手转写 → 按当前态投递 ──
 function MicButton({ onPressStart, onText }: {
   onPressStart: () => void;
   onText: (t: string) => void;
@@ -747,7 +747,7 @@ export default function Chat() {
     sendMessage(text, fullAccess, modelSel || undefined);
   };
 
-  // 语音（微信对讲式）：转写文本按当前态投递——空闲直发，运行中注入/排队（与打字同路）
+  // 语音（对讲式）：转写文本按当前态投递——空闲直发，运行中注入/排队（与打字同路）
   const handleVoiceText = (text: string) => {
     const t = (text || "").trim();
     if (!t) return;
