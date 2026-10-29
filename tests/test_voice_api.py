@@ -168,13 +168,8 @@ class TestVoicePluginEngine:
         assert len(FakeStream.got) == 16000 * 60, "61s 音频必须截断到 60s"
 
     def test_tts_produces_wav_and_enforces_caps(self, monkeypatch):
-        class FakeSynth:
-            # 与 kokoro-onnx 真实签名一致：lang（不是 language）+ is_phonemes
-            def create(self, text, voice="", speed=1.0, lang="en-us", is_phonemes=False):
-                assert len(text) <= 500
-                return np.zeros(2400, dtype="float32"), 24000
-
-        monkeypatch.setattr(voice_plugin, "_TTS", {"obj": FakeSynth()})
+        monkeypatch.setattr(voice_plugin, "_tts_cosyvoice2",
+                            lambda text, voice: b"RIFF" + b"\0" * 4)
         out = voice_plugin.tts("你好")
         assert out[:4] == b"RIFF"
         with pytest.raises(ValueError):
