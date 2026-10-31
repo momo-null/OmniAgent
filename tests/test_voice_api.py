@@ -168,7 +168,7 @@ class TestVoicePluginEngine:
         assert len(FakeStream.got) == 16000 * 60, "61s 音频必须截断到 60s"
 
     def test_tts_produces_wav_and_enforces_caps(self, monkeypatch):
-        monkeypatch.setattr(voice_plugin, "_tts_cosyvoice2",
+        monkeypatch.setattr(voice_plugin, "_tts_dispatch",
                             lambda text, voice: b"RIFF" + b"\0" * 4)
         out = voice_plugin.tts("你好")
         assert out[:4] == b"RIFF"
