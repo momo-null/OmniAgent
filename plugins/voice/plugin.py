@@ -27,19 +27,37 @@ TTS = CosyVoice2 零样本音色克隆（单引擎）。推理代码在 ``cosyvo
 """
 from __future__ import annotations
 
+import base64
 import io
+import json
 import os
+import queue
+import subprocess
 import sys
+import threading
+import time
+from typing import List, Optional
 
 from utils import get_logger
 
 logger = get_logger("plugins.voice")
 
+#: STT 留在本进程（SenseVoice ONNX，200-300MB，转写要即时）；TTS 引擎在子进程
+#: （CosyVoice2 常驻 ~5GB 内存 / 2.7GB 显存，见 ``tts_worker.py`` 的说明）
 _STT = None
-_COSYVOICE2 = None
 
 _TTS_MAX_CHARS = 500
 _STT_MAX_SECONDS = 60
+
+#: TTS 子进程空闲多久后回收（秒）。杀进程是唯一能把 torch 的 5GB 内存还给
+#: 系统的手段；0 = 不回收（常驻）。纯文字对话时子进程不存在，开销为零。
+_TTS_IDLE_SEC = 600.0
+#: 冷启动上限（加载 ~4GB 权重，慢盘可能 60s+）
+_TTS_BOOT_TIMEOUT = 300.0
+#: 单次合成上限（长文本分段合成，CPU 上可能数十秒）
+_TTS_CALL_TIMEOUT = 300.0
+#: 空闲监视线程间隔
+_TTS_MONITOR_SEC = 30.0
 
 
 def _cfg() -> dict:
@@ -106,7 +124,12 @@ def transcribe(wav_bytes: bytes) -> str:
     stream = recognizer.create_stream()
     stream.accept_waveform(16000, samples)
     recognizer.decode_stream(stream)
-    return str(getattr(stream.result, "text", "") or "").strip()
+    text = str(getattr(stream.result, "text", "") or "").strip()
+    if text:
+        # 收到语音 = 模型大概率也会用语音回（msg_send_voice）。趁它在想回复内容的
+        # 十几秒里把 4GB 引擎子进程拉起来，用户感知不到冷启动。
+        _WORKER.prewarm()
+    return text
 
 
 def _cosyvoice2_dir() -> str:
@@ -117,38 +140,190 @@ def _voices_dir() -> str:
     return str(_cfg().get("voices_dir") or os.path.join(_cosyvoice2_dir(), "voices"))
 
 
-def _get_cosyvoice2():
-    """CosyVoice2 引擎单例（首次调用才构造，torch/CUDA 也在此刻才进进程）。
+def _idle_sec() -> float:
+    """TTS 子进程空闲回收阈值（配置 ``tts_idle_sec``；0 = 常驻不回收）。"""
+    try:
+        return max(0.0, float(_cfg().get("tts_idle_sec", _TTS_IDLE_SEC)))
+    except (TypeError, ValueError):
+        return _TTS_IDLE_SEC
 
-    缺权重/缺依赖在这里抛可执行错误（调用方降级纯文本），绝不带病合成。
+
+class _TtsWorker:
+    """TTS 引擎子进程持有者：懒启动 + 串行合成 + 空闲自杀 + 崩溃自动重启。
+
+    串行是刻意的：单张卡、单模型，并发只会互相抢显存。调用方（QQ 通道 / Web）
+    本来就是低频请求，排队没有任何实际损失。
     """
-    global _COSYVOICE2
-    if _COSYVOICE2 is None:
-        here = os.path.dirname(os.path.abspath(__file__))
-        if here not in sys.path:
-            sys.path.insert(0, here)
-        from cosyvoice2_rt import CosyVoice2Engine
 
-        _COSYVOICE2 = CosyVoice2Engine(_cosyvoice2_dir(), _voices_dir(), logger=logger)
-    return _COSYVOICE2
+    def __init__(self) -> None:
+        self._proc: Optional[subprocess.Popen] = None
+        self._queue: "queue.Queue" = queue.Queue()
+        self._lock = threading.Lock()
+        self._last_used = 0.0
+        self._seq = 0
+        self._voices: List[str] = []
+        self._monitor: Optional[threading.Thread] = None
+        self._monitor_stop = threading.Event()
+
+    # ── 生命周期（内部方法都在 self._lock 内调用） ──
+    def _start_locked(self) -> None:
+        worker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts_worker.py")
+        env = dict(os.environ)
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        proc = subprocess.Popen(
+            [sys.executable, worker, _cosyvoice2_dir(), _voices_dir()],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            cwd=os.path.dirname(worker), env=env,
+        )
+        self._proc = proc
+        self._queue = queue.Queue()
+        reader = threading.Thread(target=self._read_loop, args=(proc, self._queue),
+                                  name="tts-worker-reader", daemon=True)
+        reader.start()
+        try:
+            msg = self._queue.get(timeout=_TTS_BOOT_TIMEOUT)
+        except queue.Empty:
+            self._kill_locked()
+            raise RuntimeError(f"TTS 引擎启动超时（{_TTS_BOOT_TIMEOUT:.0f}s）")
+        if not isinstance(msg, dict):
+            self._kill_locked()
+            raise RuntimeError("TTS 引擎启动失败（子进程退出）")
+        if not msg.get("ready"):
+            self._kill_locked()
+            raise RuntimeError(f"TTS 引擎加载失败: {msg.get('error')}")
+        self._voices = [str(v) for v in (msg.get("voices") or [])]
+        logger.info("TTS 引擎子进程就绪（pid=%s，音色 %d 个）", proc.pid, len(self._voices))
+
+    @staticmethod
+    def _read_loop(proc, q) -> None:
+        """把子进程 stdout 的每一行 JSON 推进队列；EOF 推 None 表示进程结束。"""
+        try:
+            for raw in proc.stdout:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    q.put(json.loads(raw.decode("utf-8")))
+                except Exception:  # noqa: BLE001 —— 协议噪声不该 kill 读线程
+                    continue
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            q.put(None)
+
+    def _kill_locked(self) -> None:
+        proc, self._proc = self._proc, None
+        self._voices = []
+        if proc is None:
+            return
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.info("TTS 引擎子进程已回收")
+
+    def _ensure_locked(self) -> List[str]:
+        if self._proc is None or self._proc.poll() is not None:
+            if self._proc is not None:
+                logger.warning("TTS 引擎子进程已退出（code=%s），重启", self._proc.poll())
+                self._kill_locked()
+            self._start_locked()
+        return self._voices
+
+    # ── 对外 ──
+    def synthesize(self, text: str, voice: str, eq: bool, default_voice: str = "") -> bytes:
+        """文本 → WAV bytes。启动/合成/协议任一环节失败都抛 RuntimeError。
+
+        ``voice`` 为空时子进程按 ``default_voice``（配置 tts_voice）挑音色，
+        名字失效则退回第一个可用音色。
+        """
+        with self._lock:
+            self._ensure_locked()
+            self._seq += 1
+            rid = self._seq
+            payload = json.dumps({"id": rid, "text": text, "voice": voice,
+                                  "default": default_voice, "eq": bool(eq)},
+                                 ensure_ascii=False).encode("utf-8") + b"\n"
+            proc = self._proc
+            if proc is None or proc.stdin is None:
+                raise RuntimeError("TTS 引擎不可用")
+            try:
+                proc.stdin.write(payload)
+                proc.stdin.flush()
+            except Exception as e:  # noqa: BLE001
+                self._kill_locked()
+                raise RuntimeError(f"TTS 引擎写入失败: {e}") from e
+            try:
+                resp = self._queue.get(timeout=_TTS_CALL_TIMEOUT)
+            except queue.Empty:
+                self._kill_locked()
+                raise RuntimeError(f"TTS 合成超时（{_TTS_CALL_TIMEOUT:.0f}s）")
+            self._last_used = time.time()
+            if not isinstance(resp, dict):
+                self._kill_locked()
+                raise RuntimeError("TTS 引擎进程异常退出")
+            if not resp.get("ok"):
+                raise RuntimeError(str(resp.get("error") or "TTS 合成失败"))
+            return base64.b64decode(resp["wav"])
+
+    def prewarm(self) -> None:
+        """后台预热（不阻塞调用方）：收到语音消息时提前把引擎拉起来。"""
+        def _boot() -> None:
+            try:
+                with self._lock:
+                    self._ensure_locked()
+                    self._last_used = time.time()
+            except Exception as e:  # noqa: BLE001 —— 预热失败不影响主链路
+                logger.warning("TTS 预热失败（不影响文字回复）: %s: %s", type(e).__name__, e)
+
+        threading.Thread(target=_boot, name="tts-prewarm", daemon=True).start()
+        self._start_monitor()
+
+    def _start_monitor(self) -> None:
+        if self._monitor is not None or _idle_sec() <= 0:
+            return
+        self._monitor = threading.Thread(target=self._monitor_loop,
+                                         name="tts-worker-monitor", daemon=True)
+        self._monitor.start()
+
+    def _monitor_loop(self) -> None:
+        """空闲超过阈值（``tts_idle_sec``，缺省 600s）→ 杀子进程回收内存。"""
+        while not self._monitor_stop.wait(_TTS_MONITOR_SEC):
+            idle = _idle_sec()
+            if self._proc is None or idle <= 0:
+                continue
+            if time.time() - self._last_used < idle:
+                continue
+            if not self._lock.acquire(blocking=False):  # 正在合成，跳过这一轮
+                continue
+            try:
+                if self._proc is not None and time.time() - self._last_used >= idle:
+                    logger.info("TTS 引擎空闲 %.0fs，回收子进程", time.time() - self._last_used)
+                    self._kill_locked()
+            finally:
+                self._lock.release()
+
+    def shutdown(self) -> None:
+        self._monitor_stop.set()
+        with self._lock:
+            self._kill_locked()
 
 
-def _tts_cosyvoice2(text: str, voice: str) -> bytes:
-    engine = _get_cosyvoice2()
-    name = voice  # 调用方显式指定的音色名：不存在就报错
-    if not name:
-        default = str(_cfg().get("tts_voice") or "")
-        if default and default in engine.list_voices():
-            name = default
-        elif default:
-            # 陈旧的默认音色名只警告，不挡合成
-            logger.warning("tts_voice=%s 不是 voices/ 下的音色名，改用第一个可用音色", default)
-    samples, sr = engine.synthesize(text, name)
-    import soundfile as sf
+_WORKER = _TtsWorker()
 
-    buf = io.BytesIO()
-    sf.write(buf, samples, sr, format="WAV", subtype="PCM_16")
-    return buf.getvalue()
+
+#: TTS 输出频响补偿在 ``eq.py``（与引擎无关的通用后处理），合成在子进程完成。
+def _tts_dispatch(text: str, voice: str) -> bytes:
+    """文本 → WAV bytes（实际合成在 TTS 子进程里，见 ``tts_worker.py``）。"""
+    wav = _WORKER.synthesize(text, voice, bool(_cfg().get("tts_eq", False)),
+                             str(_cfg().get("tts_voice") or ""))
+    _WORKER._start_monitor()  # 首次用后启动空闲回收监视
+    return wav
 
 
 def tts(text: str, voice: str = "") -> bytes:
@@ -162,7 +337,7 @@ def tts(text: str, voice: str = "") -> bytes:
         raise ValueError("text 为空")
     if len(text) > _TTS_MAX_CHARS:
         raise ValueError(f"文本过长（上限 {_TTS_MAX_CHARS} 字）")
-    return _tts_cosyvoice2(text, voice)
+    return _tts_dispatch(text, voice)
 
 
 def startup(ctx) -> None:
@@ -175,11 +350,11 @@ def startup(ctx) -> None:
 
 
 def shutdown() -> None:
-    """注销能力并丢弃引擎单例（释放模型内存）。"""
+    """注销能力并回收 TTS 子进程（STT 模型随进程退出释放）。"""
     from omni_core.tools.capability import unregister_capability
 
     unregister_capability("voice_transcribe")
     unregister_capability("voice_tts")
-    global _STT, _COSYVOICE2
+    global _STT
     _STT = None
-    _COSYVOICE2 = None
+    _WORKER.shutdown()
