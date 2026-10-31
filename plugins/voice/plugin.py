@@ -1,4 +1,4 @@
-"""语音插件：本地 STT / TTS（SenseVoice + CosyVoice2，懒加载）。
+"""语音插件：本地 STT / TTS（SenseVoice + GPT-SoVITS 微调，懒加载）。
 
 形态与 ocr 同款——**独立可插拔、懒加载、无状态**：内核与前端只经两个
 HTTP 端点触达（``/api/audio/transcribe`` / ``/api/audio/tts``，由
@@ -7,13 +7,14 @@ HTTP 端点触达（``/api/audio/transcribe`` / ``/api/audio/tts``，由
 
 能力（capability 注册制，插件未启用 = 能力不存在 = 端点 404）：
 - ``voice_transcribe(wav_bytes) -> str``：16kHz 单声道 WAV → 中/英文文本；
-- ``voice_tts(text, voice="") -> bytes``：文本 → 16 位 PCM WAV（24kHz），
-  ``voice`` = ``voices/`` 下的音色名（一段参考音频 = 一个音色）。
+- ``voice_tts(text, voice="") -> bytes``：文本 → 16 位 PCM WAV（32kHz），
+  ``voice`` = ``voices/`` 下的音色名（一段参考音频 + 同名 .txt 韵律文本 = 一个音色）。
 
-TTS = CosyVoice2 零样本音色克隆（单引擎）。推理代码在 ``cosyvoice2_rt/``
-（vendored，来源与许可见其 ``__init__.py``）；模型布局、transformers 4.4x
-钉子、BlankEN merges 词表等必读事项见
-``doc/plans/voice-m3-2026-10-29.md`` §10。
+TTS = GPT-SoVITS v2 微调引擎（CosyVoice2 zero-shot 已退役，原因与验收数据见
+``doc/plans/voice-tone-2026-10-31.md`` §9）。推理代码不在仓库，直接用
+``external/GPT-SoVITS`` 上游 clone 的 TTS_infer_pack，本插件只做
+``gptsovits_rt/`` 薄适配。worker 子进程必须用 GS 独立 venv 的 python 拉起
+（配置 ``tts_python``，默认 ``external/GPT-SoVITS/.venv``）。
 
 懒加载：sherpa-onnx / torch / 模型权重只在**首次调用**时构造（import 本包
 零开销）；``enabled=false``（默认）时进程内无 ONNXRuntime/torch。
@@ -21,9 +22,11 @@ TTS = CosyVoice2 零样本音色克隆（单引擎）。推理代码在 ``cosyvo
 模型（放 ``~/.omniagent/models/``，路径可用 plugins/voice.yaml 覆盖）：
 - SenseVoice：``models/sense-voice/{model.int8.onnx, tokens.txt}``
   （sherpa-onnx releases 的 sense-voice int8 包，中英日韩粤）
-- CosyVoice2：``models/cosyvoice2/``——五件套（llm.pt / flow.pt / hift.pt /
-  speech_tokenizer_v2.onnx / campplus.onnx）+ ``tokenizer/``（词表必须用
-  模型仓库内 CosyVoice-BlankEN 那份）+ ``voices/``（参考音色 wav）
+- GPT-SoVITS：``models/gptsovits/``——``pretrained_models/``（v2 底模：
+  chinese-hubert-base / chinese-roberta-wwm-ext-large / gsv-v2final-pretrained）
+  + ``weights/``（微调权重，默认 doro_e12_s288.pth + doro-e30.ckpt）
+  + ``voices/``（参考音色 wav + 同名 txt）
+  上游 clone 在 ``external/GPT-SoVITS``（text/G2PWModel 文本前端随仓库）。
 """
 from __future__ import annotations
 
@@ -43,7 +46,7 @@ from utils import get_logger
 logger = get_logger("plugins.voice")
 
 #: STT 留在本进程（SenseVoice ONNX，200-300MB，转写要即时）；TTS 引擎在子进程
-#: （CosyVoice2 常驻 ~5GB 内存 / 2.7GB 显存，见 ``tts_worker.py`` 的说明）
+#: （GPT-SoVITS 权重 2GB 档 + 运行时数 GB，见 ``tts_worker.py`` 的说明）
 _STT = None
 
 _TTS_MAX_CHARS = 500
@@ -52,7 +55,7 @@ _STT_MAX_SECONDS = 60
 #: TTS 子进程空闲多久后回收（秒）。杀进程是唯一能把 torch 的 5GB 内存还给
 #: 系统的手段；0 = 不回收（常驻）。纯文字对话时子进程不存在，开销为零。
 _TTS_IDLE_SEC = 600.0
-#: 冷启动上限（加载 ~4GB 权重，慢盘可能 60s+）
+#: 冷启动上限（加载 ~2GB 微调权重 + 底模，慢盘可能 60s+）
 _TTS_BOOT_TIMEOUT = 300.0
 #: 单次合成上限（长文本分段合成，CPU 上可能数十秒）
 _TTS_CALL_TIMEOUT = 300.0
@@ -84,7 +87,7 @@ def _get_stt():
         if missing:
             raise RuntimeError(
                 "SenseVoice 模型缺失: " + ", ".join(missing)
-                + "（下载见 doc/plans/voice-m3-2026-10-29.md §模型）")
+                + "（下载见 doc/plans/voice-2026-10-31.md §4）")
         import sherpa_onnx
 
         _STT = sherpa_onnx.OfflineRecognizer.from_sense_voice(
@@ -127,17 +130,53 @@ def transcribe(wav_bytes: bytes) -> str:
     text = str(getattr(stream.result, "text", "") or "").strip()
     if text:
         # 收到语音 = 模型大概率也会用语音回（msg_send_voice）。趁它在想回复内容的
-        # 十几秒里把 4GB 引擎子进程拉起来，用户感知不到冷启动。
+        # 十几秒里把 GS 引擎子进程拉起来，用户感知不到冷启动。
         _WORKER.prewarm()
     return text
 
 
-def _cosyvoice2_dir() -> str:
-    return str((_cfg().get("cosyvoice2_dir") or _default_model("cosyvoice2")))
+def _gptsovits_dir() -> str:
+    """GPT-SoVITS 模型目录（weights/ + voices/ + pretrained_models/）。"""
+    return str((_cfg().get("gptsovits_dir") or _default_model("gptsovits")))
+
+
+def _gs_repo_dir() -> str:
+    """上游 GPT-SoVITS clone（external/，gitignore 内；可用配置覆盖）。"""
+    d = str(_cfg().get("gptsovits_repo") or "")
+    if d and os.path.isdir(d):
+        return d
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(root, "external", "GPT-SoVITS")
+
+
+def _tts_python() -> str:
+    """worker 用的解释器：GS 独立 venv（依赖与主 .venv 隔离），缺失才退回当前解释器。"""
+    p = str(_cfg().get("tts_python") or "")
+    if p and os.path.isfile(p):
+        return p
+    guess = os.path.join(_gs_repo_dir(), ".venv", "Scripts", "python.exe")
+    if os.path.isfile(guess):
+        return guess
+    guess = os.path.join(_gs_repo_dir(), ".venv", "bin", "python")
+    if os.path.isfile(guess):
+        return guess
+    return sys.executable
 
 
 def _voices_dir() -> str:
-    return str(_cfg().get("voices_dir") or os.path.join(_cosyvoice2_dir(), "voices"))
+    return str(_cfg().get("voices_dir") or os.path.join(_gptsovits_dir(), "voices"))
+
+
+def _tts_weights() -> tuple:
+    """（vits, t2s）微调权重路径；配置可覆盖，默认 s2-e12 + s1-e30 验收组合。"""
+    model_dir = _gptsovits_dir()
+    vits = str(_cfg().get("tts_vits") or os.path.join(model_dir, "weights", "doro_e12_s288.pth"))
+    t2s = str(_cfg().get("tts_t2s") or os.path.join(model_dir, "weights", "doro-e30.ckpt"))
+    if vits and not os.path.isabs(vits):
+        vits = os.path.join(model_dir, vits)
+    if t2s and not os.path.isabs(t2s):
+        t2s = os.path.join(model_dir, t2s)
+    return os.path.normpath(vits), os.path.normpath(t2s)
 
 
 def _idle_sec() -> float:
@@ -170,8 +209,10 @@ class _TtsWorker:
         worker = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tts_worker.py")
         env = dict(os.environ)
         env.setdefault("PYTHONIOENCODING", "utf-8")
+        vits, t2s = _tts_weights()
         proc = subprocess.Popen(
-            [sys.executable, worker, _cosyvoice2_dir(), _voices_dir()],
+            [_tts_python(), worker, _gs_repo_dir(), _gptsovits_dir(), _voices_dir(),
+             vits, t2s],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             cwd=os.path.dirname(worker), env=env,
         )
@@ -327,7 +368,7 @@ def _tts_dispatch(text: str, voice: str) -> bytes:
 
 
 def tts(text: str, voice: str = "") -> bytes:
-    """文本 → 16 位 PCM WAV bytes（24kHz）。空文本抛 ValueError；上限 500 字。
+    """文本 → 16 位 PCM WAV bytes（32kHz）。空文本抛 ValueError；上限 500 字。
 
     失败即抛（调用方降级纯文本）——绝不返回"能播但听不懂"的怪音。
     ``voice`` = ``voices/`` 下的音色名；空取 ``tts_voice`` 配置，再空取第一个。

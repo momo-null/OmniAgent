@@ -1,9 +1,12 @@
 """TTS 引擎子进程（plugins/voice 的 out-of-process 合成器）。
 
-为什么单独一个进程：CosyVoice2 加载后常驻约 5GB 内存 / 2.7GB 显存，而**同进程
+为什么单独一个进程：TTS 引擎加载后常驻数 GB 内存 / 2-3GB 显存，而**同进程
 卸载回收不了内存**（torch 的 CPU 分配器 + glibc 碎片 + ONNX arena 不会还给系统，
-实测 WS 从 5148MB 只降到 4591MB）。杀进程是唯一能把内存 100% 归还的手段，
-所以引擎放子进程、空闲即被父进程杀掉 —— 纯文字对话时语音开销为零。
+CosyVoice2 时代实测 WS 从 5148MB 只降到 4591MB）。杀进程是唯一能把内存 100%
+归还的手段，所以引擎放子进程、空闲即被父进程杀掉 —— 纯文字对话时语音开销为零。
+
+引擎 = GPT-SoVITS v2 微调（``gptsovits_rt/``），本 worker 必须由 **GS 独立 venv
+的 python** 拉起（plugin.py 按配置选解释器），不能用主 .venv。
 
 协议（stdin/stdout，一行一个 JSON；stderr 留给日志）：
 - 启动完成：``{"ready": true, "voices": [...]}``
@@ -28,10 +31,13 @@ def _emit(obj) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) < 3:
-        print("usage: tts_worker.py <model_dir> <voices_dir>", file=sys.stderr)
+    if len(sys.argv) < 4:
+        print("usage: tts_worker.py <gs_dir> <model_dir> <voices_dir> [vits] [t2s]",
+              file=sys.stderr)
         return 2
-    model_dir, voices_dir = sys.argv[1], sys.argv[2]
+    gs_dir, model_dir, voices_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+    vits = sys.argv[4] if len(sys.argv) > 4 else ""
+    t2s = sys.argv[5] if len(sys.argv) > 5 else ""
 
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
@@ -39,10 +45,10 @@ def main() -> int:
 
     from eq import equalize
     import soundfile as sf
-    from cosyvoice2_rt import CosyVoice2Engine
+    from gptsovits_rt import GptSovitsEngine
 
     try:
-        engine = CosyVoice2Engine(model_dir, voices_dir)  # 4GB 权重在这里进内存
+        engine = GptSovitsEngine(gs_dir, model_dir, voices_dir, vits, t2s)
     except Exception as e:  # noqa: BLE001 —— 构造失败要让父进程看到原因
         _emit({"ready": False, "error": f"{type(e).__name__}: {e}"})
         return 1
