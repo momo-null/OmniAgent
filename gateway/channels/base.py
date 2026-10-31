@@ -52,6 +52,10 @@ class InboundMessage:
     #   （QQ 这类"替主人在 IM 里跟人互动"的通道：想说话才说，独白只留在任务里）。
     # 纯对话通道（tools_enabled=false）在 explicit 模式下仍会被放行发送工具。
     reply_mode: str = "auto"
+    # 触发来源（通道自声明）：``"named"`` = 被点名（@/引用回复/文本点名/直连对话），
+    # ``"wave"`` = 群旁听波次升格（无人点名，开口判定放行，见 gateway/group_presence.py）。
+    # 网关/日志据此区分「被动的对话」与「主动的插话」。
+    origin: str = "named"
 
 
 @runtime_checkable
