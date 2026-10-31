@@ -11,7 +11,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
+
+# torch 仅 TTS 环境安装：主环境缺 torch 时整文件跳过（模块级 import 会让全量收集直接中断）
+torch = pytest.importorskip("torch", reason="语音引擎依赖 torch（主环境未安装）")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

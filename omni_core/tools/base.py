@@ -199,6 +199,10 @@ def _ctx(tool_name: str, arguments: str) -> ToolContext:
     )
 
 
+# 同步直调无外层预算（SDK 主链路不走这里），防异常工具把调用方永久挂住
+_DIRECT_INVOKE_TIMEOUT = 300.0
+
+
 def call_tool(name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """同步场景按名 invoke 同一个 SDK FunctionTool（主链路不走这里，走 Runner）。"""
     import json
@@ -208,7 +212,8 @@ def call_tool(name: str, args: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         return {"ok": False, "error": f"unknown tool: {name}"}
     payload = json.dumps(args or {}, ensure_ascii=False)
     try:
-        raw = run_async(plugin.tool.on_invoke_tool(_ctx(name, payload), payload))
+        raw = run_async(plugin.tool.on_invoke_tool(_ctx(name, payload), payload),
+                        timeout=_DIRECT_INVOKE_TIMEOUT)
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     return _normalize(raw)

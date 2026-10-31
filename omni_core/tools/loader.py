@@ -18,7 +18,7 @@ import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from omni_core.tools.base import TOOL_REGISTRY
 from utils import get_logger
@@ -58,8 +58,9 @@ _MODULE_PREFIX = "_omni_plugin_"
 #: 进程内装载状态（幂等依据 / 取模块句柄）
 _loaded_packages: Dict[str, str] = {}
 _loaded_modules: Dict[str, Any] = {}
-#: 首次装载时各包新增的工具名（幂等路径「归属自愈」用，见 _load_one / load_plugins）
-_loaded_tools: Dict[str, List[str]] = {}
+#: 首次装载时各包新增的工具（名字 -> 插件对象）。存**对象**而非名字：外部把注册表
+#: 清空后（如测试基线恢复），幂等路径能按对象重注册自愈，否则工具永久失踪。
+_loaded_tools: Dict[str, "List[Tuple[str, Any]]"] = {}
 _last_report: Optional["LoadReport"] = None
 
 #: 默认插件根目录（相对仓库根，不受 cwd 影响）
@@ -146,11 +147,14 @@ def load_plugins(cfg: Optional[Dict[str, Any]] = None, ctx: Optional[PluginConte
                 # 归属自愈：startup 可能经「注销 → 重注册」把工具回退为装饰器默认值
                 # （source=core，如视觉插件 _ensure_registered 重跑模块体）。归属是 loader
                 # 的职责——按首次装载记录的工具名单恢复 unit/source，对全部插件生效。
-                for tool_name in _loaded_tools.get(name, []):
+                # 工具若被外部清掉（注册表基线恢复等），按首次装载的**对象**重注册。
+                for tool_name, plugin in _loaded_tools.get(name, []):
                     p = TOOL_REGISTRY.get(tool_name)
-                    if p is not None:
-                        p.unit = name
-                        p.source = "plugin"
+                    if p is None:
+                        TOOL_REGISTRY[tool_name] = plugin
+                        p = plugin
+                    p.unit = name
+                    p.source = "plugin"
                 report.skip(name, "已装载（幂等跳过 import/注册）")
                 continue
             manifest = _read_manifest(directory, name)
@@ -326,7 +330,7 @@ def _load_one(
 
     _loaded_packages[name] = module_name
     _loaded_modules[name] = module
-    _loaded_tools[name] = added
+    _loaded_tools[name] = [(n, TOOL_REGISTRY[n]) for n in added if n in TOOL_REGISTRY]
     report.loaded.append(name)
 
 

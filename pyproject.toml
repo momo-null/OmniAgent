@@ -2,7 +2,9 @@
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-# per-test 硬超时（pytest-timeout）：把「测试卡死挂全套」变成「90s 判负 + 打印卡点栈」，
-# 其余用例照常跑完—— chronic 合跑死锁（async 桥接线程，存量 flaky）不再浪费时间。
+# per-test 硬超时（pytest-timeout）：单用例卡死时打印全线程栈并终止进程（thread 方法
+# 在 Windows 无 signal 模式，只能杀整进程、无法跳过续跑）——作用是「卡死必暴露
+# （90s + 栈）」而非无限挂。2026-10-30 合跑卡死根因已修（健康门→错误brain→verify
+# 无界循环→无超时等待，见 conftest 注释），本超时降级为最后的安全网。
 addopts = "-q --timeout=90 --timeout-method=thread"
 asyncio_mode = "auto"
