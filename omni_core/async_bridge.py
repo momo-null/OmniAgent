@@ -12,6 +12,10 @@ import threading
 import time
 from typing import Any, Optional
 
+from utils import get_logger
+
+logger = get_logger("async_bridge")
+
 
 class AsyncBridge:
     """进程级常驻 asyncio loop（后台守护线程）。"""
@@ -63,8 +67,31 @@ class AsyncBridge:
             and self._thread.is_alive()
         )
 
+    def _ensure_not_on_bridge_thread(self, op: str) -> None:
+        """嵌套自检：在桥线程上同步等桥 = 协程等待自身 loop 上的协程。
+
+        桥线程此刻被本调用占着，被等的协程永远排不上 → ``.result()`` 永久阻塞，
+        常驻 loop 变僵尸（``_alive()`` 仍报 True，无法自愈）。必须在此处直接报错，
+        让调用方改为 await 或把同步体挪去工作线程（如 ``asyncio.to_thread``）。
+        """
+        if self._thread is not None and threading.current_thread() is self._thread:
+            raise RuntimeError(
+                f"AsyncBridge.{op}() 不可在桥线程（omni-async-bridge）上调用："
+                "同步等待自身 loop 上的协程会把常驻 loop 永久卡死。"
+                "异步上下文请直接 await；同步执行体请运行在工作线程（如 asyncio.to_thread）。"
+            )
+
     def run(self, coro, timeout: Optional[float] = None) -> Any:
-        return asyncio.run_coroutine_threadsafe(coro, self.loop()).result(timeout)
+        self._ensure_not_on_bridge_thread("run")
+        fut = asyncio.run_coroutine_threadsafe(coro, self.loop())
+        try:
+            return fut.result(timeout)
+        except TimeoutError:
+            # 超时只解除调用方阻塞：协程仍在常驻 loop 上（可能已卡死）。留痕定位，
+            # 避免僵尸桥只剩「后续调用莫名超时」这种无头案。
+            logger.warning("桥上协程 %s 超过 %ss 未完成（调用方已超时返回，协程仍在 loop 上）",
+                           getattr(coro, "__qualname__", type(coro).__name__), timeout)
+            raise
 
     def create_task(self, coro) -> Any:
         """把协程挂到常驻 loop 上并立即返回 Task 句柄。
@@ -72,6 +99,7 @@ class AsyncBridge:
         M8 硬停止需要：只有拿到 Task 才能真正 cancel 一个正在跑的图
         （concurrent.futures.Future.cancel() 对已开始的任务无效）。
         """
+        self._ensure_not_on_bridge_thread("create_task")
         loop = self.loop()
         holder: Any = {}
 

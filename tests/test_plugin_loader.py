@@ -24,7 +24,6 @@ from omni_core.tools.base import TOOL_REGISTRY, call_tool, function_tool
 #: 模块导入时的内核工具基线（此刻尚无任何 load_plugins 调用）。
 #: 每个用例都从这份基线起步：否则「其它用例/其它测试文件已装载过插件」会让
 #: TOOL_REGISTRY 里残留插件工具，再次装载会被判成"覆盖已注册工具"。
-_BASE_REGISTRY = dict(TOOL_REGISTRY)
 
 # ── 插件样例 ───────────────────────────────────────────────────────────────
 
@@ -169,22 +168,63 @@ def _make_plugin(root: Path, name: str, body: str = None, manifest: Any = None,
     return directory
 
 
+#: 装载类测试的沙箱基线：模块导入时（任何 load_plugins 之前）的注册表。与「清空的
+#: loader 装载簿记」天然一致——fakeload 不会撞上已注册工具。仅作用例内沙箱用；
+#: 文件结束恢复的是 _FILE_CONTEXT（见下），不是它。
+_BASE_REGISTRY = dict(TOOL_REGISTRY)
+
+#: 进本文件前的完整世界（首个用例 setup 时捕获）：注册表 + loader 装载簿记。
+_FILE_CONTEXT = None
+
+
 @pytest.fixture(autouse=True)
 def _clean_loader_state():
-    """用例前后：注册表恢复成内核基线 + 清 loader 幂等状态与动态模块缓存。"""
+    """用例内：注册表回沙箱基线 + 清 loader 幂等状态（装载测试的沙箱前提，同原版）；
+    文件结束：恢复**进文件前的完整上下文**——注册表、装载簿记、动态模块句柄一并还原。
 
-    def _restore() -> None:
+    此前版本 teardown 恢复成导入时基线，把全量前序用例运行期装载的插件工具
+    （observe 等）连同装载簿记一起抹掉，污染其后所有用例（2026-10-30 全量
+    test_verify / test_world_model / test_vision_som 失败根因）。
+    """
+    global _FILE_CONTEXT
+    if _FILE_CONTEXT is None:
+        _FILE_CONTEXT = (
+            dict(TOOL_REGISTRY),
+            dict(loader._loaded_packages),
+            dict(loader._loaded_modules),
+            {k: list(v) for k, v in loader._loaded_tools.items()},
+        )
+
+    def _sandbox() -> None:
         TOOL_REGISTRY.clear()
         TOOL_REGISTRY.update(_BASE_REGISTRY)
         loader._loaded_packages.clear()
         loader._loaded_modules.clear()
+        loader._loaded_tools.clear()
         loader._last_report = None
         for module_name in [m for m in sys.modules if m.startswith("_omni_plugin_")]:
             sys.modules.pop(module_name, None)
 
-    _restore()
+    def _restore_world() -> None:
+        reg, pkgs, mods, tools = _FILE_CONTEXT
+        TOOL_REGISTRY.clear()
+        TOOL_REGISTRY.update(reg)
+        loader._loaded_packages.clear()
+        loader._loaded_packages.update(pkgs)
+        loader._loaded_modules.clear()
+        loader._loaded_modules.update(mods)
+        loader._loaded_tools.clear()
+        loader._loaded_tools.update({k: list(v) for k, v in tools.items()})
+        loader._last_report = None
+        # 动态模块句柄按装载簿记原样回填 sys.modules（沙箱内同名模块被重导入过）
+        for name, module_name in pkgs.items():
+            mod = mods.get(name)
+            if mod is not None:
+                sys.modules[module_name] = mod
+
+    _sandbox()
     yield
-    _restore()
+    _restore_world()
 
 
 # ① 装载成功 → unit/source 归属 + 按名派发 -----------------------------------

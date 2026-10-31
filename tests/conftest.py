@@ -123,6 +123,59 @@ def _isolated_security():
     _policy.unbind()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_health_probe(monkeypatch):
+    """测试环境禁真探活：测试端点（127.0.0.1:9 等假端点）从不真服务。
+
+    ``model_health_ok`` 会真发 HTTP；executor 槽健康门（core.py）据此判 False
+    跳过槽 → 子 agent 回退主模型 → fake 脚本错位 → verify 永不过 →
+    ``run_subtask_sdk`` 无界循环（2026-10-30 全量卡死根因）。统一改判 None
+    （「无法判定」）：槽照常注册。需要真探活语义的测试（test_loop_pool）本地
+    monkeypatch 覆盖即可（后设置者生效）。
+    """
+    import omni_core.brain.llm as _llm
+    monkeypatch.setattr(_llm, "model_health_ok", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def _bounded_llm_timeout(monkeypatch):
+    """测试里真实模型调用单次上限 10s（生产默认 180s）。
+
+    测试端点绝不真服务，而 Windows proactor 的连接完成事件偶发延迟/丢失
+    （实测 45s+ 不返回）——180s 传输超时远超 pytest 90s 进程超时，会把整个
+    测试进程拖死。压到 10s 后「端点不可达」总以异常形态快速浮现；自带本地
+    fake server 的传输类测试响应即时，不受影响。显式传 timeout 的调用方不覆盖。
+    """
+    import omni_core.brain.llm as _llm
+    _orig_init = _llm.LLMClient.__init__
+
+    def _init(self, cfg, timeout=10.0, on_debug=None):
+        _orig_init(self, cfg, timeout=timeout, on_debug=on_debug)
+
+    monkeypatch.setattr(_llm.LLMClient, "__init__", _init)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_async_bridge():
+    """用例间重置进程级常驻 async 桥与 loop 组件池。
+
+    桥是进程级单例：某个用例若在桥上留下永不完成的协程，其后所有碰桥用例都会
+    永久挂起（跨用例僵尸传播，卡点漂移的机制）。每用例结束即停旧 loop、置空
+    单例——僵尸的杀伤半径被限定在制造它的用例自身。
+    """
+    from omni_core import async_bridge as _ab
+    from omni_core.local.loop import pool as _loop_pool
+    yield
+    _loop_pool.clear()   # 先清池：MCP cleanup 要走 run_async，需要一个还活着的桥
+    bridge = _ab._BRIDGE
+    _ab._BRIDGE = None
+    if bridge is not None and bridge._loop is not None:
+        try:
+            bridge._loop.call_soon_threadsafe(bridge._loop.stop)
+        except Exception:
+            pass
+
+
 class _ApproveAllSink:
     """测试用放行 sink：记录收到的卡片，全部批准（不写任务级记忆）。"""
 

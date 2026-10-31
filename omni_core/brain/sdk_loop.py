@@ -1906,9 +1906,14 @@ def run_subtask_sdk(
         if state.no_confidence:
             return _result(False, "no_confidence: 工具结果无置信", state.steps, True,
                            "no_confidence: 工具结果无置信", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
-        if verify_fail_max and state.verify_fail >= verify_fail_max:
-            return _result(False, f"verify 连续失败 {state.verify_fail} 次", state.steps, True,
-                           f"verify 连续失败 {state.verify_fail} 次", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+        # verify 失败上限：子任务用配置档（缺省 3，超限升级交回上级）；主链
+        # （verify_fail_max=0，无升级）给硬兜底上限，防止无界空转。
+        _verify_cap = verify_fail_max if verify_fail_max > 0 else _VERIFY_FAIL_HARD_CAP
+        if state.verify_fail >= _verify_cap:
+            return _result(False, f"verify 连续失败 {state.verify_fail} 次", state.steps,
+                           verify_fail_max > 0,
+                           f"verify 连续失败 {state.verify_fail} 次", llm_calls=state.llm_calls,
+                           repeat_failures=state.repeat_failures)
         # 墙钟结算扣除审批等待（等待是人的延迟，不是 agent 的延迟；§6.2）——
         # 否则 worker 子任务（缺省 120s 墙钟）里一次长等待会在批准后被误判墙钟超时
         from omni_core.tools.policy import gate_wait_seconds
@@ -2078,6 +2083,11 @@ def _kind(item: Any) -> str:
 # 重试上限：防弱模型陷入无效重试死循环。
 LENGTH_RETRY_LIMIT = 3
 TOOL_NOT_FOUND_RETRY_LIMIT = 3
+
+# verify 失败硬兜底：主链无升级语义（verify_fail_max=0）时此前完全无界——模型反复
+# 声明完成 + verify 拒收会让 while 永不退出（2026-10-30 全量卡死根因之一）。给主链
+# 一个失败上限，到顶即 FAILED（子任务仍走配置档 verify_fail_max，超限升级）。
+_VERIFY_FAIL_HARD_CAP = 5
 
 
 # --- 3.6 模型服务不可用自愈（网络/超时退避重试）--------------------------------

@@ -358,6 +358,15 @@ def test_provider_error_task_stored_paused_no_finished_at(tmp_path, monkeypatch)
         {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k", "capabilities": {}},
         verbose=False,
     )
+
+    # 模型层直接抛 402：绝不让 Runner 真连 base_url。Windows proactor 的连接完成
+    # 事件可能延迟/丢失（实测 45s+ 不返回），180s 传输超时会拖死整个测试进程。
+    class _Raising402Model:
+        async def get_response(self, *args, **kwargs):
+            raise _make_status_error(402)
+
+    monkeypatch.setattr(loop.brain, "_model", _Raising402Model())
+
     res = loop.run_task(TaskSpec(objective="o", task_id=tid, max_steps=1))
 
     assert res.get("provider_error") is True

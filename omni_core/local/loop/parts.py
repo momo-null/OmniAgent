@@ -119,6 +119,10 @@ class _SubtaskGate:
             return True, "无校验条件，信任大脑"
         passed, why = self.loop._verify(self.spec, self.world)
         self.last_verify_passed = bool(passed)
+        # task_done 拒收必须计入 verify_count：否则 verify_fail_max 上限对
+        # 「反复声明完成」路径失效，run_subtask_sdk 的 while 会无限空转。
+        if not passed:
+            self.verify_count += 1
         return passed, (f"校验通过：{why}" if passed else f"校验未通过：{why}")
 
 
