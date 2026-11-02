@@ -34,7 +34,7 @@ def test_enqueue_pops_capture_at_enqueue_time(monkeypatch):
     calls = []
 
     def fake_flush(pid, cfg=None, source_task="", persona="", msgs=None,
-                   allow_write=True):
+                   allow_write=True, allow_atoms=True):
         calls.append({"pid": pid, "msgs": msgs, "persona": persona,
                       "allow_write": allow_write})
         return {"stored": 1}
@@ -58,7 +58,7 @@ def test_worker_serializes_and_counts(monkeypatch):
     order = []
 
     def fake_flush(pid, cfg=None, source_task="", persona="", msgs=None,
-                   allow_write=True):
+                   allow_write=True, allow_atoms=True):
         order.append(source_task)
         time.sleep(0.02)
         return {}
@@ -88,7 +88,7 @@ def test_flush_failure_is_isolated(monkeypatch):
     seen = []
 
     def flaky(pid, cfg=None, source_task="", persona="", msgs=None,
-              allow_write=True):
+              allow_write=True, allow_atoms=True):
         seen.append(source_task)
         if source_task == "bad":
             raise RuntimeError("boom")
@@ -111,6 +111,68 @@ def test_enqueue_never_raises_on_bad_input(monkeypatch):
 
     monkeypatch.setattr(memory_brain, "pop_capture", boom)
     assert memory_writer.enqueue("p", None) is False
+
+
+def test_enqueue_throttled_merges_until_threshold(monkeypatch):
+    """群聊限流入队：首次放行，之后条数不够且未到间隔 → 不入队（消息留缓冲合并）。"""
+    memory_writer.reset_throttle()
+    sent = []
+    monkeypatch.setattr(memory_writer, "enqueue", lambda *a, **k: sent.append(k) or True)
+    monkeypatch.setattr(memory_brain, "buffer_stats",
+                        lambda pid: {"msgs": 3, "chars": 30, "dropped": 0})
+    assert memory_writer.enqueue_throttled("p", {"m": "x"}, min_msgs=12,
+                                           min_interval=600.0) is True   # 首次：放行
+    assert sent[0].get("allow_atoms") is False, "群聊只沉淀叙事层，不产 L1 原子"
+    assert len(sent) == 1
+    # 紧接着再来一轮、条数仍不够 → 被限流（留在缓冲里随下次合并）
+    assert memory_writer.enqueue_throttled("p", {"m": "x"}, min_msgs=12,
+                                           min_interval=600.0) is False
+    assert len(sent) == 1
+    # 攒够条数 → 放行
+    monkeypatch.setattr(memory_brain, "buffer_stats",
+                        lambda pid: {"msgs": 12, "chars": 300, "dropped": 0})
+    assert memory_writer.enqueue_throttled("p", {"m": "x"}, min_msgs=12,
+                                           min_interval=600.0) is True
+    assert len(sent) == 2
+
+
+def test_enqueue_throttled_fires_on_interval_for_quiet_chat(monkeypatch):
+    """低流量也要喂到巩固期：条数不够但距上次入队超间隔 → 放行一次。"""
+    memory_writer.reset_throttle()
+    monkeypatch.setattr(memory_brain, "buffer_stats",
+                        lambda pid: {"msgs": 2, "chars": 20, "dropped": 0})
+    sent = []
+    monkeypatch.setattr(memory_writer, "enqueue", lambda *a, **k: sent.append(k) or True)
+    assert memory_writer.enqueue_throttled("p", {"m": "x"}, min_msgs=12,
+                                           min_interval=600.0) is True    # 首次
+    memory_writer._last_chat_enqueue["p"] = time.time() - 601.0           # 假装过了 10 分钟
+    assert memory_writer.enqueue_throttled("p", {"m": "x"}, min_msgs=12,
+                                           min_interval=600.0) is True    # 到间隔
+    assert all(k.get("allow_atoms") is False for k in sent)
+
+
+def test_flush_brain_allow_atoms_false_skips_l1(monkeypatch, tmp_path):
+    """allow_atoms=False：不提炼、不写 L1，但 L2 维护/巩固照走（日记靠它）。"""
+    from omni_core.local import scene_executor
+
+    monkeypatch.setattr(memory_brain, "enabled", lambda: True)
+    monkeypatch.setattr(memory_brain, "maybe_consolidate", lambda *a, **k: None)
+    l2 = []
+    monkeypatch.setattr(scene_executor, "maybe_maintain",
+                        lambda *a, **k: l2.append(k.get("allow_write")))
+
+    def boom(*a, **k):
+        raise AssertionError("allow_atoms=False 时不应调用 LLM 提炼")
+
+    monkeypatch.setattr(memory_brain, "_extract_detail", boom)
+
+    stats = memory_brain.flush_brain(
+        "p", {"model": "m"},
+        msgs=[{"role": "user", "content": "群里有人刷屏"},
+              {"role": "assistant", "content": "不管他"}],
+        allow_write=True, allow_atoms=False)
+    assert stats["stored"] == 0 and stats["l1_skipped"] == 1
+    assert l2 == [True], "叙事层维护照走（allow_write 透传）"
 
 
 def test_flush_brain_stores_episode_and_gates_l2_by_did_work(monkeypatch, tmp_path):
