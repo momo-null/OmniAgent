@@ -21,7 +21,7 @@ export interface DebugMemoryAtom {
 
 export interface DebugMemoryOverview {
   total: number;
-  by_state: Record<string, number>;
+  active: number;
   by_kind: Record<string, number>;
   last_consolidation: string;
   recent: string[];

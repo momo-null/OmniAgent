@@ -209,3 +209,30 @@ def test_mode_brain_cfg_removed():
     显式 model 选择与主槽路径由 _make_brain_cfg 承担。"""
     assert not hasattr(hp, "_mode_brain_cfg")
     assert hasattr(hp, "_make_brain_cfg")
+
+
+# --------------------------------------------- mode 持久化（2026-10-31 与通道解绑）
+
+def test_mode_persists_in_store_and_whitelisted():
+    """mode 进 task.json meta 白名单：/chat 派发与 /state 更新都能落盘，列表原样透传。"""
+    from omni_core.local.task_store import TaskStore
+
+    meta = TaskStore.create(project_id="qq", objective="测试取向持久化")
+    tid = meta["task_id"]
+    TaskStore.update(tid, state="running", mode="chat")
+    assert TaskStore.get(tid)["mode"] == "chat"
+    TaskStore.update(tid, mode="task")
+    assert TaskStore.get(tid)["mode"] == "task"
+    assert any(r["task_id"] == tid and r.get("mode") == "task"
+               for r in TaskStore.list())          # tasks 列表透传 → 前端回填数据源
+
+
+def test_state_update_schema_validates_mode():
+    """/state 端点 schema：mode 只收 auto/chat/task，其余 422。"""
+    from backend.api.schemas_runtime import UpdateTaskRequest
+    from pydantic import ValidationError
+
+    assert UpdateTaskRequest.model_validate({"mode": "chat"}).mode == "chat"
+    assert UpdateTaskRequest.model_validate({"mode": "auto"}).mode == "auto"
+    with pytest.raises(ValidationError):
+        UpdateTaskRequest.model_validate({"mode": "bogus"})

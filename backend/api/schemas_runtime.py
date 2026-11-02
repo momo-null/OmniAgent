@@ -84,6 +84,8 @@ class UpdateTaskRequest(BaseModel):
     done_when: Optional[str] = Field(default=None, max_length=2000)
     state: Optional[Literal["pending", "running", "done", "failed", "aborted"]] = None
     full_access: Optional[bool] = None
+    # 对话取向（2026-10-31 mode 与通道解绑）：会话级持久化，/state 更新与 /chat 派发都可写
+    mode: Optional[Literal["auto", "chat", "task"]] = None
     project_id: Optional[str] = None
 
     @field_validator("project_id")

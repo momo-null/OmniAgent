@@ -179,6 +179,9 @@ export const runtimeApi = {
     model?: string;
     // 立即发送（barge-in）：打断同一 task 的当前轮并立即发出；默认 false
     force?: boolean;
+    // 对话取向（chat=对话纪律 / task=工作 lane）；不传 = 后端缺省 auto（task 语义）。
+    // 模式与通道解绑：Web 显式两档选择，远程调用按契约传参（remote-client-contract）
+    mode?: string;
   }) => http.post("/api/runtime/chat", payload),
   // M8 软注入：运行中向 agent 插话（不打断当前 turn，下一轮可见）
   inject: (payload: { text: string; task_id?: string; agent_id?: string }) =>

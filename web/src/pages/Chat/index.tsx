@@ -618,7 +618,7 @@ const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false
 });
 
 export default function Chat() {
-  const { messages, running, sendMessage, injectOrQueue, removeQueuedAt, queuedMessages, stopTask, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, pendingApprovals, decideApproval, taskObjectives, dockOpen, openDockMenu, closeDock } = useTaskStore();
+  const { messages, running, sendMessage, injectOrQueue, removeQueuedAt, queuedMessages, stopTask, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, modeByTask, setModeForTask, pendingApprovals, decideApproval, taskObjectives, dockOpen, openDockMenu, closeDock } = useTaskStore();
   const [draft, setDraft] = useState("");
   // 助手名：从角色卡 frontmatter 解析（缺省 OmniAgent），用于顶栏与消息标签
   const [assistantName, setAssistantName] = useState("OmniAgent");
@@ -640,6 +640,8 @@ export default function Chat() {
   const globalFullAccess = globalSecurityMode === "full_access";
   // 完全访问按当前 task 读取（跟随当前任务；切换任务由 refreshTasks 从 task.json 回填各自值）
   const fullAccess = fullAccessByTask[currentTaskId] ?? false;
+  // 对话取向按当前 task 读取：chat=对话纪律 / task=工作 lane；缺省 task（同链路，只影响 lane）
+  const chatMode = modeByTask[currentTaskId] ?? "task";
   const endRef = useRef<HTMLDivElement | null>(null);
 
   // ── 模型路由：目录来自 ~/.omniagent/models.json（后端分组），本地只缓存选中项 ──
@@ -744,7 +746,7 @@ export default function Chat() {
       return;
     }
     setDraft("");
-    sendMessage(text, fullAccess, modelSel || undefined);
+    sendMessage(text, fullAccess, modelSel || undefined, chatMode);
   };
 
   // 语音（对讲式）：转写文本按当前态投递——空闲直发，运行中注入/排队（与打字同路）
@@ -752,7 +754,7 @@ export default function Chat() {
     const t = (text || "").trim();
     if (!t) return;
     if (running) injectOrQueue(t);
-    else sendMessage(t, fullAccess, modelSel || undefined);
+    else sendMessage(t, fullAccess, modelSel || undefined, chatMode);
   };
 
   // 免提（对空气说话）：常开 VAD 自动判句提交 + 回复自动播报 + 播报中声学打断。
@@ -817,12 +819,12 @@ export default function Chat() {
 
   return (
     <Box sx={{ display: "flex", height: "100%", width: "100%", minHeight: 0, overflow: "hidden", bgcolor: "background.default" }}>
-      {/* 左：对话区 */}
+      {/* 左：对话区。顶栏铺满整行（右上开关钉在可用区最右），内容列宽屏居中（上限 1200） */}
       <Box
         sx={{
           flexGrow: 1, minWidth: 0, minHeight: 0,
           display: "flex", flexDirection: "column",
-          maxWidth: 1200, mx: "auto", width: "100%", px: 2, pb: 4.5,
+          px: 2, pb: 4.5,
           overflow: "hidden",
         }}
       >
@@ -855,6 +857,14 @@ export default function Chat() {
           </Stack>
         </Stack>
 
+        {/* 内容列（宽屏居中，上限 1200）：时间线 / 审批卡 / 输入胶囊；顶栏不在此列内 */}
+        <Box
+          sx={{
+            width: "100%", maxWidth: 1200, mx: "auto",
+            flexGrow: 1, minHeight: 0,
+            display: "flex", flexDirection: "column",
+          }}
+        >
         <Paper
           elevation={0}
           sx={{ flexGrow: 1, minHeight: 0, mb: 1, bgcolor: "transparent", borderRadius: 2, overflow: "hidden", display: "flex", flexDirection: "column" }}
@@ -1000,7 +1010,18 @@ export default function Chat() {
             }}
           />
           <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", px: 1.25, pt: 0.25 }}>
-            <FormControlLabel
+            <Stack direction="row" spacing={0.75} alignItems="center">
+              {/* 对话取向（与通道解绑，按 task 记忆）：chat=对话纪律 / task=工作 lane；
+                  同一条 run_task 链路，mode 只影响互斥与回播，不改链 */}
+              <Chip size="small" label="chat" sx={{ height: 24 }}
+                variant={chatMode === "chat" ? "filled" : "outlined"}
+                color={chatMode === "chat" ? "primary" : "default"}
+                onClick={() => setModeForTask(currentTaskId, "chat")} />
+              <Chip size="small" label="task" sx={{ height: 24 }}
+                variant={chatMode === "task" ? "filled" : "outlined"}
+                color={chatMode === "task" ? "primary" : "default"}
+                onClick={() => setModeForTask(currentTaskId, "task")} />
+              <FormControlLabel
               control={
                 <Switch
                   size="small"
@@ -1016,6 +1037,7 @@ export default function Chat() {
               label={globalFullAccess ? "完全访问（已被全局档覆盖）" : "完全访问"}
               sx={{ mr: 0 }}
             />
+            </Stack>
             <Stack direction="row" spacing={0.5} alignItems="center">
               {/* 免提（对空气说话）：开=常开 VAD 自动判句、回复自动播报、说话即声学打断 */}
               <IconButton
@@ -1073,6 +1095,7 @@ export default function Chat() {
               </IconButton>
             </Stack>
           </Box>
+        </Box>
         </Box>
         <Popover
           open={Boolean(confirmAnchorEl)}

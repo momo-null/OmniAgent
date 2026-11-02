@@ -48,8 +48,9 @@ interface TaskStoreValue {
 
   connectStream: () => void;
   disconnectStream: () => void;
-  // 模型路由：model 为本次请求的选择 "<provider_id>/<model_id>"；空 = 用目录默认/配置
-  sendMessage: (text: string, fullAccess?: boolean, model?: string) => Promise<void>;
+  // 模型路由：model 为本次请求的选择 "<provider_id>/<model_id>"；空 = 用目录默认/配置。
+  // mode：对话取向 chat/task（缺省 task 语义，见 modeByTask）
+  sendMessage: (text: string, fullAccess?: boolean, model?: string, mode?: string) => Promise<void>;
   // 立即发送（barge-in）：打断同一 task 的当前轮并立即发出（后端 /chat force=true）
   forceSendMessage: (text: string, fullAccess?: boolean, model?: string) => Promise<void>;
   // 排队条目：仅当注入被拒（收尾窗口/无运行体）时兜底入队；轮次结束自动作为新消息发出
@@ -67,6 +68,12 @@ interface TaskStoreValue {
   // 完全访问按 task 持久化：每个 task 各自写自己的 task.json，跟随当前任务，切换任务时读取各自值
   fullAccessByTask: Record<string, boolean>;
   setFullAccessForTask: (taskId: string, val: boolean) => void;
+
+  // 对话取向按 task 存取（与 fullAccessByTask 同模式，v1 仅前端内存）：chat=对话纪律 /
+  // task=工作 lane；缺省 task（2026-10-31 定案：mode 与通道解绑，Web 显式两档，
+  // 通道与远程不传走后端缺省 auto）。同一条 run_task 链路，mode 只影响 lane（互斥/回播）
+  modeByTask: Record<string, string>;
+  setModeForTask: (taskId: string, mode: string) => void;
 
   taskTitles: Record<string, string>;
   taskObjectives: Record<string, string>;
@@ -130,6 +137,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(EMPTY_SNAPSHOT);
   const [maxSteps, setMaxSteps] = useState<number>(40);
   const [fullAccessByTask, setFullAccessByTask] = useState<Record<string, boolean>>({});
+  const [modeByTask, setModeByTask] = useState<Record<string, string>>({});
   const [taskTitles, setTaskTitles] = useState<Record<string, string>>(() => {
     try {
       const raw = localStorage.getItem("omniagent.taskTitles");
@@ -352,6 +360,14 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         const next = { ...prev };
         for (const t of d.tasks || []) {
           next[t.task_id] = !!(t as { full_access?: boolean }).full_access;
+        }
+        return next;
+      });
+      // 回填对话取向（mode 与通道解绑；task.json 未存过 = 缺省 task 语义）
+      setModeByTask((prev) => {
+        const next = { ...prev };
+        for (const t of d.tasks || []) {
+          next[t.task_id] = (t as { mode?: string }).mode || "task";
         }
         return next;
       });
@@ -646,7 +662,13 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     if (taskId) taskApi.updateState(taskId, { full_access: val }).catch(() => {});
   }, []);
 
-  const sendMessage = useCallback(async (text: string, fullAccess?: boolean, model?: string) => {
+  const setModeForTask = useCallback((taskId: string, mode: string) => {
+    setModeByTask((prev) => ({ ...prev, [taskId]: mode }));
+    // 持久化到该 task 的 task.json（跟随当前任务）；空 taskId（新建对话未发首条前）无法落盘，跳过
+    if (taskId) taskApi.updateState(taskId, { mode }).catch(() => {});
+  }, []);
+
+  const sendMessage = useCallback(async (text: string, fullAccess?: boolean, model?: string, mode?: string) => {
     const content = text.trim();
     if (!content || runningRef.current) return;
     // 乐观渲染用户消息：发送瞬间上屏。后端不回传 user 消息（仅 push agent/system/debug），
@@ -664,6 +686,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         max_steps: maxSteps,
         full_access: fullAccess,
         ...(model ? { model } : {}),
+        ...(mode ? { mode } : {}),
       });
       const tid = (res.data as { task_id?: string })?.task_id;
       if (tid) {
@@ -853,6 +876,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       connectStream, disconnectStream, sendMessage, forceSendMessage, injectOrQueue, removeQueuedAt, queuedMessages, injectMessage, stopTask,
       maxSteps, setMaxSteps,
       fullAccessByTask, setFullAccessForTask,
+      modeByTask, setModeForTask,
       pendingApprovals, decideApproval,
       taskTitles,
       taskObjectives,

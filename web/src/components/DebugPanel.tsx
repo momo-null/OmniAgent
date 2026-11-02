@@ -230,9 +230,10 @@ export default function DebugPanel({ logs, onClear, taskId }: {
             </Typography>
             {mem?.overview ? (
               <Typography variant="caption" color="text.secondary">
-                {Object.entries(mem.overview.by_state)
-                  .map(([k, v]) => `${k} ${v}`)
-                  .join(" / ")}
+                {`active ${mem.overview.active} / ` +
+                  Object.entries(mem.overview.by_kind)
+                    .map(([k, v]) => `${k} ${v}`)
+                    .join(" / ")}
               </Typography>
             ) : null}
           </Stack>
