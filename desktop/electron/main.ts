@@ -53,6 +53,11 @@ app.setPath(
   process.env.OMNI_USER_DATA?.trim() || join(app.getPath("appData"), "OmniAgent"),
 );
 
+// 关掉 Windows 原生遮挡检测：它有误判（失焦/多屏/RDP 下把可见窗口判成「被遮挡」→
+// 停止合成渲染，页面整片空白，拖动窗口强制重绘才恢复；Chromium 上游 40825463 同款）。
+// 代价是被遮挡的窗口仍继续渲染，CPU 略增——对常驻 agent 控制台可接受。
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+
 let win: BrowserWindow | null = null;
 /** web UI 容器（导航条下方的内容视图） */
 let appView: WebContentsView | null = null;
@@ -102,6 +107,9 @@ async function createWindow(): Promise<void> {
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: false,
+      // 常驻 agent 控制台：失焦/被遮挡时不节流定时器与绘制（SSE 流照常走，
+      // 也堵住「后台节流停绘 → 空白」这条同症状路径）
+      backgroundThrottling: false,
     },
   });
   win.contentView.addChildView(appView);
@@ -112,6 +120,11 @@ async function createWindow(): Promise<void> {
     appView.setBounds({ x: 0, y: top, width: w, height: Math.max(0, h - top) });
   };
   win.on("resize", layoutViews);
+  // 兜底重绘：即便上面两层之外仍遇到组合器停摆，拿回焦点/还原窗口时强制重绘一帧，
+  // 不需要用户拖一下窗口才恢复
+  const nudgeRepaint = () => appView?.webContents.invalidate();
+  win.on("focus", nudgeRepaint);
+  win.on("restore", nudgeRepaint);
   layoutViews();
 
   if (cfg.frameless) {
