@@ -1,6 +1,6 @@
 """L2 多文件场景执行器 —— TAM scene-extractor 完整移植(agent 循环形态)。
 
-机制总览见 doc/plans/memory-architecture.md §2.3;触发与水位在本文件 ``maybe_maintain``
+机制总览见 doc/plans/implemented/memory-architecture.md §2.3;触发与水位在本文件 ``maybe_maintain``
 (薄壳),水位存 ``scene_index.json``——该层不依赖任何 L1 记忆库。
 机制(TAM 原样):多文件主题块 ``scene_blocks/*.md`` + 带工具的整理 agent 循环
 (工具白名单硬限 read/write/edit,workspace 钉死本目录)+ 三级容量预警(强制 MERGE)
@@ -57,6 +57,10 @@ def _max_blocks() -> int:
 
 
 # ---------------------------------------------------------------- 块格式
+
+#: 日记块（plan persona-social-memory）：巩固期生成、维护 agent 只读、导航只露最近 7 篇
+_DIARY_PREFIX = "diary-"
+_DIARY_NAV_WINDOW = 7
 
 def parse_scene_block(raw: str) -> Tuple[Dict[str, str], str]:
     """解析场景块:``META 区 + 正文``。无 META 降级(全文当正文,meta 全零值)。"""
@@ -253,6 +257,8 @@ def _op_scene_write(args: Dict[str, Any], scene_dir: Path) -> Dict[str, Any]:
         return {"ok": False,
                 "error": f"内容 {len(content)} 字符超上限 {_BLOCK_MAX_CHARS},请精简或合并场景"}
     p = _resolve_block(scene_dir, str(args.get("scene_file") or ""))
+    if p.name.startswith(_DIARY_PREFIX):
+        return {"ok": False, "error": "日记块为巩固期只读资产，维护不可写"}
     scene_dir.mkdir(parents=True, exist_ok=True)
     p.write_text(content.strip() + "\n", encoding="utf-8")
     return {"ok": True, "file": p.name, "chars": len(content.strip())}
@@ -262,6 +268,8 @@ def _op_scene_edit(args: Dict[str, Any], scene_dir: Path) -> Dict[str, Any]:
     p = _resolve_block(scene_dir, str(args.get("scene_file") or ""))
     if not p.exists():
         return {"ok": False, "error": f"场景块不存在: {p.name}"}
+    if p.name.startswith(_DIARY_PREFIX):
+        return {"ok": False, "error": "日记块为巩固期只读资产，维护不可改"}
     raw = p.read_text(encoding="utf-8")
     old = str(args.get("old_text") or "")
     if old not in raw:
@@ -346,6 +354,8 @@ def _cleanup_blocks(scene_dir: Path) -> List[str]:
     if not scene_dir.exists():
         return removed
     for p in sorted(scene_dir.glob("*.md")):
+        if p.name.startswith(_DIARY_PREFIX):
+            continue                      # 日记是巩固期资产：清理/归一化不碰
         try:
             raw = p.read_text(encoding="utf-8").strip()
         except Exception:
@@ -366,6 +376,8 @@ def _normalize_scene_filenames(scene_dir: Path) -> List[Tuple[str, str]]:
     if not scene_dir.exists():
         return renamed
     for p in sorted(scene_dir.glob("*.md")):
+        if p.name.startswith(_DIARY_PREFIX):
+            continue                      # 日记块名由巩固期生成，已规范
         want = normalize_scene_filename(p.name)
         if want == p.name:
             continue
@@ -508,15 +520,20 @@ def maintain_scenes(project_id: str, brain_cfg: Optional[Dict[str, Any]], eviden
             backup = Path(tempfile.mkdtemp(prefix="scene_bak_")) / "scene_blocks"
             shutil.copytree(scene_dir, backup)
 
-        entries = read_scene_index(project_id)
-        n = len(pre_files)
+        entries_all = read_scene_index(project_id)
+        # diary-* 是巩固期只读资产：不进任务块容量计数/摘要/文件清单（维护 agent 无视野）
+        entries = [e for e in entries_all
+                   if not str(e.get("filename") or "").startswith(_DIARY_PREFIX)]
+        task_files = {n_: p_ for n_, p_ in pre_files.items()
+                      if not n_.startswith(_DIARY_PREFIX)}
+        n = len(task_files)
         warning = _capacity_warning(n, _max_blocks())
         summary_lines = [f"**当前场景总数:{n} / {_max_blocks()}**"]
         for e in entries:
             summary_lines.append(f"### {e['filename']}")
             summary_lines.append(f"**热度**: {e['heat']} | **更新**: {e['updated']}")
             summary_lines.append(f"**summary**: {e['summary']}")
-        file_list = "\n".join(f"- `{name}`" for name in sorted(pre_files)) or "(当前无已有场景文件)"
+        file_list = "\n".join(f"- `{name}`" for name in sorted(task_files)) or "(当前无已有场景文件)"
         user = (
             "**输出语言**:与「新证据」相同的语言。\n\n"
             + (f"⚠️ **场景数量警告**: {warning}\n\n" if warning else "")
@@ -624,13 +641,38 @@ def maybe_maintain(project_id: str, brain_cfg: Optional[Dict[str, Any]], digest:
 
 # ---------------------------------------------------------------- 消费端(导航 / 按需读取)
 
-def load_scene_nav(project_id: str, max_entries: int = 20) -> List[Dict[str, Any]]:
-    """L2 导航段(system 常驻):全部场景块清单(heat 降序)。全文按需 read_scene。
+def load_scene_nav(project_id: str, topic_cap: int = 10,
+                   diary_cap: int = _DIARY_NAV_WINDOW, month_cap: int = 2) -> List[Dict[str, Any]]:
+    """L2 导航段(system 常驻):分族配额裁剪后的**索引条目**。
 
-    注入只取 filename(M-1),因此不再按 summary 过滤——没有摘要的块也必须可被发现。
+    2026-11-02 对齐原仓库 `Path + 热度 + Summary` 三行渲染
+    (``MemoryCore/src/core/scene/scene-navigation.ts:113-115``):本函数只负责
+    **分族配额**,渲染由消费方(``instructions._memory_stable_block``)完成。
+
+    - 主题块:heat 降序,取前 ``topic_cap``;
+    - 日记:日期倒序,取前 ``diary_cap``(heat 恒 0 不参与排序,渲染成日期);
+    - 月记:日期倒序,取前 ``month_cap``。
+    总条数 ≤ topic_cap + diary_cap + month_cap = 19(主题 10 + 日记 7 + 月记 2)。
+    全文按需 read_scene;`read_scene` 空参列清单走 ``list_scene_blocks``(不裁剪)。
     """
     try:
-        return read_scene_index(project_id)[:max_entries]
+        entries = read_scene_index(project_id)
+        months: List[Dict[str, Any]] = []
+        dailies: List[Dict[str, Any]] = []
+        others: List[Dict[str, Any]] = []
+        for e in entries:
+            fn = str(e.get("filename") or "")
+            if fn.startswith("diary-month-"):
+                months.append(e)
+            elif fn.startswith(_DIARY_PREFIX):
+                dailies.append(e)
+            else:
+                others.append(e)
+        others.sort(key=lambda e: int(e.get("heat") or 0), reverse=True)
+        dailies.sort(key=lambda e: str(e.get("filename") or ""), reverse=True)
+        months.sort(key=lambda e: str(e.get("filename") or ""), reverse=True)
+        return (others[:max(0, topic_cap)] + months[:max(0, month_cap)]
+                + dailies[:max(0, diary_cap)])
     except Exception:
         return []
 
@@ -647,5 +689,40 @@ def read_scene_block(project_id: str, name: str) -> str:
 
 
 def list_scene_blocks(project_id: str) -> List[Dict[str, Any]]:
-    """read_scene 空参时的可用块清单(即索引)。"""
-    return load_scene_nav(project_id, max_entries=100)
+    """read_scene 空参时的可用块清单(即索引,不裁剪)。"""
+    return load_scene_nav(project_id, topic_cap=10**6, diary_cap=10**6, month_cap=10**6)
+
+
+def write_diary_block(project_id: str, date_str: str, text: str) -> bool:
+    """写日记块 ``diary-<日期>.md``（内核巩固期直写；plan persona-social-memory M2）。
+
+    - 当日一篇、幂等（已存在则跳过返回 False）；META.summary = 正文首行（导航地图用）；
+    - 日记不占任务块 max_blocks 容量、维护 agent 不可读写（只读资产）；
+    - 空正文拒绝（白卷不落盘）。
+    """
+    try:
+        text = (text or "").strip()
+        if not text:
+            return False
+        date_str = str(date_str or "").strip()
+        if not date_str or any(c in date_str for c in "/\\"):
+            return False
+        scene_dir = scene_blocks_dir(project_id)
+        scene_dir.mkdir(parents=True, exist_ok=True)
+        p = scene_dir / f"{_DIARY_PREFIX}{date_str}.md"
+        if p.exists():
+            return False
+        now = _now()
+        # summary 取首个句末标点结尾的句子(≤60 字),不再硬截 60 字断句
+        # (2026-11-02:此前 `text[:60]` 会停在半句话,导航里出现"…后来不知怎么冒出")
+        flat = text.replace("\n", " ").strip()
+        ends = [i for i in (flat.find(ch) for ch in "。！？!?") if i != -1]
+        end = min(ends) + 1 if ends else 60
+        summary = flat[:min(end, 60)]
+        meta = (f"{_META_START}\ncreated: {now}\nupdated: {now}\n"
+                f"summary: {summary}\nheat: 0\n{_META_END}\n")
+        p.write_text(meta + text + "\n", encoding="utf-8")
+        sync_scene_index(project_id)
+        return True
+    except Exception:
+        return False

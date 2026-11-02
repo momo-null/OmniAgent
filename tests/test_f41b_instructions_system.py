@@ -476,4 +476,4 @@ def test_profile_in_system_not_tail(monkeypatch, tmp_path):
     assert "<user-persona>" in captured["instructions"]      # 画像 → system 稳定段
     assert "PROFILE-TEXT" in captured["instructions"]
     assert "tail_inject_block" not in captured               # 尾部注入机制已删除
-    assert "lead_in_message" in captured                     # lead-in 通道存在（此处为空）
+    assert "lead_in_message" not in captured                 # P1：lead-in 通道整体删除（检索结果永不自动注入）

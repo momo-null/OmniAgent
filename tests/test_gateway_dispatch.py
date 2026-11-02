@@ -282,7 +282,7 @@ def test_msg_send_target_resolved_across_threads():
 
 
 def test_explicit_mode_grants_send_tool_only(monkeypatch):
-    """explicit 通道纯对话也要放行「说话」工具；auto 通道不放行（工具仍全关）。"""
+    """explicit 通道纯对话也要放行「说话」工具 + 只读自取工具；auto 通道不放行（工具仍全关）。"""
     captured = {}
 
     class _Cap(_LoopNoSend):
@@ -297,16 +297,50 @@ def test_explicit_mode_grants_send_tool_only(monkeypatch):
     dispatch.dispatch_sync("在吗", session_id="s_qq_tools_1", reply=_Reply(),
                            reply_mode="explicit", tools_enabled=False)
     assert captured["tools_enabled"] is False
-    assert captured["tool_allowlist"] == ["msg_send_text", "msg_send_voice", "msg_send_card",
-                                          "msg_group_history"]
+    allow = captured["tool_allowlist"]
+    # 说话（三种方式）+ 群上下文只读 + 记忆/场景自取（P1 方案 C：检索结果永不自动注入，
+    # 被点名 run 也得自己能查）——全是只读或回来源会话的动作，无写操作。
+    assert set(allow) >= {"msg_send_text", "msg_send_voice", "msg_send_card",
+                          "msg_group_history", "msg_group_image",
+                          "memory_recall", "read_scene"}
+    assert not any(x.startswith(("memory_remember", "memory_update", "tool_", "shell"))
+                   for x in allow), "外部通道不得放行写记忆或通用执行工具"
 
     dispatch.dispatch_sync("在吗", session_id="s_direct_tools_1", reply=_Reply(),
                            reply_mode="auto", tools_enabled=False)
     assert captured["tool_allowlist"] is None
 
 
-# ── msg_send_voice：发送方式由模型选，通道不支持就明确报错 ────────────────
+def test_dispatch_passes_chat_scope_to_l0_index(monkeypatch, tmp_path):
+    """P2：派发写会话气泡时把「哪个聊天窗口 + 消息还是任务」一起交给 L0 索引。
 
+    IM 来源 kind=chat（人话），cron/手动派发 kind=task（机器指令）——同一张表里不区分，
+    conversation_search 就会把派单提示词当聊天旧事命中（检索串味）。
+    """
+    from omni_core import memory_brain
+
+    seen = []
+    monkeypatch.setattr(memory_brain, "index_l0_message",
+                        lambda sid, role, text, **kw: seen.append((sid, role, text, kw)) or "")
+
+    _use_loop(monkeypatch, _LoopNoSend)
+    dispatch.dispatch_sync("今晚吃什么", session_id="s_qq_l0", project_id="d-l0",
+                           reply=_Reply(), reply_mode="explicit", tools_enabled=False,
+                           source="msg:napcat")
+    user_rows = [s for s in seen if s[1] == "user" and "今晚吃什么" in s[2]]
+    assert user_rows, seen
+    assert user_rows[0][3]["chat_id"] == "group:333333"
+    assert user_rows[0][3]["kind"] == "chat"
+
+    seen.clear()
+    dispatch.dispatch_sync("跑一下日报", session_id="s_cron_l0", project_id="d-l0c",
+                           source="cron")
+    task_rows = [s for s in seen if s[1] == "user" and "跑一下日报" in s[2]]
+    assert task_rows and task_rows[0][3]["kind"] == "task"
+    assert task_rows[0][3]["chat_id"] == ""       # 无回发句柄 = 没有 IM 聊天窗口
+
+
+# ── msg_send_voice：发送方式由模型选，通道不支持就明确报错 ────────────────
 def _load_msg_plugin(tag: str):
     import importlib.util
     from pathlib import Path
@@ -418,6 +452,38 @@ def test_msg_group_history_reads_adapter_history():
         ch_ctx.set_current_reply(None)
 
 
+def test_msg_group_history_keyword_queries_l0_index(monkeypatch, tmp_path):
+    """P2：带 keyword 的群历史改查本地 L0 索引（OneBot 实时历史只有最近几十条，翻旧事靠它）。"""
+    from gateway.channels import context as ch_ctx
+    from omni_core import memory_brain
+
+    monkeypatch.setattr(memory_brain, "_BRAIN_PATH", str(tmp_path / "brain.db"))
+    monkeypatch.setattr(memory_brain, "enabled", lambda: True)
+    monkeypatch.setattr(ch_ctx, "get_source_external", lambda: False)
+
+    plugin = _load_msg_plugin("_msg_plugin_group_hist_kw")
+    reply = _VoiceReply()
+    adapter = _VoiceAdapter("group_hist_kw_chan", reply)
+    used = []
+    adapter.group_history = lambda gid, limit=20: used.append(gid) or []
+    ch_ctx.register(adapter)
+    ch_ctx.set_current_reply(reply)
+    memory_brain.index_l0_message("s_g333", "user", "「小明」(10001): 便签放抽屉里",
+                                  chat_id="group:333")
+    memory_brain.index_l0_message("s_g999", "user", "便签买过三盒", chat_id="group:999")
+    try:
+        r = plugin.msg_group_history(group_id="333", channel="group_hist_kw_chan",
+                                     keyword="便签")
+        assert r["ok"] is True and r["count"] == 1
+        assert "便签放抽屉里" in r["messages"][0] and "小明(10001)" in r["messages"][0]
+        assert used == [], "关键词路径不得再打实时接口"
+        empty = plugin.msg_group_history(group_id="333", channel="group_hist_kw_chan",
+                                         keyword="不存在的东西")
+        assert empty["ok"] is True and empty["count"] == 0
+    finally:
+        ch_ctx.set_current_reply(None)
+
+
 def test_msg_group_history_needs_group_or_group_id():
     """私聊里不传 group_id → 明确报错（不猜群号）。"""
     from gateway.channels import context as ch_ctx
@@ -439,6 +505,56 @@ def test_msg_group_history_unsupported_channel_errors():
     """通道没有群历史能力 → 明确错误，而不是静默返回空。"""
     plugin = _load_msg_plugin("_msg_plugin_group_hist_unsupported")
     r = plugin.msg_group_history(group_id="333", channel="napcat_unsupported_chan")
+    assert r["ok"] is False and "无可用通道" in r["error"]
+
+
+# ── msg_group_image：按需取群图（工具结果带 attachments → S9 注入主模型） ──
+
+def test_msg_group_image_returns_attachments():
+    from gateway.channels import context as ch_ctx
+
+    plugin = _load_msg_plugin("_msg_plugin_group_image")
+    reply = _VoiceReply()
+    adapter = _VoiceAdapter("group_image_chan", reply)
+    calls = []
+
+    def _img(gid, mid):
+        calls.append((gid, mid))
+        return ["data:image/jpeg;base64,QUJD"], ""
+
+    adapter.group_image_data_urls = _img
+    ch_ctx.register(adapter)
+    try:
+        r = plugin.msg_group_image(message_id="42", group_id="333",
+                                   channel="group_image_chan")
+        assert r["ok"] is True and r["count"] == 1 and calls == [("333", "42")]
+        assert r["attachments"] == [{"type": "image",
+                                     "data_url": "data:image/jpeg;base64,QUJD"}]
+        assert "一次性" in r["note"]          # 提示模型附件只在当轮可见
+    finally:
+        ch_ctx.set_current_reply(None)
+
+
+def test_msg_group_image_errors_surface():
+    """取图失败（无图/跨群/下载失败）→ 通道侧错误原样上抛，不静默。"""
+    from gateway.channels import context as ch_ctx
+
+    plugin = _load_msg_plugin("_msg_plugin_group_image_err")
+    reply = _VoiceReply()
+    adapter = _VoiceAdapter("group_image_chan2", reply)
+    adapter.group_image_data_urls = lambda gid, mid: ([], "该消息不属于目标群（已拒绝）")
+    ch_ctx.register(adapter)
+    try:
+        r = plugin.msg_group_image(message_id="42", group_id="333",
+                                   channel="group_image_chan2")
+        assert r["ok"] is False and "不属于" in r["error"]
+    finally:
+        ch_ctx.set_current_reply(None)
+
+
+def test_msg_group_image_unsupported_channel_errors():
+    plugin = _load_msg_plugin("_msg_plugin_group_image_unsupported")
+    r = plugin.msg_group_image(message_id="42", group_id="333", channel="napcat_no_chan")
     assert r["ok"] is False and "无可用通道" in r["error"]
 
 

@@ -139,7 +139,10 @@ class TaskStore:
         allowed = {"objective", "title", "done_when", "state", "success", "runs", "finished_at", "project_id", "session_id", "full_access",
                    # 人格（plan §3.1）：会话激活后持久化，使 handoff 出去的任务与后续轮次
                    # 继承同一人格；owner 是同源的归属标记（user/persona/world，本轮只存不判）。
-                   "persona", "owner"}
+                   "persona", "owner",
+                   # 对话取向（2026-10-31 mode 与通道解绑）：会话级声明，chat/task/auto，
+                   # /chat 派发与 /state 更新都可写；只影响 lane 与 system 纪律，不碰链路
+                   "mode"}
         unknown = set(fields) - allowed
         if unknown:
             raise ValueError(f"不允许更新 task 字段: {', '.join(sorted(unknown))}")
@@ -509,6 +512,8 @@ class ProjectStore:
         content: str,
         task_id: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
+        chat_id: str = "",
+        l0_kind: str = "chat",
     ) -> None:
         with ProjectStore._lock:
             d = ProjectStore.ensure(project_id)
@@ -523,9 +528,15 @@ class ProjectStore:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         # 记忆 L0:会话消息入 buffer(提炼在任务收尾 flush 时批量做;异常静默)
+        # P2（2026-11-02）：同时同步插一行进 brain.db 的 l0_messages——「写入即入表」，
+        # 对齐原仓库 l0_conversations；jsonl 仍是文件真相，表只是检索副本（conversation_search
+        # 查它）。chat_id 由调用方（网关）给出，缺省留空则按 session_id 定位会话。
         try:
             from omni_core import memory_brain
             memory_brain.capture(project_id, role, content)
+            memory_brain.index_l0_message(session_id, role, content,
+                                          chat_id=chat_id, kind=l0_kind,
+                                          recorded_at=rec["ts"])
         except Exception:
             pass
 
@@ -535,6 +546,9 @@ class ProjectStore:
         if not path.exists():
             return []
         lines = path.read_text(encoding="utf-8").splitlines()
+        # limit 先切行再解析：长会话（可达 MB）只要最近若干条时，不必把整份 jsonl 逐行 loads
+        if limit:
+            lines = lines[-limit:]
         msgs: List[Dict[str, Any]] = []
         for ln in lines:
             if not ln.strip():
@@ -543,8 +557,6 @@ class ProjectStore:
                 msgs.append(json.loads(ln))
             except Exception:
                 continue  # 崩溃留下的半截行：跳过坏行，不废整份历史
-        if limit:
-            msgs = msgs[-limit:]
         return msgs
 
     @staticmethod

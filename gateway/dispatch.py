@@ -174,6 +174,12 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         # - explicit（QQ 等 IM）：不自动发最终回答，只有模型调 msg_send_text 才发出；
         # - auto（Web/飞书这类"直接对模型说话"）：最终回答自动回发（原行为）。
         explicit = str(item.get("reply_mode") or "auto").strip().lower() == "explicit"
+        # P2 L0 检索索引（brain.db.l0_messages）用的两个参数：
+        # - chat_id：IM 来源的真实聊天窗口键（``group:123`` / ``private:100``），Web/cron 为空；
+        # - kind：通道消息 vs 任务输入——cron/手动派发的 objective 同样以 role=user 落进会话，
+        #   不区分就会让 conversation_search 把机器指令当聊天命中（检索串味）。
+        _l0_chat_id = str(getattr(reply, "chat_id", "") or "")
+        _l0_kind = "chat" if str(item.get("source") or "").startswith("msg:") else "task"
         existing = TaskStore.find_by_session(project_id, session_id)
         if existing is not None:
             meta = existing
@@ -221,7 +227,8 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             try:
                 ProjectStore.append_message(
                     pid, sid, "assistant", "", task_id=real_task_id,
-                    extra={"steps": turn_steps[_flushed:], "partial": True, "run_key": run_key})
+                    extra={"steps": turn_steps[_flushed:], "partial": True, "run_key": run_key},
+                    chat_id=_l0_chat_id, l0_kind=_l0_kind)
                 _flushed = len(turn_steps)
             except Exception:
                 pass
@@ -252,7 +259,8 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
                 extra["send"] = dict(send_info)
             try:
                 ProjectStore.append_message(
-                    pid, sid, "assistant", content, task_id=real_task_id, extra=extra)
+                    pid, sid, "assistant", content, task_id=real_task_id, extra=extra,
+                    chat_id=_l0_chat_id, l0_kind=_l0_kind)
             except Exception:
                 pass
 
@@ -260,7 +268,8 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             try:
                 # 会话气泡写消息原文（display_text），场合自述只喂模型不进历史
                 ProjectStore.append_message(pid, sid, "user", display_text,
-                                            task_id=real_task_id)
+                                            task_id=real_task_id,
+                                            chat_id=_l0_chat_id, l0_kind=_l0_kind)
             except Exception:
                 pass
 
@@ -288,7 +297,10 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
                         content = f"{content}\n{seg}".strip()
                     if content:
                         history_items.append({"role": role, "content": content})
-                history_items = history_items[-40:]  # 防超长（消息级滑窗，压缩归大脑）
+                # 防超长（消息级滑窗，压缩归大脑）。IM 通道（群/私聊）另有通道侧背景
+                # （群上下文块），故收窄到 12 条：40 条原文在活跃群里
+                # 几乎全是闲聊与她自己的回帖，成本固定而相关性下降（plan §5）。
+                history_items = history_items[-(12 if explicit else 40):]
             except Exception:
                 history_items = []
 
@@ -299,9 +311,15 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
                         tools_enabled=bool(item.get("tools_enabled", True)),
                         # 显式发送通道：纯对话也不给工具，但必须放行「说话」这几个动作
                         # （文字/语音/卡片——用什么方式说是模型自己的选择）+ 群历史查询
-                        # （被 @ 接不上话时自己能看上下文，只读、不改任何状态）
+                        # （被 @ 接不上话时自己能看上下文，只读、不改任何状态）+ 群图片
+                        # 按需取看（[图片] 占位的消息按 message_id 拉附件，S9 注入）
+                        # + 记忆自取（P1 方案 C：检索结果永不自动注入，被点名 run 也要
+                        # 能自己查——memory_recall/read_scene/conversation_search 皆纯读，
+                        # conversation_search 的 scope 对来源外部强制锁死在当前会话/群）
                         tool_allowlist=(["msg_send_text", "msg_send_voice", "msg_send_card",
-                                         "msg_group_history"] if explicit else None))
+                                         "msg_group_history", "msg_group_image",
+                                         "memory_recall", "read_scene", "conversation_search"]
+                                        if explicit else None))
         spec = TaskSpec(
             objective=item["objective"],
             done_when=item.get("done_when", ""),
@@ -337,6 +355,20 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         if explicit:
             send_info.update({"mode": "explicit", "count": len(sent_texts)})
         _record_final("\n\n".join(sent_texts) if sent_texts else answer)
+        # ── 记忆写链：聊天/群聊轮次也要沉淀（Web 侧在 chat_runtime 入队，网关侧此前漏接，
+        # 导致群聊经历从未进记忆）── 口径与 Web 不同：聊天走「只沉淀叙事层」
+        # （allow_atoms=False → 不产 L1 原子，避免闲聊/玩笑/他人可控文本污染事实库），
+        # 并按条数/间隔限流入队（多轮合并），防高频轮次打爆写队列。
+        try:
+            from omni_core import memory_writer
+
+            if pid:
+                memory_writer.enqueue_throttled(
+                    pid, brain_cfg, source_task=real_task_id,
+                    persona=getattr(loop, "persona", "") or "",
+                    did_work=True)
+        except Exception as e:  # noqa: BLE001 —— 写链是增强项，失败不影响本轮
+            print(f"[dispatch] 记忆入队失败（忽略）: {type(e).__name__}: {e}")
         # run_task 真实返回：success / escalated / steps / trajectory_file …
         ok = bool(result.get("success", True)) and not result.get("escalated") if isinstance(result, dict) else True
         try:

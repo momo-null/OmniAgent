@@ -54,12 +54,13 @@ def _ensure_worker() -> None:
 def enqueue(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
             source_task: str = "", persona: str = "",
             msgs: Optional[List[Dict[str, str]]] = None,
-            did_work: bool = True,
+            did_work: bool = True, allow_atoms: bool = True,
             on_done: Optional[Callable[[Dict[str, Any]], None]] = None) -> bool:
     """把一轮收尾压成一条队列项（毫秒级返回）。返回是否入队成功。
 
     ``msgs`` 为 ``None`` 时在**本函数内**取走 capture 缓冲（入队线程 = 收尾线程，
     取走是纯内存操作），保证轮次边界清晰。
+    ``allow_atoms=False`` = 只沉淀叙事层（群聊/社交流水），不产 L1 原子。
     """
     try:
         from omni_core import memory_brain
@@ -68,7 +69,7 @@ def enqueue(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
             msgs = memory_brain.pop_capture(project_id)
         item = {"project_id": project_id, "brain_cfg": brain_cfg,
                 "source_task": source_task, "persona": persona, "msgs": msgs,
-                "did_work": bool(did_work),
+                "did_work": bool(did_work), "allow_atoms": bool(allow_atoms),
                 "on_done": on_done, "ts": time.time()}
         _ensure_worker()
         try:
@@ -129,9 +130,54 @@ def _process(item: Dict[str, Any]) -> Dict[str, int]:
         source_task=item.get("source_task", ""), persona=item.get("persona", ""),
         msgs=item.get("msgs") or [],
         allow_write=bool(item.get("did_work", True)),
+        allow_atoms=bool(item.get("allow_atoms", True)),
     )
     stats["did_work"] = 1 if item.get("did_work") else 0
     return stats
+
+
+#: 群聊/社交流水的限流参数：攒够条数或到间隔才真正入队（否则消息留在 capture
+#: 缓冲里随下次合并）。群聊高峰几十轮/小时，逐轮入队会把写队列（_Q_MAX=64）
+#: 打满并丢最旧——而写链本身每轮要跑 L2 维护（墙钟上限 300s）。
+_CHAT_MIN_MSGS = 12
+_CHAT_MIN_INTERVAL_SEC = 600.0
+_last_chat_enqueue: Dict[str, float] = {}
+
+
+def enqueue_throttled(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
+                      source_task: str = "", persona: str = "",
+                      did_work: bool = True,
+                      min_msgs: int = _CHAT_MIN_MSGS,
+                      min_interval: float = _CHAT_MIN_INTERVAL_SEC,
+                      on_done: Optional[Callable[[Dict[str, Any]], None]] = None) -> bool:
+    """聊天/群聊专用入队：**限流 + 只沉淀叙事层**（allow_atoms=False）。
+
+    触发条件（任一满足）：capture 缓冲里已攒够 ``min_msgs`` 条；或距该项目上次入队
+    已超过 ``min_interval`` 秒（低流量场景也要保证巩固期能被喂到，否则日记永远攒不够）。
+    未触发时**不动缓冲**，消息随下一轮合并——这就是"多轮合并成一次沉淀"。
+    """
+    try:
+        from omni_core import memory_brain
+
+        st = memory_brain.buffer_stats(project_id)
+        now = time.time()
+        if (int(st.get("msgs") or 0) < max(2, int(min_msgs))
+                and now - _last_chat_enqueue.get(project_id, 0.0) < min_interval):
+            return False
+        _last_chat_enqueue[project_id] = now
+        return enqueue(project_id, brain_cfg, source_task=source_task, persona=persona,
+                       did_work=did_work, allow_atoms=False, on_done=on_done)
+    except Exception as e:  # noqa: BLE001 —— 写链是增强项，失败不影响主链路
+        logger.warning("限流入队失败（忽略）：%s: %s", type(e).__name__, e)
+        return False
+
+
+def reset_throttle(project_id: str = "") -> None:
+    """清空限流时间戳（测试用）。"""
+    if project_id:
+        _last_chat_enqueue.pop(project_id, None)
+    else:
+        _last_chat_enqueue.clear()
 
 
 # ------------------------------------------------------------------ 观测 / 测试
@@ -180,3 +226,4 @@ def reset() -> None:
     for k in list(_stats):
         _stats[k] = 0
     _last_result.clear()
+    _last_chat_enqueue.clear()

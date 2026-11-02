@@ -1,11 +1,13 @@
-"""记忆注入 TAM 对齐 — placement 三不变量的回归锁（2026-10-07）。
+"""记忆注入形态 — placement 不变量的回归锁（2026-10-07 立，2026-11-02 P1 改版）。
 
-对齐参照系：external/TencentDB-Agent-Memory MemoryCore/src/core/hooks/auto-recall.ts
-（stable→system / dynamic→user prompt 每轮一次 / L2 渐进披露）。
-本文件锁死四条不变量，任何一条被破坏 = 回退到已被证实有害的每步尾部重发：
+P1（方案 C，2026-11-02）：**L1 检索结果永不自动注入**——lead-in 通道整段删除，
+模型经 memory_recall 工具自取；system 常驻 <memory-usage-rules>（必查场景 + 每轮 ≤3 次）。
+本文件锁死四条不变量：
 
-1. 稳定段（<scene-navigation> + <user-persona>）进 system，且在指纹计算之前合并；
-2. L1 检索记忆（<relevant-memories>）在起始 items 恰注入一次，后续块只继承不重发；
+1. 稳定段（<memory-usage-rules> + <scene-navigation> + <user-persona>）进 system，
+   且在指纹计算之前合并；
+2. run 起始**没有** <relevant-memories>，inject_text_brain 不被自动调用；
+   检索结果只经工具返回进上下文一次；
 3. L2 场景全文**只**经 read_scene 工具按需进上下文（渐进披露），任何注入路径不含全文；
 4. 子任务（is_sub）零记忆注入语义不变。
 
@@ -80,26 +82,42 @@ def test_stable_block_scene_nav_and_profile_in_system(monkeypatch):
     loop.knowledge_cfg["profile"] = True
     monkeypatch.setattr(scene_executor, "load_scene_nav",
                         lambda pid, **k: [{"filename": "windows-环境事实.md",
-                                           "summary": "SCENE-SUM", "heat": 3}])
+                                           "summary": "SCENE-SUM", "heat": 3,
+                                           "updated": "2026-11-01T00:00:00+00:00"},
+                                          {"filename": "diary-2026-10-31.md",
+                                           "summary": "DIARY-SUM", "heat": 0,
+                                           "updated": "2026-11-01T00:00:00+00:00"}])
     monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
 
     block, layers = loop._memory_stable_block(False, task_id="tid")
     assert "<scene-navigation>" in block and "</scene-navigation>" in block
     assert "windows-环境事实.md" in block
-    assert "SCENE-SUM" not in block, "M-1：摘要常驻已砍，只留文件名清单"
+    # P6（2026-11-02）：对齐原仓库 Path + 热度 + Summary 三行索引；M-1 零摘要已废
+    assert "SCENE-SUM" in block and "热度 3" in block
+    assert "DIARY-SUM" in block and "更新 2026-11-01" in block
     assert "read_scene" in block, "导航必须指引按需读取（渐进披露）"
     assert "<user-persona>" in block and "PROFILE-TEXT" in block
-    assert layers == ["scene_nav", "user_profile"]
+    assert layers == ["memory_rules", "scene_nav", "user_profile"]
+    assert "<memory-usage-rules>" in block, "P1：使用规则常驻 system（检索结果永不自动注入）"
     assert "SCENE-CONTENT" not in block, "全文不得进稳定段（只准摘要 + read_scene）"
 
 
-def test_stable_block_empty_when_no_scene_and_no_profile(monkeypatch):
+def test_stable_block_empty_when_memory_and_profile_gates_off():
+    loop = _loop()
+    loop.knowledge_cfg["memory"] = False
+    loop.knowledge_cfg["profile"] = False
+    assert loop._memory_stable_block(False, task_id="tid") == ("", [])
+
+
+def test_stable_block_rules_survive_empty_scene_and_profile(monkeypatch):
+    """scene/画像都空时，使用规则仍常驻——L1 自取语义靠它立住。"""
     loop = _loop()
     loop.knowledge_cfg["memory"] = True
     loop.knowledge_cfg["profile"] = True
     monkeypatch.setattr(scene_executor, "load_scene_nav", lambda pid, **k: [])
     monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "  ")
-    assert loop._memory_stable_block(False, task_id="tid") == ("", [])
+    block, layers = loop._memory_stable_block(False, task_id="tid")
+    assert "<memory-usage-rules>" in block and layers == ["memory_rules"]
 
 
 def test_bridge_merges_stable_block_into_instructions_before_fingerprint(monkeypatch):
@@ -122,17 +140,21 @@ def test_bridge_merges_stable_block_into_instructions_before_fingerprint(monkeyp
     assert loop._fp_system_prompt == instr, "指纹输入必须是拼接稳定段后的 system"
 
 
-# --- 2. L1 lead-in：run 开始一次 ----------------------------------------------
-def test_lead_in_from_tam_inject_and_logged(monkeypatch):
+# --- 2. P1：检索结果永不自动注入；system 常驻使用规则 --------------------------
+def test_search_results_never_auto_injected_rules_in_system(monkeypatch):
+    calls = {"inject": 0}
+
+    def _spy_inject(p, q):
+        calls["inject"] += 1
+        return "<relevant-memories>MEMO</relevant-memories>", {"hits": 1}
+
     loop = _loop()
     loop.knowledge_cfg["memory"] = True
     loop.knowledge_cfg["profile"] = True
     _cfg(monkeypatch)
     monkeypatch.setattr(scene_executor, "load_scene_nav",
-                        lambda pid, **k: [{"filename": "a.md", "summary": "SCENE-SUM", "heat": 1}])
-    monkeypatch.setattr(mb, "inject_text_brain",
-                        lambda p, q: ("<relevant-memories>MEMO</relevant-memories>",
-                                      {"hits": 1, "chars": 4, "placement": "lead_in"}))
+                        lambda pid, **k: [{"filename": "a.md", "summary": "S", "heat": 1}])
+    monkeypatch.setattr(mb, "inject_text_brain", _spy_inject)
     monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
 
     captured = {}
@@ -141,10 +163,15 @@ def test_lead_in_from_tam_inject_and_logged(monkeypatch):
     loop._run_via_sdk(_spec(), {"model": "m"}, "SYS", types.SimpleNamespace(),
                       traj=traj, user_input="hi")
 
-    assert captured["lead_in_message"] == "<relevant-memories>MEMO</relevant-memories>"
+    instr = captured["instructions"] or ""
+    assert "<relevant-memories>" not in instr and calls["inject"] == 0, \
+        "L1 检索结果不得进 system，也不得被 run 起始自动检索"
+    assert "lead_in_message" not in captured, "lead-in 通道已删除"
+    assert "<memory-usage-rules>" in instr and "memory_recall" in instr
+    assert "合计不超过 3 次" in instr
     placements = {r["placement"]: r for r in traj.records("memory_injected")}
-    assert placements["system"]["layers"] == ["scene_nav", "user_profile"]
-    assert placements["lead_in"]["layers"] == ["memory"]
+    assert set(placements) == {"system"}
+    assert placements["system"]["layers"] == ["memory_rules", "scene_nav", "user_profile"]
 
 
 def test_memory_gate_off_zero_injection(monkeypatch):
@@ -154,9 +181,6 @@ def test_memory_gate_off_zero_injection(monkeypatch):
     _cfg(monkeypatch)
     monkeypatch.setattr(scene_executor, "load_scene_nav",
                         lambda pid, **k: [{"filename": "a.md", "summary": "S", "heat": 1}])
-    monkeypatch.setattr(mb, "inject_text_brain",
-                        lambda p, q: ("<relevant-memories>X</relevant-memories>",
-                                      {"hits": 1, "chars": 1, "placement": "lead_in"}))
     monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
 
     captured = {}
@@ -166,10 +190,10 @@ def test_memory_gate_off_zero_injection(monkeypatch):
 
     assert "<scene-navigation>" not in (captured["instructions"] or "")
     assert "PROFILE-TEXT" not in (captured["instructions"] or "")
-    assert captured["lead_in_message"] == ""
+    assert "<memory-usage-rules>" not in (captured["instructions"] or "")
 
 
-# --- 2b. sdk_loop 级：lead-in 恰一次、位置在任务输入前 --------------------------
+# --- 2b. sdk_loop 起始 items 骨架（后续意图门测试复用 _MockRunner/_gate） -------
 class _FakeRes:
     def __init__(self, items):
         self._items = items
@@ -198,36 +222,6 @@ def _gate():
         verify_count=0,
         has_condition=True,
     )
-
-
-def test_lead_in_injected_once_and_before_task_input(monkeypatch):
-    """跨多块运行：lead-in 只在起始 items 出现一次（后续块继承，不重发）。"""
-    runner = _MockRunner()
-    monkeypatch.setattr(sl, "Runner", runner)
-    memo = "<relevant-memories>MEMO</relevant-memories>"
-    run_subtask_sdk(
-        {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"},
-        instructions="SYS",
-        user_input="执行任务",
-        tools=[],
-        gate=_gate(),
-        max_steps=3,
-        chunk_turns=1,
-        should_stop=lambda: False,
-        lead_in_message=memo,
-        skill_catalog="<available_skills>CAT</available_skills>",
-    )
-
-    assert len(runner.calls) >= 2, "应跨多块运行才能验证『不重发』"
-    for call in runner.calls:
-        dicts = [m for m in call if isinstance(m, dict)]
-        assert dicts.count({"role": "user", "content": memo}) == 1, \
-            "lead-in 在任何一次请求中最多出现一次"
-    first = [m for m in runner.calls[0] if isinstance(m, dict)]
-    i_cat = first.index({"role": "user", "content": "<available_skills>CAT</available_skills>"})
-    i_memo = first.index({"role": "user", "content": memo})
-    assert i_cat < i_memo, "记忆段贴近任务输入（TAM：prepend to user prompt）"
-    assert first[-1] == {"role": "user", "content": "执行任务"}, "任务输入仍排最后"
 
 
 # --- 3. read_scene：全文只走按需读取 ------------------------------------------
@@ -273,12 +267,9 @@ def test_subtask_gets_no_memory_injection(monkeypatch):
     loop.knowledge_cfg["profile"] = True
     monkeypatch.setattr(scene_executor, "load_scene_nav",
                         lambda pid, **k: [{"filename": "a.md", "summary": "S", "heat": 1}])
-    monkeypatch.setattr(mb, "inject_text_brain",
-                        lambda p, q: ("<relevant-memories>X</relevant-memories>", {"hits": 1}))
     monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
 
     assert loop._memory_stable_block(True, task_id="t") == ("", [])
-    assert loop._memory_lead_in(True, task_id="t", query="q") == ""
 
 
 # --- 5. 收尾意图门（判断全 LLM,零格式字面量）-----------------------------------

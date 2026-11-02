@@ -446,6 +446,12 @@ def _append_task_name(task_id: str, name: str):
 _TASK_CARD_MAX = 120        # 单张卡上限（字）
 _TASK_CARD_KEEP = 20        # 最多保留的卡数，超出滚动折叠
 
+# P3（2026-11-02，plan memory-recall §P3）：私聊会话窗口化。常驻上下文只留最近若干**轮**
+# （user+assistant 计一轮）且总量 ≤_WINDOW_MAX_CHARS；更早的不进 messages，但仍在 L0 表里
+# 可被 conversation_search 现查——「更早的历史靠现查，不靠每请求全文重发」。
+_WINDOW_TURNS = 12
+_WINDOW_MAX_CHARS = 4000
+
 
 def _task_card_line(calls: List[Dict[str, Any]], content: str) -> str:
     """把一轮的工具调用压成一行任务卡（≤120 字）。"""
@@ -468,16 +474,52 @@ def _strip_card(text: str) -> str:
                      if not ln.startswith("【任务卡】")).strip()
 
 
+def _window_messages(out: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """P3 窗口：保留最近 ``_WINDOW_TURNS`` 轮且 ≤``_WINDOW_MAX_CHARS`` 字，更早的折叠成一行。
+
+    从尾部往回累计：每遇到一条 user 就是一轮的边界（一轮 = user + 它的 assistant）。
+    至少留最后一条，否则超长单轮会返回空窗口。
+    """
+    kept: List[Dict[str, Any]] = []
+    chars = rounds = 0
+    for m in reversed(out):
+        if m.get("role") == "user":
+            if rounds >= _WINDOW_TURNS:
+                break
+            rounds += 1
+        n = len(str(m.get("content") or ""))
+        if kept and chars + n > _WINDOW_MAX_CHARS:
+            break
+        chars += n
+        kept.append(m)
+    kept.reverse()
+    # 窗口必须停在「轮」的边界：往回累计时可能先把上一轮的回答收了进来（它的提问已在
+    # 窗口外）——留半轮会让模型看到没有前文的结论。整段没有 user 时不裁（纯 agent 会话）。
+    first_user = next((i for i, m in enumerate(kept) if m.get("role") == "user"), None)
+    if first_user:
+        kept = kept[first_user:]
+    dropped = len(out) - len(kept)
+    if dropped <= 0:
+        return out
+    # 提示按「轮」说（人的心智单位）；切在半轮上不足一轮时按 1 轮计，避免出现「0 轮已折叠」。
+    folded = max(1, sum(1 for m in out[:dropped] if m.get("role") == "user"))
+    note = {"role": "system",
+            "content": f"（更早的 {folded} 轮对话已折叠，需要时用 conversation_search 查）"}
+    return [note] + kept
+
+
 def _session_records_to_model_messages(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """会话记录 -> OpenAI 风格 messages（跨轮记忆）。
 
-    对话层预算（plan §3.4）：**对话 + 任务卡**。此前这里把上一轮的工具调用以
-    结构化 ``tool_calls`` + 成对 ``tool`` 结果消息回填（每轮最多 12 条、每条结果
+    对话层预算（plan §3.4 + P3）：**最近 12 轮的对话 + 任务卡**。此前这里把上一轮的工具
+    调用以结构化 ``tool_calls`` + 成对 ``tool`` 结果消息回填（每轮最多 12 条、每条结果
     2000 字），长期干活会把人格的上下文塞满细节，注意力被冲淡。现在：
 
     - assistant 轮只回填**结论 + 一行任务卡**（目标/步数/涉及工具，≤120 字）；
     - 完整 steps / 工具结果留在轨迹里，需要时由 ``read_task_digest`` 现查；
-    - 卡片超过 ``_TASK_CARD_KEEP`` 张时，最旧的折叠成一行提示（滚动合并）。
+    - 卡片超过 ``_TASK_CARD_KEEP`` 张时，最旧的折叠成一行提示（滚动合并）；
+    - 整段再按 ``_window_messages`` 裁到最近 12 轮 / ≤4000 字，更早的只留一行折叠提示
+      （原文仍可被 conversation_search 现查，P2 的 L0 表）。
 
     注意：这**不是**把工具调用写成文本让模型模仿——回填的是"上一轮做了什么"的
     陈述性摘要，且明确指引用工具去取细节，与"示范用文本发调用"是两件事。
@@ -517,7 +559,7 @@ def _session_records_to_model_messages(records: List[Dict[str, Any]]) -> List[Di
         note = (f"【任务卡】更早的 {len(extra)} 轮已折叠；"
                 f"需要细节请调 read_task_digest(task_id=...) 现查。")
         out[first]["content"] = (out[first]["content"] + "\n" + note).strip()
-    return out
+    return _window_messages(out)
 
 def _merge_thinking_step(steps, block_id, model, content):
     """把流式推理链累积进 turn_steps（按 block_id 去重 upsert）。

@@ -1,24 +1,68 @@
 """网关主入口 —— 常驻进程：消息通道 + 定时任务 + 派发队列，一体启动。
 
 用法（OmniAgent 仓库根）：
-    python -m gateway.channel_gateway                # 全量（通道按 config.channels 启用者）
+    python -m gateway.channel_gateway                # 全量（channels/ 下有配置文件的通道）
     python -m gateway.channel_gateway --no-channels  # 只跑调度器（无飞书时先跑 cron）
     python -m gateway.channel_gateway --no-scheduler # 只跑通道（调飞书连通性）
 
 云端部署：systemd/任务计划程序托管本入口；本地调试直接跑。
-配置：~/.omniagent/config.yaml 的 channels: 段（v1.1 §3 示例）。
+配置：``~/.omniagent/channels/<name>.yaml``（每通道一文件，与 plugins/ 同构）+
+``channels/routes.yaml``（聊天路由）。不再读主配置的 channels:/chat_routes: 段。
 """
 from __future__ import annotations
 
 import signal
 import sys
 import time
+from typing import Any, Dict, List
 
 from . import dispatch
 from .channels import context
 from .scheduler import Scheduler
 
 _ADAPTER_FACTORIES = {}  # name -> build(cfg)  惰性注册（避免 import 不必要 SDK）
+
+
+def channel_config(name: str) -> Dict[str, Any]:
+    """通道自有配置 ``~/.omniagent/channels/<name>.yaml``（缺失/损坏返回空 dict）。
+
+    与 ``plugin_config``（omni_core/tools/loader.py）完全对称：一通道一文件。
+    通道连接信息（token/ws_url 等）是部署事实，不该和 brain/runtime 等 core 配置
+    挤在同一份主配置里；独立成文件也为通道插件化预留了同一套布局。
+    """
+    try:
+        from omni_core.local.runtime_paths import channel_config_file
+
+        path = channel_config_file(name)
+    except Exception:
+        return {}
+    if not path.is_file():
+        return {}
+    try:
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"[gateway] 通道 {name} 配置读取失败（忽略）: {e}")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _channel_names() -> List[str]:
+    """枚举 ``channels/`` 下的通道配置文件名（routes.yaml 是路由表，不是通道）。"""
+    try:
+        from omni_core.local.runtime_paths import channels_root
+
+        return sorted(p.stem for p in channels_root().glob("*.yaml") if p.stem != "routes")
+    except Exception:
+        return []
+
+
+def _load_routes() -> Dict[str, Any]:
+    """聊天路由表（实现已抽到 ``gateway.chat_routes``，与通道层共用一份规则）。"""
+    from .chat_routes import load_routes
+
+    return load_routes()
 
 
 def _register_factories() -> None:
@@ -29,7 +73,7 @@ def _register_factories() -> None:
 
 
 def build_adapter(name: str):
-    """按 ``config.channels.<name>`` 构造适配器（**不连接**），供非网关进程使用。
+    """按 ``channels/<name>.yaml`` 构造适配器（**不连接**），供非网关进程使用。
 
     背景：``msg_send_*`` 工具取通道走本进程的注册表（``channels.context``），只有网关
     进程里有实例。在 Web 后端进程里让 agent 主动发消息时，注册表是空的 → 工具返回
@@ -43,26 +87,22 @@ def build_adapter(name: str):
         factory = _ADAPTER_FACTORIES.get(name)
         if factory is None:
             return None
-        import config as _config
-        cfg = ((_config.load_config() or {}).get("channels") or {}).get(name) or {}
-        return factory(cfg)
+        return factory(channel_config(name))
     except Exception:
         return None
 
 
 def start_channels() -> int:
-    """按 config.channels 启用项拉起适配器；返回成功数。"""
-    import config
+    """拉起 ``channels/`` 下所有已启用通道；返回成功数。"""
     _register_factories()
-    channels_cfg = (config.load_config() or {}).get("channels", {}) or {}
     started = 0
-    for name, cfg in channels_cfg.items():
+    for name in _channel_names():
         factory = _ADAPTER_FACTORIES.get(name)
         if factory is None:
             print(f"[gateway] 未知通道 {name}（跳过；可用: {sorted(_ADAPTER_FACTORIES)}）")
             continue
         try:
-            adapter = factory(cfg)
+            adapter = factory(channel_config(name))
             if adapter is None:
                 print(f"[gateway] 通道 {name} 未启用（enabled=false）")
                 continue
@@ -88,7 +128,7 @@ def _on_message(msg) -> None:
     dispatch.ensure_worker()
     preview = msg.text[:60].replace("\n", " ")
     print(f"[gateway] 收到消息 <{msg.channel}:{msg.chat_id}> {preview}")
-    # 聊天路由：msg/<channel>/<chat_id> → 哪个项目 + 哪个会话（config.chat_routes 可覆盖）
+    # 聊天路由：msg/<channel>/<chat_id> → 哪个项目 + 哪个会话（channels/routes.yaml 可覆盖）
     project_id, session_id = _route_chat(msg)
     # 能力门透传：外部可达通道默认 allow_tools=False → 该来源任务为纯对话（无任何工具）。
     # 网关只读通道自声明，不判断"这是谁发的"——判定权在通道适配器。
@@ -109,25 +149,14 @@ def _on_message(msg) -> None:
 
 
 def _route_chat(msg) -> tuple:
-    """消息 → (project_id, session_id)。默认：default 项目 + 通道固定会话。
+    """消息 → (project_id, session_id)（规则见 ``gateway.chat_routes``）。
 
-    路由规则（``config.chat_routes``）两级匹配，精确优先：
-    - ``"napcat:private:123456"`` → 单个会话；
-    - ``"napcat:*"``             → 整条通道（所有 QQ 私聊/群）→ 同一项目。
     配了 project_id 的消息不再是「临时任务」（临时任务跑完即从任务索引删除，
     Web 任务列表里看不到），而是持久归属到该项目、可在界面点开看过程。
     """
-    import config as _config
-    routes = (_config.load_config() or {}).get("chat_routes", {}) or {}
-    key = f"{msg.channel}:{msg.chat_id}"
-    rule = routes.get(key) or routes.get(f"{msg.channel}:*") or {}
-    project_id = rule.get("project_id") or ""
-    # 会话 ID：通道+聊天唯一，形如 s_feishu_<chat 哈希>（跨重启稳定）
-    import hashlib
-    h = hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
-    session_id = rule.get("session_id") or f"s_feishu_{h}" if msg.channel == "feishu" \
-        else (rule.get("session_id") or f"s_{msg.channel}_{h}")
-    return project_id, session_id
+    from .chat_routes import resolve
+
+    return resolve(msg.channel, msg.chat_id)
 
 
 def _ensure_plugins() -> None:
@@ -150,10 +179,16 @@ def main() -> int:
     print("[gateway] 启动（Ctrl+C 退出）")
     dispatch.ensure_worker()
     _ensure_plugins()
+    # P2：独立跑网关（不起后端服务）时同样发起一次性 L0 检索索引回填（后台线程，只跑一次）
+    try:
+        from omni_core import memory_brain
+        memory_brain.start_l0_backfill()
+    except Exception:
+        pass
 
     n = 0 if no_channels else start_channels()
     if not no_channels and n == 0:
-        print("[gateway] ⚠ 无任何通道连接（检查 config.channels / FEISHU_APP_SECRET）")
+        print("[gateway] ⚠ 无任何通道连接（检查 ~/.omniagent/channels/ 下的通道配置）")
 
     sched = None
     if not no_scheduler:

@@ -335,7 +335,7 @@ def s4_end_to_end(brain_cfg: dict) -> dict:
                     intent.append(payload.get("verdict"))
     out["memory_injected_placements"] = placements
     out["finish_intent_check"] = intent
-    out["lead_in_note"] = ("lead_in 仅在 L1 池子≥20 条时出现,scratch 项目为空属正确零注入")
+    out["lead_in_note"] = ("lead-in 自动注入已全局下线（P1，2026-11-02）：placements 只应有 system")
     out["pass"] = bool(result.get("success")) and "system" in placements
     return out
 

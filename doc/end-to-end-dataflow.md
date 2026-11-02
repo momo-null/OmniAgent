@@ -97,7 +97,7 @@
 
 - **知识蒸馏**：记忆生成（L1 atoms 提炼判重 / L2 场景块整理 / L3 画像蒸馏）按
   TencentDB Agent Memory 移植，随任务收尾触发，失败静默降级、不阻断主流程；
-  分层机制与注入面见 `doc/plans/memory-architecture.md`。
+  分层机制与注入面见 `doc/plans/implemented/memory-architecture.md`。
 
 ## 3\.5 多层注入形态
 
@@ -105,7 +105,7 @@
 
 - **纪律注入**：加载全局 `AGENTS.md` \+ 任务私有`AGENTS.md` 纪律文件，在任务启动时读取快照并锁定至 system prompt 尾部，单次 run 周期内不重复读取，文件更新仅在下一轮任务生效，同时落盘轨迹日志。
 
-- **记忆注入**：默认通过 `knowledge_inject.compose_injection_block` 在 run 起始以单条 user 消息（`lead_in_message`）注入 L1 检索记忆（brain.db 单库动态段，FTS5 simple 分词），每轮一次、不每步重发；仅注入起始 items，不污染后续 `to_input_list()` 继承的会话历史。L2 场景块不走注入——模型通过工具按需拉取全文（见 `doc/plans/memory-architecture.md` §注入面全景）。
+- **记忆注入**：run 起始只往 system 稳定段拼三段——`<memory-usage-rules>`（使用规则）、`<scene-navigation>`（L2 索引：文件名 + 热度/日期 + summary）、`<user-persona>`（L3 画像），一次注入、不每步重发。**检索结果永不自动注入**（2026-11-02 方案 C，原 `<relevant-memories>` lead-in 通道已删除）：L1 摘要由 `memory_recall`、L0 逐字原文由 `conversation_search`、L2 全文由 `read_scene` 按需自取，一个 run 内自取工具合计 ≤3 次（见 `doc/plans/implemented/memory-architecture.md` §4/§5）。
 
 # 4\. Agents SDK Runner 核心 API 与块循环机制（`omni_core/brain/sdk_loop.py`）
 

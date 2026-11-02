@@ -120,6 +120,14 @@ async def lifespan(app: FastAPI):
         logger.info("loop 组件池：MCP 启动预热已发起（后台线程）")
     except Exception as e:  # 预热失败不阻断启动
         logger.warning("MCP 启动预热失败（已忽略）: %s", e)
+    # P2 L0 检索索引：首次上线把既有会话 jsonl 回填进 brain.db.l0_messages（后台线程，
+    # meta 标记保证只跑一次）。conversation_search 查不到旧记录是可容忍的降级，不阻断启动。
+    try:
+        from omni_core import memory_brain
+        if memory_brain.start_l0_backfill():
+            logger.info("L0 检索索引回填已发起（后台线程）")
+    except Exception as e:
+        logger.warning("L0 回填发起失败（已忽略）: %s", e)
     yield
     # P1 工具插件：进程退出前依次调用各插件 shutdown()（异常吞掉，不阻断退出）。
     try:

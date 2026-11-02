@@ -89,7 +89,8 @@ def _external_note(result: Dict[str, Any]) -> Dict[str, Any]:
         from gateway.channels import context as _ctx
 
         if isinstance(result, dict) and result.get("ok") and _ctx.get_source_external():
-            result["note"] = "外部来源：只能发回本会话，channel/target 参数已被忽略"
+            extra = "外部来源：只能发回本会话，channel/target 参数已被忽略"
+            result["note"] = f"{result['note']}；{extra}" if result.get("note") else extra
     except Exception:  # 非网关进程 / 极端导入失败：不影响发送结果
         pass
     return result
@@ -121,8 +122,10 @@ def msg_send_text(text: str, channel: str = "", target: str = "") -> Dict[str, A
         # 只发文本。要发语音走 msg_send_voice——发送方式由模型自己选，
         # 不在工具里按「入站是不是语音」偷偷改写（否则模型以为发文字、对方却收到语音）。
         result = reply.send_text(text)
-        # 记账（dispatch 据此判断"已发送/未发送"；工具结果字符串不可靠，别事后解析）
-        if _ctx is not None and isinstance(result, dict) and result.get("ok"):
+        # 记账（dispatch 据此判断"已发送/未发送"；工具结果字符串不可靠，别事后解析）。
+        # 同文去重跳过（duplicate）不算真发送：否则「明明没发出去」会被记成已发送。
+        if (_ctx is not None and isinstance(result, dict) and result.get("ok")
+                and not result.get("duplicate")):
             _ctx.note_sent(text)
         return _external_note(result)
     except Exception as e:
@@ -155,11 +158,11 @@ def msg_send_voice(text: str, channel: str = "", target: str = "") -> Dict[str, 
         result = send_voice(text)
         if not isinstance(result, dict):
             return {"ok": False, "error": f"语音发送返回异常: {result!r}"}
-        if result.get("ok"):
+        if result.get("ok") and not result.get("duplicate"):
             try:
                 from gateway.channels import context as _ctx
 
-                _ctx.note_sent(text)  # 记账：本轮真的发出去了
+                _ctx.note_sent(text)  # 记账：本轮真的发出去了（去重跳过不算）
             except Exception:  # 记账失败不影响已发出的消息
                 pass
         return _external_note(result)
@@ -168,17 +171,20 @@ def msg_send_voice(text: str, channel: str = "", target: str = "") -> Dict[str, 
 
 
 @function_tool(
-    description="看某个群最近的消息（不含你自己发的）：被 @ 但接不上话、想确认大家在聊什么、"
-                "或要总结群里刚聊了什么时用它。只有支持群历史的通道可用（QQ 支持）。",
+    description="看某个群的消息：不带 keyword=最近消息（实时，不含你自己发的）——被 @ 但接不上话、"
+                "想确认大家在聊什么时用；带 keyword=按关键词翻这个群的旧记录（跨天，含你自己说的话）。"
+                "只有支持群历史的通道可用（QQ 支持）。",
     unit="messaging",
 )
-def msg_group_history(group_id: str = "", limit: int = 20, channel: str = "") -> Dict[str, Any]:
-    """群最近消息。
+def msg_group_history(group_id: str = "", limit: int = 20, channel: str = "",
+                      keyword: str = "") -> Dict[str, Any]:
+    """群最近消息，或按关键词翻该群的历史记录。
 
     Args:
         group_id: 群号（缺省=当前所在群）。
         limit: 最多几条（1-50，缺省 20）。
         channel: 通道名（缺省=来源通道）。
+        keyword: 关键词（非空则改为检索该群的旧消息原文，用 2-4 字最有效）。
     """
     adapter, chat_id, err = _resolve(channel, "")
     if err:
@@ -199,6 +205,36 @@ def msg_group_history(group_id: str = "", limit: int = 20, channel: str = "") ->
         if kind != "group":
             return {"ok": False, "error": "只有群聊有群历史；当前不在群里，需显式传 group_id"}
         gid = ident
+    kw = str(keyword or "").strip()
+    if kw:
+        # P2（2026-11-02）：关键词路径转查 L0 逐字索引（brain.db.l0_messages）——
+        # OneBot 的实时历史只有最近几十条，翻旧事必须查本地表；查不到就明确说没有。
+        try:
+            from omni_core import memory_brain
+        except Exception:
+            memory_brain = None
+        sid = ""
+        try:
+            from gateway.chat_routes import resolve as _resolve_route
+            ch_name = str(getattr(adapter, "name", "") or channel or "")
+            sid = _resolve_route(ch_name, f"group:{gid}")[1]
+        except Exception:
+            sid = ""
+        rows = (memory_brain.search_l0(kw, chat_id=f"group:{gid}", session_id=sid,
+                                       limit=max(1, min(20, int(limit or 8))))
+                if memory_brain is not None else [])
+        try:
+            from omni_core.tools import memory_tool as _mt
+            _mt.note_self_fetch(len(rows), str(rows[0]["id"]) if rows else "")
+        except Exception:
+            pass   # 记账失败不影响本次查询
+        return {"ok": True, "group_id": gid, "keyword": kw, "count": len(rows),
+                "note": "按时间正序检索到的群内旧消息原文（本地索引，非实时接口）"
+                        if rows else "这个群里没有匹配「%s」的旧消息" % kw,
+                "messages": [f"[{str(r['when'])[:16].replace('T', ' ')}] "
+                             f"{r['who'] or ('我' if r['role'] == 'assistant' else '对方')}："
+                             f"{r['text']}" for r in rows]}
+
     fn = getattr(adapter, "group_history", None)
     if not callable(fn):
         return {"ok": False, "error": f"通道 {getattr(adapter, 'name', '') or '该'} 不提供群历史"}
@@ -209,6 +245,54 @@ def msg_group_history(group_id: str = "", limit: int = 20, channel: str = "") ->
     rows = list(rows or [])
     return {"ok": True, "group_id": gid, "count": len(rows),
             "note": "按时间正序，已跳过你自己发的消息", "messages": rows}
+
+
+@function_tool(
+    description="看群里某条消息的图片：传 msg_group_history 结果或群上下文里 [图片] 消息的 "
+                "message_id，图片会作为当轮附件注入，用你自己的视觉直接看（不是文字描述）。"
+                "仅 QQ 群图片可用；消息里没有图会返回明确错误。",
+    unit="messaging",
+)
+def msg_group_image(message_id: str, group_id: str = "", channel: str = "") -> Dict[str, Any]:
+    """看群消息里的图。
+
+    Args:
+        message_id: 图片所在消息的 ID（群历史/上下文里每条都带）。
+        group_id: 群号（缺省=当前所在群）。
+        channel: 通道名（缺省=来源通道）。
+    """
+    adapter, chat_id, err = _resolve(channel, "")
+    if err:
+        return {"ok": False, "error": err}
+    from gateway.channels import context as _ctx
+
+    gid = str(group_id or "").strip()
+    if _ctx.get_source_external():
+        # 外部来源只准看当前群：防群里的人借它读其他群的图（与 msg_group_history 同界）
+        kind, _, ident = (chat_id or "").partition(":")
+        if kind != "group":
+            return {"ok": False, "error": "外部来源只允许查看当前群的图片"}
+        if gid and gid != ident:
+            return {"ok": False, "error": "外部来源只能查看当前群（其他群号已拒绝）"}
+        gid = ident
+    elif not gid:
+        kind, _, ident = (chat_id or "").partition(":")
+        if kind != "group":
+            return {"ok": False, "error": "只有群聊能按会话取图；当前不在群里，需显式传 group_id"}
+        gid = ident
+    fn = getattr(adapter, "group_image_data_urls", None)
+    if not callable(fn):
+        return {"ok": False, "error": f"通道 {getattr(adapter, 'name', '') or '该'} 不支持取群图片"}
+    try:
+        urls, gerr = fn(gid, str(message_id or "").strip())
+    except Exception as e:
+        return {"ok": False, "error": f"取图失败: {e}"}
+    if gerr:
+        return {"ok": False, "error": gerr}
+    return {"ok": True, "group_id": gid, "message_id": str(message_id),
+            "count": len(urls),
+            "note": "图片已作为当轮附件返回（请求边界可见，一次性，不进会话历史）",
+            "attachments": [{"type": "image", "data_url": u} for u in urls]}
 
 
 @function_tool(

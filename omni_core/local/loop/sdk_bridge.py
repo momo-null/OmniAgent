@@ -270,18 +270,18 @@ class SdkBridgeMixin:
         role = "executor" if is_sub else "brain"
         # F4.1b：纪律文件（AGENTS.md）进入 system prompt——run 开始读一次并锁定快照。
         # 放置原则：用户单写、run 内不变的稳定纪律 → system（缓存命中 + 覆盖语义正确
-        # 「用户当轮指令覆盖一切」+ 注入面收敛）；记忆稳定段（scene 导航/画像）同放置原则，
-        # 见下方 _memory_stable_block；L1 检索段 run 开始一条 user 消息（_memory_lead_in）。
+        # 「用户当轮指令覆盖一切」+ 注入面收敛）；记忆稳定段（使用规则/scene 导航/画像）
+        # 同放置原则，见下方 _memory_stable_block。L1 检索结果**不再自动注入**
+        # （P1，2026-11-02 方案 C）：模型经 memory_recall 自取，run 收尾落观测行。
         _instr_snapshot = self._load_instructions_snapshot(spec)
         system_prompt = self._merge_instructions(system_prompt, _instr_snapshot)
         system_prompt = self._merge_character(system_prompt)
-        # TAM 对齐：记忆**稳定段**（<scene-navigation> 摘要导航 + <user-persona> 画像）
+        # 记忆**稳定段**（<memory-usage-rules> + <scene-navigation> 导航 + <user-persona> 画像）
         # 并入 system prompt，run 开始读一次锁定（维护只在任务收尾 flush 触发，run 内不变）；
         # scene 全文由模型按需调 read_scene 读取（渐进披露），**不进任何每步请求**。
         # 位置在指纹计算之前——O5+ 不变式「Model-visible ⟺ logged」要求指纹含此块。
-        # L1 检索段（<relevant-memories>）走 run 开始一条 user 消息（见 _lead_in）。
         # 尾部每步重发机制已移除：静态内容每步尾部重发 = 每步强化一次，反复 priming
-        # 抬高生成退化概率（doc/plans/memory-architecture.md §4/§5）。
+        # 抬高生成退化概率（doc/plans/implemented/memory-architecture.md §4/§5）。
         _mem_block, _mem_layers = self._memory_stable_block(
             is_sub, task_id=getattr(spec, "task_id", ""))
         if _mem_block:
@@ -497,15 +497,18 @@ class SdkBridgeMixin:
                 except Exception:
                     pass
 
-        # TAM 对齐：L1 检索记忆 → run 开始一条 user 消息（历史后、任务输入前），仅注入一次
-        # （对齐 TAM auto-recall 每轮一次；不得改回每步重发，见上方稳定段注释）。
-        _lead_in = self._memory_lead_in(
-            is_sub, task_id=getattr(spec, "task_id", ""),
-            query=getattr(spec, "objective", ""))
-        if _lead_in:
-            self._log_knowledge_injection(traj, {
-                "kind": "memory_injected", "chars": len(_lead_in),
-                "layers": ["memory"], "placement": "lead_in"})
+        # P1 观测（2026-11-02）：本 run 的记忆自取行为从零记起，收尾落 memory_recall.jsonl
+        # （lead-in 自动注入已全局下线，检索结果只经 memory_recall 工具进上下文）。
+        # 仅主链——子 agent 在同一进程里嵌套跑，reset/take 都会踩父亲的账本。
+        _mt = None
+        if not is_sub and self.knowledge_cfg.get("memory"):
+            try:
+                from omni_core.tools import memory_tool as _mt
+                _mt.reset_recall_stats()
+                # P2：conversation_search 的 scope=current 靠 task → 会话归属解析，同款绑定
+                _mt.set_l0_task_context(str(getattr(spec, "task_id", "") or ""))
+            except Exception:
+                _mt = None
         # 收尾意图门（仅主链;子任务有 verify 门控,不走信任大脑路径）
         _plain_judge = None if is_sub else self._plain_finish_judge(traj)
         # 基础架构打点：LLM 计时（请求发出 / 首事件 / 首增量 / 完成）落轨迹。
@@ -561,7 +564,6 @@ class SdkBridgeMixin:
             # F4.1b：纪律文件快照（run 级锁定）——仅供 run 中途漂移检测/告警，不改请求
             instructions_snapshot=_instr_snapshot,
             on_instructions_drift=_on_instr_drift,
-            lead_in_message=_lead_in,
             plain_finish_judge=_plain_judge,
             verify_fail_max=int(self.escalation.get("verify_fail_max", 3)) if allow_escalate else 0,
             should_stop=self._is_stop_requested,
@@ -598,6 +600,11 @@ class SdkBridgeMixin:
         )
         # M7：主 agent 的派发计划（由 dispatch 元工具写到 gate 上）
         res["dispatch_plan"] = list(getattr(gate, "dispatch_plan", None) or [])
+        # P1 观测：本 run 的 memory_recall 自取行为落 memory_recall.jsonl 一行
+        # （零查标记由此对出；lead-in 已下线，"注入了什么"看 memory_injected 轨迹）
+        if _mt is not None:
+            _mt.log_recall_run(project=TaskStore.project_of(
+                str(getattr(spec, "task_id", "") or "")))
 
         # --- L2 统计与终态（不介入框架循环） ---
         # F1.2：指标回填——每次模型调用 +1（on_llm_end 钩子记账，跨块累计）；

@@ -44,6 +44,16 @@ def global_agents_file() -> Path:
     return _GLOBAL / "AGENTS.md"
 
 
+def global_relations() -> Path:
+    """全局「对人的印象卡」目录 ``memory/relations/``。
+
+    为什么不在项目层：**人是跨项目的**——同一个群友可能在群里聊、也可能私聊过来；
+    按项目/群存会让"对他的印象"分裂成几份，等于把个人助手做成了分群机器人。
+    所以关系卡按 **uid** 存全局一份，卡内再记录"在哪儿遇到、聊过什么"。
+    """
+    return _GLOBAL / "memory" / "relations"
+
+
 def user_profile() -> Path:
     """全局用户画像 ``memory/user_profile.md``（跨 task 共享，P0 一等实体）。"""
     return _GLOBAL / "memory" / "user_profile.md"
@@ -210,6 +220,21 @@ def env_config_file(kind: str) -> Path:
     return _child(environments_root(), kind, "env_kind").with_suffix(".yaml")
 
 
+def channels_root() -> Path:
+    """通道自有配置根 ``~/.omniagent/channels/``（每通道一个 ``<name>.yaml``）。"""
+    return _GLOBAL / "channels"
+
+
+def channel_config_file(name: str) -> Path:
+    """通道自有配置文件 ``channels/<name>.yaml``（内置路径安全校验）。"""
+    return _child(channels_root(), name, "channel_name").with_suffix(".yaml")
+
+
+def channel_routes_file() -> Path:
+    """聊天路由表 ``channels/routes.yaml``（msg/<channel>/<chat_id> → 项目/会话）。"""
+    return channels_root() / "routes.yaml"
+
+
 # ---- 目录确保（幂等） ------------------------------------------------------
 def ensure_global_dirs() -> None:
     """服务启动时建好全局层所有子目录。幂等。"""
@@ -219,6 +244,7 @@ def ensure_global_dirs() -> None:
         tasks_root(),
         plugins_root(),
         environments_root(),
+        channels_root(),
     ):
         d.mkdir(parents=True, exist_ok=True)
 

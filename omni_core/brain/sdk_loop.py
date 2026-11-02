@@ -507,7 +507,7 @@ class _CompactionModel(Model):
 # 静态内容每步重发 = 每步强化（反复 priming），是生成退化（工具调用写成 DSML 文本）
 # 的相关因素，形态亦偏离参照系 TAM（stable/dynamic 拆分 + 渐进披露）。现行形态：
 # 稳定段进 system prompt（run 开始读一次锁定）、L1 检索段 run 开始一条 user 消息、
-# L2 全文按需 read_scene 工具读取。见 doc/plans/memory-architecture.md §5；
+# L2 全文按需 read_scene 工具读取。见 doc/plans/implemented/memory-architecture.md §5；
 # **不要**重新引入本类或任何「每步请求追加固定内容」的 Model 包装（review_lint 红线）。
 
 
@@ -1404,7 +1404,7 @@ def _assemble_agent_stack(
 
     包装链自内向外：LLM 计时 → 预算提示 → 重复失败防护 → 粘性压缩 → 输出截断
     （记忆注入不走 Model 包装——稳定段在 instructions、检索段在起始 items，
-    见 doc/plans/memory-architecture.md §4/§5）。
+    见 doc/plans/implemented/memory-architecture.md §4/§5）。
     返回 ``(state, agent, model, use_compaction, _repeat_guard)`` 供后续块循环复用。
     """
     state = SubtaskState()
@@ -1529,9 +1529,6 @@ def run_subtask_sdk(
     wallclock_sec: float = 0.0,
     # F2.2：收尾语义——oneshot（缺省，纯文本收尾即 success）| daemon（纯文本汇报后 paused 等待续跑）
     task_mode: str = "oneshot",
-    # TAM 对齐：L1 检索记忆 run 开始一条 user 消息（历史后、任务输入前），仅注入一次；
-    # 后续块由 to_input_list() 自然继承。稳定段（scene 导航/画像）在 instructions 里。
-    lead_in_message: str = "",
     # 收尾意图门（Omni 加固）：纯文本收尾判「信任大脑」成功前的语义复核回调——
     # 返回纠正消息则不判完成、继续跑；None 放行。由 sdk_bridge 注入（LLM 判断,零字面量）。
     plain_finish_judge: Optional[Callable[[str], Optional[str]]] = None,
@@ -1658,14 +1655,12 @@ def run_subtask_sdk(
         _c = str(h.get("content", "") or "")
         if _c:
             items.append({"role": _r if _r in ("user", "assistant") else "user", "content": _c})
-    # T2.4（O4'）：技能目录改为固定模板 User 消息，插在历史之后、本轮 user_input 之前；
-    # L1 检索记忆（TAM 对齐）同为 run 开始一条 user 消息——置于技能目录之后、任务输入
-    # 之前（贴近当前任务，对齐 TAM「recall 结果 prepend 到 user prompt」）。两者都只在
-    # 起始 items 注入一次，后续块由 to_input_list() 自然继承，**不得**改回每步重发。
+    # T2.4（O4'）：技能目录改为固定模板 User 消息，插在历史之后、本轮 user_input 之前。
+    # 只在起始 items 注入一次，后续块由 to_input_list() 自然继承，**不得**改回每步重发。
+    # （2026-11-02 P1：L1 检索记忆的 run 起始自动注入已全局下线——检索结果永不自动注入，
+    #  模型经 memory_recall / conversation_search 自取，见 plan memory-recall-2026-11-02。）
     if skill_catalog:
         items.append({"role": "user", "content": skill_catalog})
-    if lead_in_message:
-        items.append({"role": "user", "content": lead_in_message})
     # content 可为 str 或内容块数组（多模态输入：文本 + 图片，见 sdk_bridge.build_user_content）
     items.append({"role": "user", "content": user_input})
 

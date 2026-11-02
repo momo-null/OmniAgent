@@ -141,9 +141,10 @@ class InstructionMixin:
         return system_prompt or ""
 
     def _memory_stable_block(self, is_sub: bool, task_id: str = ""):
-        """TAM 对齐：记忆**稳定段**进 system prompt——scene 摘要导航 + 用户画像。
+        """记忆**稳定段**进 system prompt——使用规则 + scene 导航 + 用户画像。
 
-        形态对齐 TAM auto-recall（stable/dynamic 拆分）：
+        * ``<memory-usage-rules>``（P1，2026-11-02 方案 C）：L1 检索结果永不自动注入，
+          system 常驻的是「必查场景 + 每轮合计 ≤3 次」的使用规则；gate ``memory.enabled``；
         * ``<scene-navigation>``：L2 场景摘要 + 更新时间 + read_scene 指引——**只放索引**，
           全文由模型按需调 ``read_scene`` 读取（渐进披露）；gate ``runtime.knowledge.memory.enabled``；
         * ``<user-persona>``：用户画像（TAM 的 L3 persona 位置）；gate ``knowledge.profile.enabled``。
@@ -157,19 +158,47 @@ class InstructionMixin:
         parts: List[str] = []
         layers: List[str] = []
         if self.knowledge_cfg.get("memory"):
+            # P1（2026-11-02，方案 C）：L1 检索结果**永不自动注入**——常驻 system 的是
+            # 使用规则，内容由模型经 memory_recall（及 P2 的 conversation_search）自取。
+            parts.append(
+                "<memory-usage-rules>\n"
+                "长期记忆（你与主人的事实/规则/偏好/事件）不会自动提供给你，需要时自己查：\n"
+                "- 必查：被问过往事件、以前的约定、人物关系、主人的相关信息时，"
+                "先调 memory_recall 查过再回答，不凭印象编造；\n"
+                "- 要原话、具体时间、具体是谁说的：memory_recall 只有摘要或查不到时，"
+                "调 conversation_search 检索原始聊天记录（关键词用 2-4 字最有效）；\n"
+                "- 查不到就如实说「没有相关记录」；一个 run 内自取过往（memory_recall + "
+                "conversation_search + msg_group_history）合计不超过 3 次，"
+                "不要反复换关键词硬查；\n"
+                "- 与当前请求无关的记忆内容不要主动提及。\n"
+                "</memory-usage-rules>")
+            layers.append("memory_rules")
             try:
                 from omni_core.local import scene_executor
                 _pid = TaskStore.project_of(str(task_id)) if task_id else ""
                 _entries = scene_executor.load_scene_nav(_pid)
                 if _entries:
-                    # M-1：场景只暴露文件名清单（零摘要）——摘要内容经 L1 检索按需进面，
-                    # 杜绝无关场景摘要常驻污染对话
-                    _rows = "\n".join(f"- {_e['filename']}" for _e in _entries)
+                    # 2026-11-02 对齐原仓库 `Path + 热度 + Summary`（M-1 的"只给文件名"
+                    # 让模型无法判断该读哪篇，diary-* 文件名零信息量）。每条三行，
+                    # 摘要截 120 字；日记/月记渲染日期（heat 恒 0），主题块渲染热度。
+                    _rows: List[str] = []
+                    for _e in _entries:
+                        _fn = str(_e.get("filename") or "")
+                        _summary = str(_e.get("summary") or "").strip()
+                        _upd = str(_e.get("updated") or "")[:10]
+                        if _fn.startswith("diary"):
+                            _meta = f"更新 {_upd}"
+                        else:
+                            _meta = f"热度 {int(_e.get('heat') or 0)} · 更新 {_upd}"
+                        _rows.append(f"- {_fn}（{_meta}）")
+                        if _summary:
+                            _rows.append(f"  {_summary[:120]}")
                     _block = ("<scene-navigation>\n"
-                              "以下是可用场景记忆的文件名清单。仅当用户请求与某场景"
-                              "明显相关时，调用 read_scene 工具（scene_name=文件名）"
-                              "读取该场景；不要在无关请求中主动提及场景内容。\n"
-                              f"{_rows}\n</scene-navigation>")
+                              "以下是可用场景记忆的索引（文件名 + 摘要）。摘要与本轮相关"
+                              "但信息不足时，调用 read_scene 工具（scene_name=文件名）"
+                              "读取全文；内容已足够时不必读。不要在无关请求中主动提及"
+                              "场景内容。\n"
+                              f"{'\\n'.join(_rows)}\n</scene-navigation>")
                     parts.append(_block)
                     layers.append("scene_nav")
             except Exception:
@@ -191,7 +220,7 @@ class InstructionMixin:
         """收尾意图门（Omni 加固,TAM 无此机制）：纯文本收尾判「信任大脑」成功前的语义复核。
 
         背景：畸形调用表现为「文本被当普通输出、调用根本不派发」,而 oneshot 语义会把
-        纯文本收尾判成功 → 任务静默假成功（doc/plans/memory-architecture.md §6）。
+        纯文本收尾判成功 → 任务静默假成功（doc/plans/implemented/memory-architecture.md §6）。
         判断**全 LLM**（是否在尝试发起但未派发调用）,零厂商格式字面量——与
         「语义判断全 LLM、脚本只做簿记」红线同构;仅 oneshot 无校验条件路径触发。
         judge 异常/无 brain_cfg/配置关 → 返回 None（fail-open=现状）。
@@ -242,28 +271,4 @@ class InstructionMixin:
                     "不要把工具调用写进普通文本。")
 
         return _judge
-
-    def _memory_lead_in(self, is_sub: bool, task_id: str = "", query: str = "") -> str:
-        """TAM 对齐：L1 检索记忆 **run 开始注入一次**（user 消息，历史后、任务输入前）。
-
-        频率语义对齐 TAM auto-recall（每轮一次）：run 即 Omni 的「一轮任务」——
-        起始 items 里的消息由后续块 ``to_input_list()`` 自然继承，天然不重发。
-        **不得**改回每步尾部注入：检索记忆属动态内容，尾部重发 = 每步强化一次，
-        反复 priming 抬高生成退化概率（memory-architecture.md §5）。
-        gate ``runtime.knowledge.memory.enabled``；池子低于阈值时零注入（TAM 原语义）。
-        """
-        if is_sub or not self.knowledge_cfg.get("memory"):
-            return ""
-        try:
-            from omni_core import memory_brain
-            # L1 检索 brain.db（融合排序 + 召回强化），零命中也落观测。
-            # persona 优先取**会话激活**的人格（ToolLoop.persona，plan §3.1），
-            # 缺省才回退配置里的单人设值——多人格期靠这一处透传，不改检索语义。
-            _persona = str(getattr(self, "persona", "") or memory_brain._cfg("persona") or "")
-            _mt, _meta = memory_brain.inject_text_brain(_persona, query or "")
-            if self.on_debug:
-                self.on_debug("memory_inject", {"title": "记忆注入", **_meta})
-            return _mt or ""
-        except Exception:
-            return ""
 

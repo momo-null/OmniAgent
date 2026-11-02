@@ -10,7 +10,7 @@
       （内核元工具 verify/plan/task_done/record/collect_list 豁免）。
   R4 记忆注入回流：内核里出现尾部每步重发机制的记号（_TailInjectModel/tail_inject*），
       或在 scene_executor 之外调用 load_scene_text/read_scene_full（L2 全文只准经
-      read_scene 工具按需进上下文——见 doc/plans/memory-architecture.md §5）。
+      read_scene 工具按需进上下文——见 doc/plans/implemented/memory-architecture.md §5）。
 
 约束域（M4 起「自动发现」，新增文件默认受约束，不用再手工登记）：
   KERNEL_DIRS   omni_core/**/*.py        -> 强制 R1 + R2
@@ -132,7 +132,7 @@ def check_r4_memory_placement(lines: list[str], path: Path, findings: list[str])
             findings.append(
                 f"[R4] {rel}:{n} 尾部每步重发机制记号 {m.group(0)!r} 回流 "
                 f"（记忆注入 = 稳定段进 system / L1 起始 items 一次 / L2 全文按需 read_scene，"
-                f"见 doc/plans/memory-architecture.md §5）"
+                f"见 doc/plans/implemented/memory-architecture.md §5）"
             )
     if rel == SCENE_FULLTEXT_ALLOW:
         return

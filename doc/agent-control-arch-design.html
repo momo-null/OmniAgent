@@ -397,7 +397,7 @@
 <!-- ============ N5 ============ -->
 <section id="n5">
   <h2 id="s-05-记忆与知识层TAM移植架构"><span class="num">05</span> 记忆与知识层（TAM 移植架构）</h2>
-  <p class="lead">记忆与知识层源自腾讯 TAM（Agent Memory）分层记忆模型，把任务经验沉淀为可消费记忆并注入回上下文。<b>2026-10-28 起收敛为 brain.db 单库</b>（TAM 双库退役，FTS5 simple 分词）。权威设计索引见 <code>doc/plans/memory-architecture.md</code>；本节为架构图集与落地事实。</p>
+  <p class="lead">记忆与知识层源自腾讯 TAM（Agent Memory）分层记忆模型，把任务经验沉淀为可消费记忆并注入回上下文。<b>2026-10-28 起收敛为 brain.db 单库</b>（TAM 双库退役，FTS5 simple 分词）。权威设计索引见 <code>doc/plans/implemented/memory-architecture.md</code>；本节为架构图集与落地事实。</p>
 
   <div class="diagram">
     <svg viewBox="0 0 700 662" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
@@ -475,8 +475,8 @@
       </defs>
 
       <rect x="160" y="30" width="380" height="52" rx="9" fill="#e7f6fd" stroke="#0ea5e9" stroke-width="2"/>
-      <text x="350" y="54" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">读链 inject_text_brain(query, persona)</text>
-      <text x="350" y="72" font-size="11" fill="#64748b" text-anchor="middle">融合排序 top_k=8，floor=0.30 以下不注入</text>
+      <text x="350" y="54" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">读链 search_brain(query, persona, peer, k)</text>
+      <text x="350" y="72" font-size="11" fill="#64748b" text-anchor="middle">绝对相关性 + floor=0.30，k≤5</text>
       <line x1="350" y1="82" x2="350" y2="106" stroke="#0ea5e9" stroke-width="2" marker-end="url(#arblue2)"/>
 
       <rect x="160" y="108" width="380" height="66" rx="9" fill="#e7f6fd" stroke="#0ea5e9" stroke-width="2"/>
@@ -486,15 +486,15 @@
       <line x1="350" y1="174" x2="350" y2="200" stroke="#0ea5e9" stroke-width="2" marker-end="url(#arblue2)"/>
 
       <rect x="160" y="202" width="380" height="52" rx="9" fill="#e7f6fd" stroke="#0ea5e9" stroke-width="2"/>
-      <text x="350" y="226" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">按分合并、top_k=8 截断</text>
-      <text x="350" y="244" font-size="11" fill="#64748b" text-anchor="middle">去重合并后取 top_k</text>
+      <text x="350" y="226" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">glue 门槛 + 去冗余 + 轮换降权，k≤5</text>
+      <text x="350" y="244" font-size="11" fill="#64748b" text-anchor="middle">同主题只留最高分，最近用过的 ×0.85</text>
       <line x1="350" y1="254" x2="350" y2="278" stroke="#0ea5e9" stroke-width="2" marker-end="url(#arblue2)"/>
 
       <rect x="160" y="280" width="380" height="60" rx="9" fill="#e7f6fd" stroke="#0ea5e9" stroke-width="2"/>
-      <text x="350" y="306" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">组装 &lt;relevant-memories&gt;</text>
-      <text x="350" y="324" font-size="11" fill="#64748b" text-anchor="middle">注入 brain 上下文（仅参考，以观测为准）</text>
+      <text x="350" y="306" font-size="13" font-weight="700" fill="#0369a1" text-anchor="middle">memory_recall 工具返回（不自动注入）</text>
+      <text x="350" y="324" font-size="11" fill="#64748b" text-anchor="middle">模型按需自取；一个 run 内自取合计 ≤3 次</text>
     </svg>
-    <div class="cap">图 N5b · 记忆读链。search_brain 融合排序（top_k=8，floor=0.30）后作为参考块在 run 起始单条注入一次。</div>
+    <div class="cap">图 N5b · 记忆读链。search_brain 融合排序（绝对相关性 + importance + recency，floor=0.30，k≤5）；P1（2026-11-02）起检索结果永不自动注入，只经工具交付。</div>
   </div>
 
   <h3 id="s-05-0-数据流总览" class="blk">数据流总览（写链 / 读链 / 维护）</h3>
@@ -515,10 +515,11 @@
     <li><b>L3 画像</b>：设计就绪（<code>user_profile.md</code>，候选→晋升→弱注入），实现待立项。</li>
   </ul>
 
-  <b>读链（inject_text_brain）</b>
+  <b>读链（search_brain，只经工具暴露）</b>
   <ul class="prin">
-    <li><b>检索</b>：<code>search_brain(query, persona)</code>——simple 分词（2 字滑窗短语 OR）→ FTS5 MATCH → bm25 归一化 + 多信号融合排序。</li>
-    <li><b>注入</b>：top_k=8、floor=0.30；run 起始以单条 user 消息注入一次，标注「仅参考，与观测不一致以观测为准」。</li>
+    <li><b>检索</b>：<code>search_brain(query, persona, peer, k)</code>——simple 分词（2 字滑窗短语 OR）→ FTS5 MATCH → bm25 绝对相关性 <code>rel/(1+rel)</code> + importance + recency 融合排序。</li>
+    <li><b>控量</b>：floor=0.30、k≤5，另三道闸：glue 门槛（只盖住一个高频词即丢）、同主题去冗余、轮换降权 ×0.85。</li>
+    <li><b>交付</b>：<b>run 起始不再注入检索结果</b>（P1，2026-11-02）——内容只由 <code>memory_recall</code> 工具返回给模型。</li>
   </ul>
 
   <h3 id="s-51-全局库与scope路由" class="blk">5.1 单库与 origin 标签（2026-10-28 起）</h3>
@@ -533,11 +534,11 @@
   <ul>
     <li><b>形态</b>：手写 SKILL.md（Hermes 风，frontmatter + 正文）；全局 <code>~/.omniagent/skills/</code> 跨 project 共享，task 私有 <code>tasks/&lt;task_id&gt;/skills/</code>；recall 合并两层、task 优先。</li>
     <li><b>消费</b>：run 开始注入技能目录摘要；<code>load_skill</code> 按需拉正文；<code>search_skill</code> 检索。</li>
-    <li><b>定位（2026-10-30）</b>：skill 按<b>一般模块</b>处理——自动蒸馏 / 宏缓存 / 晋升 / 淘汰机器已弃用恒关（代码保留）；系统重心在记忆轴。见 <code>doc/plans/memory-architecture.md</code> §7。</li>
+    <li><b>定位（2026-10-30）</b>：skill 按<b>一般模块</b>处理——自动蒸馏 / 宏缓存 / 晋升 / 淘汰机器已弃用恒关（代码保留）；系统重心在记忆轴。见 <code>doc/plans/implemented/memory-architecture.md</code> §7。</li>
   </ul>
 
   <h3 id="s-53-有效性边界与诚实声明" class="blk">5.3 有效性边界与诚实声明</h3>
-  <div class="note"><b>三层记忆形态（现行）</b>：L1 原子记忆（brain.db 单库，run 起始单条注入一次）、L2 场景块（<code>scene_executor.py</code> 多文件主题块，工具按需拉取全文、不走注入）、L3 用户画像（设计就绪，实现待立项）。一致性由注入面纪律保证（system=角色卡稳定段 + L1 起始检索块 + L2 工具拉取），见 <code>doc/plans/memory-architecture.md</code> §4/§5。</div>
+  <div class="note"><b>四层记忆形态（现行，2026-11-02）</b>：L0 逐字会话索引（brain.db 的 <code>l0_messages</code> + <code>l0_fts</code>，<code>conversation_search</code> 自取）、L1 原子记忆（brain.db 单库，<b>检索结果永不自动注入</b>，只经 <code>memory_recall</code> 工具自取）、L2 场景块（<code>scene_executor.py</code> 多文件主题块，system 常驻<b>索引条目</b>＝文件名＋热度/日期＋摘要，全文工具按需拉取）、L3 用户画像（已实现：<code>user_profile.md</code> 全文常驻 system）。一致性由注入面纪律保证（system＝使用规则 + L2 索引 + L3 画像，不含任何检索结果），见 <code>doc/plans/implemented/memory-architecture.md</code> §4/§5。</div>
   <div class="redline"><b>诚实边界</b>：对外只宣称「链路已实现并真机验证」；<b>不宣称「记忆注入已证明有效」</b>，除非后续 A/B 跑出结论。内核零场景硬编码；能力默认关、需显式开启。</div>
 
   <h3 id="s-54-调试与可见性" class="blk">5.4 调试与可见性</h3>
@@ -813,7 +814,7 @@
     <tr><th>目录</th><th>层级</th><th>内容 / 用途</th></tr>
     <tr><td><code>config.yaml</code></td><td>全局</td><td>真 API key（去仓库）、模型端点、<code>local_model.auto_start</code>、三通道（<code>brain</code> / <code>runtime.executor</code> / <code>runtime.vision</code>，各自独立 enable + base_url/model，由 Web 设置面板「通道」Tab 写入 <code>~/.omniagent/config.yaml</code>）。框架态下三通道仍作为 model provider 接入 SDK。</td></tr>
     <tr><td><code>skills/</code></td><td>全局</td><td>通用 skill 存全局（跨 project 共享）；task 私有 skill 存 <code>tasks/&lt;task_id&gt;/skills/</code>。recall 合并、task 优先。蒸馏生产者提炼的<b>通用</b> skill（带 <code>scope: global</code>）落全局，实现「技能升级跨项目复利」。</td></tr>
-    <tr><td><code>memory/</code></td><td>全局</td><td>L1 原子记忆 <code>brain.db</code> 单库（SQLite + FTS5 simple 分词；project 仅为 origin 标签）+ L3 画像 <code>user_profile.md</code>（设计就绪待实现）。注入 = run 起始 <code>search_brain</code> 单条检索块（top_k=8，floor=0.30）；L2 场景块在 <code>projects/&lt;path-slug&gt;/memory/scene_blocks/</code>，模型经工具按需拉取。权威见 <code>doc/plans/memory-architecture.md</code>。</td></tr>
+    <tr><td><code>memory/</code></td><td>全局</td><td>L0 逐字索引 + L1 原子记忆同库 <code>brain.db</code>（SQLite + FTS5 simple 分词；project 仅为 origin 标签；<code>l0_messages</code>/<code>l0_fts</code> 为会话逐字检索副本）+ L3 画像 <code>user_profile.md</code>（已实现，全文常驻 system）+ <code>memory_recall.jsonl</code> 自取观测。常驻注入只有三段：使用规则 + L2 索引 + L3 画像；<b>检索结果永不自动注入</b>——L1 走 <code>memory_recall</code>（k≤5、floor=0.30）、L0 走 <code>conversation_search</code>、L2 全文走 <code>read_scene</code>。L2 场景块在 <code>projects/&lt;path-slug&gt;/memory/scene_blocks/</code>。权威见 <code>doc/plans/implemented/memory-architecture.md</code>。</td></tr>
     <tr><td><code>projects/&lt;path-slug&gt;/</code></td><td>全局</td><td>project = 工作目录的 slug 分组，承载会话历史 jsonl 与 L2 场景块 <code>memory/scene_blocks/</code>（+ scene_index.json）；task 自身资产仍落 <code>tasks/&lt;task_id&gt;/</code>。</td></tr>
     <tr><td><code>tasks/&lt;task_id&gt;/</code></td><td>全局</td><td>task 一等实体：自身含全部资产（trajectory / world_model / collected / skills）+ task.json 元信息。可关联一个 <code>project_id</code>（仅作 cwd 元数据，不影响落点）。</td></tr>
   </table>

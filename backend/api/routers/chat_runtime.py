@@ -58,6 +58,11 @@ import backend.api.router_runtime as _rt
 
 router = APIRouter(tags=["runtime"])
 
+#: P3（2026-11-02）：重建模型上下文时每个请求最多读多少条会话记录。
+#: 上下文窗口只留最近 12 轮（helpers._WINDOW_TURNS），一轮最多数十条 partial 增量——
+#: 240 条足够覆盖，长会话因此不再被整份解析（文件可达 MB 量级）。
+_MODEL_HISTORY_RECORDS = 240
+
 # 注意力预算 / did_work 判定用：这些工具是"机制"或"只读"，不产出事实，因此不算干活。
 # 判定口径（plan §3.3）：本轮有**真实**工具调用（写文件 / 跑命令 / 抓网页 …）或派出去
 # 的任务确实执行了 → did_work=True，L2 场景维护才允许写。
@@ -107,8 +112,6 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     """
     # 接线延迟打点起点（plan §2 验收项）：从"收到派发"到"请求发出"这段耗时要能量出来
     _ts_entry = time.time()
-    # lane（plan §4）：mode=task 是"干活"，其余是"对话"。只影响互斥与回播，不改链路。
-    _lane = "work" if str(mode or "").lower() == "task" else "chat"
     # 阶段 1：运行体句柄存于 RuntimeManager 复合键 (task_id, agent_id)，不再用全局 _loop
     _last_answer = ""  # 累积大脑最后一段口播，作为结尾「结果框」内容
     loop = None  # ToolLoop 句柄（finally 收尾补投需要；构造失败时为 None）
@@ -212,8 +215,10 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         if _pid and _sid:
             try:
                 # coalesce：partial 增量记录并回单轮，模型上下文不碎片化、不重复
+                # P3：只读尾部足够条数（窗口 12 轮，一轮最多数十条 partial）——
+                # 长会话整份 jsonl 可达 MB，逐请求全量解析是白付的延迟。
                 _session_records = ProjectStore.coalesce_records(
-                    ProjectStore.read_session(_pid, _sid))
+                    ProjectStore.read_session(_pid, _sid, limit=_MODEL_HISTORY_RECORDS))
             except Exception:
                 pass
         if not _session_records:
@@ -355,19 +360,6 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         if conclusion or turn_steps:
             _push("agent", conclusion, extra=_extra)
             _append_assistant(conclusion, extra=_extra)
-        # work lane 完成回播（plan §4）：干活的任务跑完，给主人一句话（可播报）。
-        # 带 extra.announce，语音桥（旁路订阅者）据此决定要不要念出来；
-        # 正文一句话，不刷屏——完整细节留在该任务自己的对话流里。
-        if _lane == "work" and conclusion:
-            try:
-                _one = (conclusion or "").strip().splitlines()[0][:80]
-                if _one:
-                    push_chat("system", _one,
-                              extra={"announce": True, "lane": "work",
-                                     "task_id": task_id},
-                              task_id=task_id)
-            except Exception:
-                pass
     except Exception as e:
         tb = traceback.format_exc()
         push_chat("agent", f"❌ 对话循环失败：{type(e).__name__}: {e}",
@@ -765,9 +757,14 @@ async def api_chat(request: Request):
         _rid = _rt._running_task_id()
         return JSONResponse({"ok": False, "error": f"已有任务在运行（task_id={_rid}），请等待结束或先停止"}, status_code=409)
 
-    # 更新 task 状态为 running
+    # 更新 task 状态为 running；mode 一并落盘（mode 与通道解绑 2026-10-31：会话取向跟
+    # 最后一次**显式**声明走——Web/远程传了 chat/task 才写，缺省 auto 不覆盖已有声明，
+    # 防止不带 mode 的调用把用户在 Web 选的取向冲掉）。刷新/切换会话由 tasks 列表回填。
     try:
-        TaskStore.update(task_id, state="running")
+        _fields = {"state": "running"}
+        if req.mode != "auto":
+            _fields["mode"] = req.mode
+        TaskStore.update(task_id, **_fields)
     except Exception:
         pass
 
