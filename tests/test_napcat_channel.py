@@ -11,7 +11,9 @@ from gateway.channels.napcat import NapcatAdapter, NapcatReply
 @pytest.fixture
 def adapter(monkeypatch):
     monkeypatch.delenv("NAPCAT_TOKEN", raising=False)
-    return NapcatAdapter({"enabled": True})
+    # 群唯一闸门=enabled_groups：群事件用例集中在 333 群（timers 关，手动驱动）
+    return NapcatAdapter({"enabled": True,
+                          "group_presence": {"enabled_groups": ["333"], "timers": False}})
 
 
 def _collector():
@@ -81,7 +83,8 @@ def test_group_with_at_dispatched(adapter, monkeypatch):
     assert "这是你的 QQ" in msg.text
     assert "群 333" in msg.text
     assert "「" in msg.text  # 群聊必须带说话人
-    assert "第一人称" in msg.text
+    # 身份/人称设定归角色卡（system 注入），场合自述只讲处境与发送机制
+    assert "第一人称" not in msg.text
     # 显式发送：想说话必须调工具，最终回答不会自动外发
     assert "msg_send_text" in msg.text
     assert msg.reply_mode == "explicit"
@@ -100,7 +103,7 @@ def test_private_title_and_display_text(adapter):
         "sender": {"nickname": "阿伟"},
     }, emit)
     assert got[0].title == "与「阿伟」(222333444)的对话"
-    assert got[0].display_text == "在吗"
+    assert got[0].display_text == "「阿伟」(222333444): 在吗"   # L0 来源标注（M1）
     assert "这是你的 QQ" in got[0].text  # 模型侧仍带场合自述
 
 
@@ -127,7 +130,7 @@ def test_group_title_uses_group_name(adapter, monkeypatch):
         "sender": {"card": "阿伟"},
     }, emit)
     assert got[0].title == "「研发群」(333) 群里的对话"
-    assert got[0].display_text == "开会了"
+    assert got[0].display_text == "「阿伟」(222): 开会了"     # L0 来源标注（M1）
     assert "「阿伟」" in got[0].text  # 发言人仍在模型上下文里
 
 
@@ -246,9 +249,11 @@ def test_private_dispatched(adapter):
     assert got[0].chat_id == "private:222"
     assert "在吗" in got[0].text
     assert "这是你的 QQ" in got[0].text
-    # 输出语义（说话必须显式调工具）+ 代答边界必须写给模型
+    # 输出语义（说话必须显式调工具）留在通道；代答边界/话术归角色卡
+    # （2026-11-02：_BOUNDS 已从通道移除，不再写死在 objective 里）
     assert "msg_send_text" in got[0].text
-    assert "我确认下再回你" in got[0].text
+    assert "我确认下再回你" not in got[0].text
+    assert "以主人的身份" not in got[0].text
     # 别再承诺"回复会直接发给对方"（现在不自动发了）
     assert "回复会直接发给对方" not in got[0].text
 
@@ -289,6 +294,7 @@ def test_private_whitelist(monkeypatch):
 
 
 def test_group_whitelist(monkeypatch):
+    """allow_groups=响应范围白名单：没列出的群被 @ 也不回（列出的群照常派发）。"""
     monkeypatch.delenv("NAPCAT_TOKEN", raising=False)
     adapter = NapcatAdapter({"enabled": True, "allow_groups": ["888"]})
     got, emit = _collector()
@@ -299,6 +305,13 @@ def test_group_whitelist(monkeypatch):
                     {"type": "text", "data": {"text": "hi"}}],
     }, emit)
     assert got == []
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 888, "message_id": 8,
+        "message": [{"type": "at", "data": {"qq": "111"}},
+                    {"type": "text", "data": {"text": "hi"}}],
+    }, emit)
+    assert got
 
 
 def test_image_only_message_gets_placeholder(adapter):
@@ -450,3 +463,36 @@ def test_msg_recent_strips_channel_ctx_and_parses_peer():
     body, peer = plugin._strip_ctx(got[0].text)
     assert body == "你好啊"
     assert peer == "阿伟(222)"
+
+
+# ── msg_group_image 通道侧：按需取图 + 短缓存 + 群归属校验 ──
+
+def test_group_image_data_urls_fetch_and_cache(adapter, monkeypatch):
+    monkeypatch.setattr(adapter, "_api", lambda action, payload: {"ok": True, "data": {
+        "group_id": 333,
+        "message": [{"type": "image", "data": {"url": "http://x/1.jpg"}}]}})
+    downloads = []
+    monkeypatch.setattr(mod, "fetch_image_data_url",
+                        lambda url, timeout=10.0: downloads.append(url)
+                        or "data:image/jpeg;base64,QQ==")
+    urls, err = adapter.group_image_data_urls("333", "42")
+    assert err == "" and urls == ["data:image/jpeg;base64,QQ=="]
+    adapter.group_image_data_urls("333", "42")
+    assert downloads == ["http://x/1.jpg"]          # 第二次走缓存不重下
+
+
+def test_group_image_data_urls_rejects_cross_group(adapter, monkeypatch):
+    """get_msg 全局按 id 查：群归属不匹配直接拒绝（防跨群取图）。"""
+    monkeypatch.setattr(adapter, "_api", lambda action, payload: {"ok": True, "data": {
+        "group_id": 333,
+        "message": [{"type": "image", "data": {"url": "http://x/1.jpg"}}]}})
+    urls, err = adapter.group_image_data_urls("999", "42")
+    assert urls == [] and "不属于" in err
+
+
+def test_group_image_data_urls_no_image(adapter, monkeypatch):
+    monkeypatch.setattr(adapter, "_api", lambda action, payload: {"ok": True, "data": {
+        "group_id": 333,
+        "message": [{"type": "text", "data": {"text": "没图"}}]}})
+    urls, err = adapter.group_image_data_urls("333", "43")
+    assert urls == [] and "不含图片" in err
