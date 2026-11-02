@@ -9,6 +9,7 @@
  * vite 与后端均由 dev.mjs 管理，壳不做进程管理。
  */
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, shell, WebContentsView } from "electron";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,7 +25,7 @@ import {
   type BackendHandle,
 } from "./backend";
 import type { ChildProcess } from "node:child_process";
-import { projectRootError, resolveProjectRoot } from "./project";
+import { projectRootError, resolveProjectRoot, resolveProjectRootSafe } from "./project";
 import { ensureWebBuild } from "./webbuild";
 import { createTray, disposeTray, setTrayStatus } from "./tray";
 
@@ -53,10 +54,21 @@ app.setPath(
   process.env.OMNI_USER_DATA?.trim() || join(app.getPath("appData"), "OmniAgent"),
 );
 
-// 关掉 Windows 原生遮挡检测：它有误判（失焦/多屏/RDP 下把可见窗口判成「被遮挡」→
-// 停止合成渲染，页面整片空白，拖动窗口强制重绘才恢复；Chromium 上游 40825463 同款）。
+// 「窗口可见但整片空白，拖一下才出画面」= Windows 上合成器停摆：原生遮挡检测误判（失焦/
+// 多屏/RDP 下把可见窗口判成被遮挡 → 不再产帧，Chromium 上游 40825463 同款）、后台渲染器
+// 被回收、省电模式节流，都会走到这个终态。一次 appendSwitch 关掉整组相关 feature：
+// Chromium 对不认识的 feature 名直接忽略，多列几个不会报错。
 // 代价是被遮挡的窗口仍继续渲染，CPU 略增——对常驻 agent 控制台可接受。
-app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+app.commandLine.appendSwitch(
+  "disable-features",
+  ["CalculateNativeWinOcclusion", "RendererBackgrounding", "HighEfficiencyModeEnabled"].join(","),
+);
+
+// 硬件加速开关必须在 app ready 前决定，而 cfg 要到 bootstrap（ready 之后）才读得到，
+// 所以在模块顶层单独读一次（纯路径 + 文件 IO，不依赖 Electron 生命周期）
+if (loadDesktopConfig(resolveProjectRootSafe()).software_render) {
+  app.disableHardwareAcceleration();
+}
 
 let win: BrowserWindow | null = null;
 /** web UI 容器（导航条下方的内容视图） */
@@ -71,6 +83,70 @@ let restarts = 0;
 let cfg: DesktopConfig;
 
 // ── 窗口 ──────────────────────────────────────────────────
+
+const layoutViews = (): void => {
+  if (!win || !appView || win.isDestroyed()) return;
+  const [w, h] = win.getContentSize();
+  const top = cfg.frameless ? TITLEBAR.height : 0;
+  appView.setBounds({ x: 0, y: top, width: w, height: Math.max(0, h - top) });
+};
+
+/**
+ * 强制合成器重新出帧——「窗口可见但整片空白，拖一下才出画面」的自救路径。
+ *
+ * 只做 `webContents.invalidate()` 不够：它只是「请求一次重绘」，合成器/遮挡判定停摆时
+ * 请求会被丢弃。用户拖动窗口之所以能救回来，是因为移动/尺寸变化会走一次完整的
+ * WM_SIZE → 重排 → 强制产帧。这里用 bounds 抖动（改 1px 立刻改回，不做动画）程序化
+ * 地复刻这个动作，最大化/最小化态下跳过（setBounds 在这两种态下语义不可靠）。
+ */
+function forceRepaint(): void {
+  if (!win || win.isDestroyed() || !win.isVisible()) return;
+  if (appView && !appView.webContents.isDestroyed()) appView.webContents.invalidate();
+  if (win.isMaximized() || win.isMinimized() || win.isFullScreen()) return;
+  const b = win.getBounds();
+  win.setBounds({ x: b.x, y: b.y, width: b.width, height: b.height - 1 }, false);
+  win.setBounds(b, false);
+  layoutViews();
+}
+
+/**
+ * 取证开关（默认关闭，OMNI_SHOT_ON_SHOW=1 才生效）：把内容视图当时的真实画面存成
+ * logs/shot-&lt;tag&gt;.png。白屏只有像素能证明修好了——日志里一句「加载完成」说明不了
+ * 合成器有没有出帧。capturePage 走独立的Surface快照，不影响正常渲染路径。
+ */
+function shotForDiagnostics(tag: string, delayMs = 300): void {
+  if (!process.env.OMNI_SHOT_ON_SHOW) return;
+  setTimeout(() => {
+    const view = appView;
+    if (!view || view.webContents.isDestroyed()) return;
+    // DOM 侧探针：区分「页面根本没渲染（root 空）」与「渲染了但合成器没出帧」——
+    // 两者的画面都是纯色，只有 DOM 数据能把它们分开。
+    void view.webContents
+      .executeJavaScript(
+        `({rootChildren: (document.getElementById('root')||{}).childElementCount ?? -1,` +
+          ` bodyText: (document.body?.innerText || '').slice(0, 40).replace(/\\s+/g, ' '),` +
+          ` bodyBg: getComputedStyle(document.body).backgroundColor,` +
+          ` painted: document.querySelector('#root')?.getBoundingClientRect().height ?? 0})`,
+      )
+      .catch(() => null)
+      .then((dom) => {
+        void view.webContents
+          .capturePage()
+          .then((img) => {
+            const buf = img.toPNG();
+            const url = view.webContents.getURL();
+            const file = join(logsDir(), `shot-${tag}.png`);
+            writeFileSync(file, buf);
+            const { width, height } = img.getSize();
+            shellLog(
+              `诊断截图 ${tag}: url=${url} ${width}x${height} png=${buf.length} ` +
+                `dom=${JSON.stringify(dom)} -> ${file}`,
+            );
+          })
+          .catch((e: unknown) => shellLog(`诊断截图 ${tag} 失败: ${String(e)}`));
+      });
+  }, delayMs);
+}
 
 async function createWindow(): Promise<void> {
   win = new BrowserWindow({
@@ -112,19 +188,11 @@ async function createWindow(): Promise<void> {
       backgroundThrottling: false,
     },
   });
+  // 未出帧时子视图的表面临时露出来的是默认底色（web contents 默认 #FFF 白）——
+  // 「整片白屏」里那层白就是它。显式压成与导航条同色，缺帧时降级成同色底而非刺眼白。
+  appView.setBackgroundColor(TITLEBAR.color);
   win.contentView.addChildView(appView);
-  const layoutViews = () => {
-    if (!win || !appView) return;
-    const [w, h] = win.getContentSize();
-    const top = cfg.frameless ? TITLEBAR.height : 0;
-    appView.setBounds({ x: 0, y: top, width: w, height: Math.max(0, h - top) });
-  };
   win.on("resize", layoutViews);
-  // 兜底重绘：即便上面两层之外仍遇到组合器停摆，拿回焦点/还原窗口时强制重绘一帧，
-  // 不需要用户拖一下窗口才恢复
-  const nudgeRepaint = () => appView?.webContents.invalidate();
-  win.on("focus", nudgeRepaint);
-  win.on("restore", nudgeRepaint);
   layoutViews();
 
   if (cfg.frameless) {
@@ -134,6 +202,19 @@ async function createWindow(): Promise<void> {
   // ready-to-show 在「主 webContents=导航条 + 子内容视图」结构下不可靠（不触发则窗口
   // 永不显示）；两个页面 load 完成后直接显示，背景色已同色无白闪。
   win.show();
+  // 合成器自救：窗口刚可见时最容易出现「有窗口没画面」（首帧还没被 DWM 拉起来）。
+  // show/restore 走带抖动的完整自救；focus 太频繁，只做一次廉价的 invalidate 请求，
+  // 避免每次切回来都抖 1px 尺寸。
+  const repaintNow = () => {
+    forceRepaint();
+    setTimeout(forceRepaint, 150);
+  };
+  repaintNow();
+  win.on("show", repaintNow);
+  win.on("restore", repaintNow);
+  win.on("focus", () => {
+    if (appView && !appView.webContents.isDestroyed()) appView.webContents.invalidate();
+  });
   win.on("close", (event) => {
     if (quitting) return;
     if (cfg.show_tray) {
@@ -155,6 +236,11 @@ async function createWindow(): Promise<void> {
   // 3) 侧栏收起：宽度过渡动画（0.18s）而非 display:none 瞬间消失——
   //    Drawer 根节点与 paper 都锁 260px 基准宽，收起态宽度归零 + overflow hidden 裁切
   appView.webContents.on("did-finish-load", () => {
+    // 页面加载完成是「白屏」最常暴露的时刻（真实 UI 取代 loading 页进来，但合成器没跟上）：
+    // 立刻请求重绘，稍后再补一次完整自救
+    if (appView && !appView.webContents.isDestroyed()) appView.webContents.invalidate();
+    setTimeout(forceRepaint, 120);
+    shotForDiagnostics("after-load");
     if (!cfg.frameless || !appView) return;
     void appView.webContents
       .insertCSS(
@@ -178,6 +264,10 @@ async function createWindow(): Promise<void> {
   win.on("closed", () => {
     win = null;
   });
+  // 取证模式下的定点采样：不依赖加载事件，按秒打点，能看到「窗口显示后第几秒仍是同一帧」
+  if (process.env.OMNI_SHOT_ON_SHOW) {
+    for (const s of [1, 3, 6, 12]) shotForDiagnostics(`${s}s`, s * 1000);
+  }
 }
 
 function showWindow(): void {
@@ -188,6 +278,9 @@ function showWindow(): void {
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+  // 已经可见时 show() 不再发 show 事件（例如 second-instance / 托盘点击落在可见窗口上），
+  // 这里主动补一次完整自救——这正是用户「把窗口叫回来」的手势
+  forceRepaint();
 }
 
 // ── 导航条 IPC（titlebar 按钮 → 操控内容视图） ─────────────

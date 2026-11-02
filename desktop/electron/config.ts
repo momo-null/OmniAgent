@@ -14,6 +14,12 @@ export interface DesktopConfig {
   show_tray: boolean;
   /** 无边框窗口（原生三键覆盖层 + 顶部拖拽区）；false 用系统默认边框 */
   frameless: boolean;
+  /**
+   * 关掉硬件加速（全软件渲染）。默认关。
+   * 专治「窗口可见但整片空白、拖一下才出画面」这类 GPU 合成/DWM 直呈问题：
+   * 某些驱动组合下合成器会彻底停止产帧，软件渲染路径没有这个失效模式。
+   */
+  software_render: boolean;
   window: { width: number; height: number; min_width: number; min_height: number };
 }
 
@@ -21,6 +27,7 @@ const DEFAULTS: DesktopConfig = {
   hotkey: "Ctrl+Shift+O",
   show_tray: true,
   frameless: true,
+  software_render: false,
   window: { width: 1440, height: 900, min_width: 960, min_height: 600 },
 };
 
@@ -67,6 +74,7 @@ export function loadDesktopConfig(projectRoot: string | null): DesktopConfig {
     hotkey: typeof d.hotkey === "string" ? d.hotkey : DEFAULTS.hotkey,
     show_tray: d.show_tray !== false,
     frameless: d.frameless !== false,
+    software_render: d.software_render === true,
     window: {
       width: num(w.width, DEFAULTS.window.width),
       height: num(w.height, DEFAULTS.window.height),

@@ -85,6 +85,9 @@ desktop:
   show_tray: true
   # true：无边框窗口（Windows 原生三键 + 顶部拖拽区）；false：系统默认边框
   frameless: true
+  # true：关掉硬件加速，全软件渲染。只在「窗口可见但整片空白、拖一下才出画面」
+  # 且其余手段无效时开——GPU 合成停摆这类问题在软件渲染下没有失效模式，代价是渲染变慢
+  software_render: false
   window:
     width: 1440
     height: 900
