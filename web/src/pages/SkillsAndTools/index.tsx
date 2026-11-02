@@ -1,35 +1,34 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Box,
-  Tabs,
-  Tab,
-  Typography,
-  List,
-  ListItem,
-  ListItemText,
-  Chip,
-  Stack,
-  IconButton,
-  Alert,
-  TextField,
   Button,
-  Switch,
-  FormControlLabel,
+  Chip,
+  IconButton,
   Paper,
-  Tooltip,
+  Stack,
+  Switch,
+  TextField,
+  Typography,
 } from "@mui/material";
-import BoltOutlinedIcon from "@mui/icons-material/BoltOutlined";
-import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
-import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
-import PublicOutlinedIcon from "@mui/icons-material/PublicOutlined";
+import {
+  BrainIcon,
+  GlobeIcon,
+  PlusIcon,
+  ServerIcon,
+  TrashIcon,
+  WrenchIcon,
+  ZapIcon,
+} from "../../components/icons";
+import NavOverlay, { NavCategory } from "../../components/NavOverlay";
+import { Group, Hint, SettingRow, StatusLine, SwitchRow } from "../../components/SettingsKit";
 import { skillApi, runtimeApi, settingsApi } from "../../api/client";
 import { useTaskStore } from "../../store/taskStore.tsx";
-import type {
-  SkillInfo,
-  ToolsResponse,
-} from "../../types";
+import type { SkillInfo, ToolInfo, ToolsResponse } from "../../types";
 
-function SkillsTab() {
+// 技能与工具：与设置同一套桌面遮罩外壳（分类导航 + 分组行），原来的三个 Tabs 已删除。
+
+/** 技能：一条一行，左名称+适用场景，右计数/来源/操作 */
+function SkillsSection() {
   const { snapshot, currentTaskId, refreshTasks } = useTaskStore();
   const [error, setError] = useState("");
 
@@ -60,41 +59,41 @@ function SkillsTab() {
 
   const skills = snapshot.skills || [];
   return (
-    <Box>
-      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
+    <Group title="技能" desc="任务成功后由内核提炼的可复用策略；点闪电立即调用一次。">
       {skills.length === 0 ? (
-        <Typography variant="body2" color="text.secondary">暂无技能。运行任务后，成功策略会晋升为技能。</Typography>
+        <Typography variant="body2" color="text.secondary">
+          暂无技能。运行任务后，成功策略会晋升为技能。
+        </Typography>
       ) : (
-        <List dense>
-          {skills.map((s: SkillInfo) => (
-            <ListItem
-              key={s.name}
-              secondaryAction={
-                <Stack direction="row" spacing={0.5}>
-                  <IconButton size="small" onClick={() => handleRun(s.name)} title="调用"><BoltOutlinedIcon fontSize="small" /></IconButton>
-                  {s.scope === "project" && (
-                    <IconButton size="small" onClick={() => handlePromote(s.name)} title="设为全局"><PublicOutlinedIcon fontSize="small" /></IconButton>
-                  )}
-                  <IconButton size="small" onClick={() => handleDelete(s.name)} title="删除"><DeleteOutlinedIcon fontSize="small" /></IconButton>
-                </Stack>
-              }
-            >
-              <ListItemText
-                primary={
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="body2" component="span">{s.name}</Typography>
-                    <Chip size="small" label={s.status} />
-                    {s.scope && <Chip size="small" label={s.scope === "global" ? "全局" : "项目"} variant="outlined" />}
-                    <Typography variant="caption" color="text.secondary">{s.success_count}/{s.total_uses}</Typography>
-                  </Stack>
-                }
-                secondary={s.objective_pattern}
-              />
-            </ListItem>
-          ))}
-        </List>
+        skills.map((s: SkillInfo) => (
+          <SettingRow key={s.name} title={s.name} desc={s.objective_pattern}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+                成 {s.success_count}/{s.total_uses}
+              </Typography>
+              <Chip size="small" label={s.status} sx={{ height: 18, fontSize: 11 }} />
+              {s.scope && (
+                <Chip size="small" variant="outlined" label={s.scope === "global" ? "全局" : "项目"}
+                  sx={{ height: 18, fontSize: 11 }} />
+              )}
+              <IconButton size="small" onClick={() => void handleRun(s.name)} title="调用">
+                <ZapIcon fontSize="small" />
+              </IconButton>
+              {s.scope === "project" && (
+                <IconButton size="small" onClick={() => void handlePromote(s.name)} title="设为全局">
+                  <GlobeIcon fontSize="small" />
+                </IconButton>
+              )}
+              <IconButton size="small" onClick={() => void handleDelete(s.name)} title="删除"
+                sx={{ color: "text.disabled", "&:hover": { color: "error.main" } }}>
+                <TrashIcon fontSize="small" />
+              </IconButton>
+            </Stack>
+          </SettingRow>
+        ))
       )}
-    </Box>
+      <StatusLine error={error} />
+    </Group>
   );
 }
 
@@ -123,7 +122,32 @@ function useTools() {
   return { data, error, setError, loading, reload: load };
 }
 
-function ToolsTab() {
+const SOURCE_LABEL: Record<string, string> = { core: "内核", plugin: "插件", mcp: "MCP" };
+
+/** 只读工具行：左名称（等宽），右来源与提供者 */
+function ToolRow({ t }: { t: ToolInfo }) {
+  // unit = 提供者标识：环境 kind / 插件名；core 源与来源重复不显示
+  const provider = t.source === "plugin" ? t.unit : (t.source === "mcp" ? (t.server || "") : "");
+  return (
+    <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, py: 0.85,
+               borderTop: "1px solid", borderColor: "divider" }}>
+      <Typography variant="body2" noWrap title={t.description || t.name}
+        sx={{ flex: 1, minWidth: 0, fontFamily: "monospace", fontSize: 12.5 }}>
+        {t.name}
+      </Typography>
+      <Chip size="small" variant="outlined" label={SOURCE_LABEL[t.source] ?? t.source}
+        sx={{ height: 18, fontSize: 11, flexShrink: 0 }} />
+      {provider && (
+        <Typography variant="caption" color="text.disabled" noWrap sx={{ flexShrink: 0, maxWidth: 150 }}>
+          {provider}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
+/** 工具：插件一行一开关，内核/MCP 工具只读列出 */
+function ToolsSection() {
   const { data, error, setError, reload } = useTools();
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState("");
@@ -147,60 +171,34 @@ function ToolsTab() {
 
   return (
     <Box>
-      <Alert severity="info" sx={{ mb: 2 }}>
-        两类：<b>插件</b>（各自一个开关，写 <code>~/.omniagent/plugins/&lt;name&gt;.yaml</code>；
-        操作电脑 / Android 也是普通插件，默认关闭）、
-        <b>工具</b>（只读）。开关重启后生效。
-      </Alert>
+      <Group title="插件" desc="每个插件一枚开关，写 ~/.omniagent/plugins/<name>.yaml；操作电脑 / Android 也是普通插件，默认关闭。开关重启后生效。">
+        {data.plugins.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">（无插件）</Typography>
+        ) : (
+          data.plugins.map((p) => (
+            <SwitchRow key={p.name}
+              title={p.title} desc={p.description}
+              checked={p.enabled} disabled={busy}
+              onChange={(v) => void togglePlugin(p.name, v)}
+            />
+          ))
+        )}
+        <StatusLine saved={saved} error={error} />
+      </Group>
 
-      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
-        <Typography variant="subtitle2" gutterBottom>插件（各自一个开关）</Typography>
-        <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
-          {data.plugins.map((p) => (
-            <FormControlLabel key={p.name} sx={{ mr: 0 }}
-              control={<Switch size="small" disabled={busy} checked={p.enabled}
-                onChange={(_e, v) => void togglePlugin(p.name, v)} />}
-              label={<Tooltip title={p.description || p.name}>
-                <Chip size="small" variant={p.enabled ? "filled" : "outlined"} label={p.title}
-                  color={p.enabled ? "primary" : "default"}
-                  sx={{ opacity: p.enabled ? 1 : 0.6 }} />
-              </Tooltip>} />
-          ))}
-          {data.plugins.length === 0 && (
-            <Typography variant="caption" color="text.secondary">（无插件）</Typography>
-          )}
-        </Stack>
-      </Paper>
-
-      {error && <Alert severity="error" sx={{ mb: 1 }} onClose={() => setError("")}>{error}</Alert>}
-      {saved && <Alert severity="success" sx={{ mb: 1 }}>{saved}</Alert>}
-
-      <Paper variant="outlined" sx={{ p: 2 }}>
-        <Typography variant="subtitle2" gutterBottom>当前可用工具（只读）</Typography>
-        <Stack spacing={0.5}>
-          {data.tools.map((t) => (
-            <Stack key={t.name} direction="row" alignItems="center" spacing={1}>
-              <Tooltip title={t.description || t.name}>
-                <Chip size="small" variant="outlined" label={t.name}
-                  color={t.source === "mcp" ? "secondary" : (t.source === "plugin" ? "success" : "primary")} />
-              </Tooltip>
-              <Chip size="small" variant="outlined" label={t.source} />
-              {/* unit = 提供者标识：环境 kind / 插件名；core 源与 source 重复不显示 */}
-              {t.source === "plugin" && <Chip size="small" variant="outlined" label={t.unit} />}
-              {t.source === "mcp" && t.server && <Chip size="small" label={t.server} variant="outlined" />}
-            </Stack>
-          ))}
-        </Stack>
-      </Paper>
+      <Group title={`当前可用工具（${data.tools.length}，只读）`}>
+        {data.tools.map((t) => <ToolRow key={`${t.source}:${t.name}`} t={t} />)}
+        <Hint>工具由内核、启用的插件与已接入的 MCP 合并而来；这里不给开关，停用请回到上一栏关插件或删 MCP 配置。</Hint>
+      </Group>
     </Box>
   );
 }
 
-function McpTab() {
+/** MCP 接入：本地编辑态，改动要点「保存」才写回（多字段编辑器保留显式提交） */
+function McpSection() {
   const { data, error, setError, reload } = useTools();
   const [saved, setSaved] = useState(false);
 
-  // 本地编辑态：name / command / args / url / enabled
   const [servers, setServers] = useState<
     { name: string; enabled: boolean; command: string; args: string; url: string }[]
   >([]);
@@ -251,111 +249,107 @@ function McpTab() {
 
   return (
     <Box>
-      <Alert severity="info" sx={{ mb: 2 }}>
-        MCP 专用于外部工具接入：新增能力 = 加一条 server 配置，零代码改动；接入后其工具与自研工具平级。
-        连接在每个任务启动时建立，改动保存后从「下一个任务」起生效。
-      </Alert>
-      {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
-      {saved && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSaved(false)}>已保存</Alert>}
+      <Group title="MCP 接入" desc="新增外部能力 = 加一条 server 配置，零代码改动；接入后其工具与自研工具平级。连接在每个任务启动时建立，改动保存后从下一个任务起生效。">
+        <Hint>
+          {data
+            ? `runtime.mcp.enabled = ${String(data.mcp.enabled)}；已接入：${data.mcp.connected.length ? data.mcp.connected.join("、") : "（无）"}`
+            : "读取中…"}
+        </Hint>
 
-      {data && (
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          runtime.mcp.enabled = {String(data.mcp.enabled)}；已接入：
-          {data.mcp.connected.length ? data.mcp.connected.join("、") : "（无）"}
-        </Typography>
-      )}
+        {servers.map((s, i) => (
+          <Paper key={i} variant="outlined" sx={{ mt: 2, p: 2 }}>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <TextField
+                size="small" label="名称" value={s.name}
+                onChange={(e) => update(i, { name: e.target.value })}
+                sx={{ width: 190, "& .MuiOutlinedInput-notchedOutline": { borderColor: "divider" } }}
+              />
+              <SwitchRowInline label="启用" checked={s.enabled} onChange={(v) => update(i, { enabled: v })} />
+              <IconButton
+                size="small"
+                sx={{ ml: "auto", color: "text.disabled", "&:hover": { color: "error.main" } }}
+                onClick={() => {
+                  const next = servers.filter((_, j) => j !== i);
+                  setServers(next);
+                  void persist(next);
+                }}
+                title="删除该 server"
+              >
+                <TrashIcon fontSize="small" />
+              </IconButton>
+            </Stack>
+            <Stack spacing={1.5} sx={{ mt: 1.5 }}>
+              <TextField
+                size="small" fullWidth label="command（stdio，如 npx）" value={s.command}
+                onChange={(e) => update(i, { command: e.target.value })}
+                sx={{ "& .MuiOutlinedInput-notchedOutline": { borderColor: "divider" },
+                      "& input": { fontFamily: "monospace", fontSize: 12.5 } }}
+              />
+              <TextField
+                size="small" fullWidth label="args（空格分隔）" value={s.args}
+                onChange={(e) => update(i, { args: e.target.value })}
+                sx={{ "& .MuiOutlinedInput-notchedOutline": { borderColor: "divider" },
+                      "& input": { fontFamily: "monospace", fontSize: 12.5 } }}
+              />
+              <TextField
+                size="small" fullWidth label="url（streamable http，与 command 二选一）" value={s.url}
+                onChange={(e) => update(i, { url: e.target.value })}
+                sx={{ "& .MuiOutlinedInput-notchedOutline": { borderColor: "divider" },
+                      "& input": { fontFamily: "monospace", fontSize: 12.5 } }}
+              />
+            </Stack>
+          </Paper>
+        ))}
 
-      {servers.map((s, i) => (
-        <Paper key={i} variant="outlined" sx={{ mb: 2, p: 2 }}>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <TextField
-              size="small"
-              label="name"
-              value={s.name}
-              onChange={(e) => update(i, { name: e.target.value })}
-            />
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={s.enabled}
-                  onChange={(e) => update(i, { enabled: e.target.checked })}
-                />
-              }
-              label="启用"
-            />
-            <IconButton
-              size="small"
-              onClick={() => {
-                const next = servers.filter((_, j) => j !== i);
-                setServers(next);
-                void persist(next);
-              }}
-              title="删除"
-            >
-              <DeleteOutlinedIcon fontSize="small" />
-            </IconButton>
-          </Stack>
-          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-            <TextField
-              size="small"
-              fullWidth
-              label="command（stdio，如 npx）"
-              value={s.command}
-              onChange={(e) => update(i, { command: e.target.value })}
-            />
-            <TextField
-              size="small"
-              fullWidth
-              label="args（空格分隔）"
-              value={s.args}
-              onChange={(e) => update(i, { args: e.target.value })}
-            />
-            <TextField
-              size="small"
-              fullWidth
-              label="url（streamable http，二选一）"
-              value={s.url}
-              onChange={(e) => update(i, { url: e.target.value })}
-            />
-          </Stack>
-        </Paper>
-      ))}
-
-      <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-        <Button
-          size="small"
-          startIcon={<AddOutlinedIcon />}
-          onClick={() =>
-            setServers((prev) => [
-              ...prev,
-              { name: "", enabled: true, command: "", args: "", url: "" },
-            ])
-          }
-        >
-          新增 server
-        </Button>
-        <Button size="small" variant="contained" onClick={() => void persist(servers)}>
-          保存
-        </Button>
-      </Stack>
+        <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
+          <Button
+            size="small" variant="outlined" startIcon={<PlusIcon />}
+            onClick={() =>
+              setServers((prev) => [
+                ...prev,
+                { name: "", enabled: true, command: "", args: "", url: "" },
+              ])
+            }
+          >
+            新增 server
+          </Button>
+          <Button size="small" variant="contained" onClick={() => void persist(servers)}>保存</Button>
+        </Stack>
+        <StatusLine saved={saved ? "已保存，下一个任务起生效" : ""} error={error} />
+      </Group>
     </Box>
   );
 }
 
-
-export default function SkillsAndTools() {
-  const [tab, setTab] = useState(0);
+// 卡片内的一枚「标签 + 开关」，不另起一行设置项
+function SwitchRowInline({ label, checked, onChange }:
+  { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <Box sx={{ p: 2, pt: 1.5, maxWidth: 960, mx: "auto" }}>
-      <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>技能与工具</Typography>
-      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-        <Tab label="Skills" />
-        <Tab label="Tools" />
-        <Tab label="MCP" />
-      </Tabs>
-      {tab === 0 && <SkillsTab />}
-      {tab === 1 && <ToolsTab />}
-      {tab === 2 && <McpTab />}
+    <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+      <Switch size="small" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <Typography variant="body2" color="text.secondary">{label}</Typography>
     </Box>
   );
+}
+
+const CATEGORIES: NavCategory[] = [
+  {
+    id: "skills", label: "技能", icon: <BrainIcon />, keywords:
+      ["playbook", "策略", "提炼", "全局", "项目", "调用", "成功次数"],
+    Section: SkillsSection,
+  },
+  {
+    id: "tools", label: "工具", icon: <WrenchIcon />, keywords:
+      ["插件", "开关", "内核工具", "操作电脑", "android", "plugins", "只读", "来源"],
+    Section: ToolsSection,
+  },
+  {
+    id: "mcp", label: "MCP", icon: <ServerIcon />, keywords:
+      ["外部工具", "server", "stdio", "npx", "streamable http", "url", "command", "args", "接入"],
+    Section: McpSection,
+  },
+];
+
+export default function SkillsAndTools({ onClose }: { onClose: () => void }) {
+  return <NavOverlay title="技能与工具" categories={CATEGORIES} onClose={onClose} />;
 }

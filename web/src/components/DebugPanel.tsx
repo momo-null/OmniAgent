@@ -16,10 +16,7 @@ import {
   Tabs,
   Typography,
 } from "@mui/material";
-import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
-import ExpandMoreOutlinedIcon from "@mui/icons-material/ExpandMoreOutlined";
-import ExpandLessOutlinedIcon from "@mui/icons-material/ExpandLessOutlined";
-import RefreshOutlinedIcon from "@mui/icons-material/RefreshOutlined";
+import { ChevronDownIcon, ChevronUpIcon, RefreshCwIcon, TrashIcon } from "./icons";
 import ScrollArea from "./ScrollArea.tsx";
 import { debugApi, type DebugMemoryAtom, type DebugMemoryResponse } from "../api/debugApi";
 import type { DebugLog } from "../store/taskStore";
@@ -70,7 +67,7 @@ function LogRow({ log }: { log: DebugLog }) {
         {log.role && <Chip size="small" label={log.role} variant="outlined" />}
         <Typography variant="caption" color="text.secondary">{time}</Typography>
         <IconButton size="small" sx={{ ml: "auto", py: 0 }} onClick={() => setExpanded((v) => !v)}>
-          {expanded ? <ExpandLessOutlinedIcon /> : <ExpandMoreOutlinedIcon />}
+          {expanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
         </IconButton>
       </Stack>
       <Typography variant="body2" sx={{ mt: 0.5 }}>{log.title}</Typography>
@@ -118,7 +115,7 @@ function MemoryRow({ atom, onDelete }: { atom: DebugMemoryAtom; onDelete: (atom:
           sx={{ color: "error.main", fontSize: 13 }}
         >
           <ListItemIcon sx={{ minWidth: 28, color: "error.main" }}>
-            <DeleteOutlinedIcon fontSize="small" />
+            <TrashIcon fontSize="small" />
           </ListItemIcon>
           删除
         </MenuItem>
@@ -133,7 +130,7 @@ function MemoryRow({ atom, onDelete }: { atom: DebugMemoryAtom; onDelete: (atom:
         {atom.source_task && <Chip size="small" label={atom.source_task} variant="outlined" />}
         <Typography variant="caption" color="text.secondary" sx={{ ml: "auto" }}>{time}</Typography>
         <IconButton size="small" sx={{ py: 0 }} onClick={() => setExpanded((v) => !v)}>
-          {expanded ? <ExpandLessOutlinedIcon /> : <ExpandMoreOutlinedIcon />}
+          {expanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
         </IconButton>
       </Stack>
       <Typography
@@ -204,7 +201,7 @@ export default function DebugPanel({ logs, onClear, taskId }: {
           <Stack direction="row" spacing={0.5} alignItems="center">
             {loading && <Typography variant="caption" color="text.secondary">加载中…</Typography>}
             <IconButton size="small" onClick={loadMemory} title="刷新">
-              <RefreshOutlinedIcon fontSize="small" />
+              <RefreshCwIcon fontSize="small" />
             </IconButton>
           </Stack>
         )}

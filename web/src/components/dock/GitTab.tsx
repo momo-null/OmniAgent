@@ -11,8 +11,7 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import ArrowBackOutlined from "@mui/icons-material/ArrowBackOutlined";
-import RefreshOutlined from "@mui/icons-material/RefreshOutlined";
+import { ArrowLeftIcon, RefreshCwIcon } from "../icons";
 import ScrollArea from "../ScrollArea.tsx";
 import { workspaceApi } from "../../api/client";
 import type { GitDiffResp, GitStatusResp } from "../../types";
@@ -90,7 +89,7 @@ export default function GitTab() {
         <Stack direction="row" spacing={0.5} alignItems="center"
           sx={{ px: 1, py: 0.5, flexShrink: 0, borderBottom: "1px solid", borderColor: "divider" }}>
           <IconButton size="small" onClick={() => { setSelected(""); setDiff(null); }} title="返回变更清单">
-            <ArrowBackOutlined fontSize="small" />
+            <ArrowLeftIcon fontSize="small" />
           </IconButton>
           <Typography variant="body2" noWrap sx={{ flex: 1, minWidth: 0, fontWeight: 600, fontSize: 13 }}>
             {selected}
@@ -135,7 +134,7 @@ export default function GitTab() {
         />
         {loading && <CircularProgress size={14} />}
         <IconButton size="small" title="刷新" onClick={() => loadStatus(path)}>
-          <RefreshOutlined fontSize="small" />
+          <RefreshCwIcon fontSize="small" />
         </IconButton>
       </Stack>
       {status?.is_repo && (

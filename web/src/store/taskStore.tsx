@@ -13,7 +13,7 @@ export interface DebugLog {
   payload: Record<string, unknown>;
 }
 
-export type MainView = "chat" | "skills" | "cron" | "settings";
+export type MainView = "chat" | "cron";
 
 // 右侧栏（RightDock）页签：文件/产物 · 浏览器 · git 变更 · 终端 · Debug
 export type DockTab = "files" | "browser" | "git" | "terminal" | "debug";
@@ -90,8 +90,8 @@ interface TaskStoreValue {
   pendingApprovals: ApprovalCardInfo[];
   decideApproval: (approvalId: string, action: "approve" | "deny", remember?: boolean) => Promise<void>;
 
-  // 右侧 dock 窗口：整体收起（宽度 0）/展开为固定 440px 窗口；浏览器式页签管理，
-  // 主页=入口列表（窗口居中），点入口当前页签跳转，+ 新建页签（默认主页）
+  // 右侧 dock 窗口：整体收起（宽度 0）/展开（宽度可拖，本机记忆，见 RightDock）；
+  // 浏览器式页签管理，主页=功能入口 + 产物清单，点入口当前页签跳转，+ 新建页签（默认主页）
   dockOpen: boolean;
   dockTabs: DockTabItem[];
   dockActiveId: string;

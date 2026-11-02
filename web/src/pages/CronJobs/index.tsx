@@ -6,13 +6,15 @@ import {
   FormControlLabel, IconButton, InputAdornment, MenuItem, Paper, Snackbar, Switch,
   TextField, Tooltip, Typography,
 } from "@mui/material";
-import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
-import ArrowBackOutlinedIcon from "@mui/icons-material/ArrowBackOutlined";
-import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
-import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
-import PlayArrowOutlinedIcon from "@mui/icons-material/PlayArrowOutlined";
-import SearchOutlinedIcon from "@mui/icons-material/SearchOutlined";
-import ScheduleOutlinedIcon from "@mui/icons-material/ScheduleOutlined";
+import {
+  ArrowLeftIcon,
+  ClockIcon,
+  PencilIcon,
+  PlayIcon,
+  PlusIcon,
+  SearchIcon,
+  TrashIcon,
+} from "../../components/icons";
 import { cronApi } from "../../api/client";
 
 interface CronJob {
@@ -149,13 +151,13 @@ export default function CronJobs() {
     return (
       <Box sx={{ height: "100%", overflowY: "auto", p: { xs: 2, md: 3 } }}>
         <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 2 }}>
-          <IconButton size="small" onClick={() => setDetail(null)}><ArrowBackOutlinedIcon /></IconButton>
+          <IconButton size="small" onClick={() => setDetail(null)}><ArrowLeftIcon /></IconButton>
           <Typography variant="h6" sx={{ fontSize: 18 }}>{detailJob.name || detailJob.id}</Typography>
           <Typography variant="body2" color="text.secondary">{detailJob.describe ?? detailJob.cron}</Typography>
           <Box sx={{ flex: 1 }} />
           <Switch checked={!!detailJob.enabled} onChange={e => void persist(jobs.map(j => j.id === detailJob.id ? { ...j, enabled: e.target.checked } : j))} />
-          <Tooltip title="立即运行"><IconButton onClick={() => void runNow(detailJob.id)}><PlayArrowOutlinedIcon /></IconButton></Tooltip>
-          <Tooltip title="编辑"><IconButton onClick={() => setEditing({ ...detailJob })}><EditOutlinedIcon /></IconButton></Tooltip>
+          <Tooltip title="立即运行"><IconButton onClick={() => void runNow(detailJob.id)}><PlayIcon /></IconButton></Tooltip>
+          <Tooltip title="编辑"><IconButton onClick={() => setEditing({ ...detailJob })}><PencilIcon /></IconButton></Tooltip>
         </Box>
         {detailJob.next_run_at && (
           <Typography color="text.secondary" sx={{ mb: 2, fontSize: 13 }}>
@@ -195,8 +197,8 @@ export default function CronJobs() {
                 color: tab === "runs" ? "text.primary" : "text.secondary",
                 "&:hover": { color: "primary.main" } }}>运行记录</Typography>
         <Box sx={{ flex: 1 }} />
-        <IconButton size="small" onClick={() => void loadJobs()}><SearchOutlinedIcon fontSize="small" /></IconButton>
-        <Button variant="contained" size="small" startIcon={<AddOutlinedIcon />} onClick={() => setEditing({ ...EMPTY_FORM })}>新建</Button>
+        <IconButton size="small" onClick={() => void loadJobs()}><SearchIcon fontSize="small" /></IconButton>
+        <Button variant="contained" size="small" startIcon={<PlusIcon />} onClick={() => setEditing({ ...EMPTY_FORM })}>新建</Button>
       </Box>
 
       {tab === "jobs" ? (
@@ -211,7 +213,7 @@ export default function CronJobs() {
               <TextField size="small" autoFocus placeholder="搜索…" value={search}
                 onChange={e => setSearch(e.target.value)}
                 sx={{ width: 200 }}
-                InputProps={{ startAdornment: <InputAdornment position="start"><SearchOutlinedIcon fontSize="small" /></InputAdornment> }} />
+                InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }} />
             )}
           </Box>
 
@@ -236,18 +238,18 @@ export default function CronJobs() {
                   {j.objective}
                 </Typography>
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                  <ScheduleOutlinedIcon sx={{ fontSize: 15, color: "text.secondary" }} />
+                  <ClockIcon sx={{ fontSize: 15, color: "text.secondary" }} />
                   <Typography variant="body2" color="text.secondary" sx={{ flex: 1 }}>
                     {j.describe ?? j.cron}{j.enabled && j.next_run_at ? `　·　${fmtCountdown(j.next_in_seconds)}` : ""}
                   </Typography>
                   <Tooltip title="立即运行">
                     <IconButton size="small" onClick={e => { e.stopPropagation(); void runNow(j.id); }}>
-                      <PlayArrowOutlinedIcon fontSize="small" />
+                      <PlayIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
                   <Tooltip title="删除">
                     <IconButton size="small" onClick={e => { e.stopPropagation(); void persist(jobs.filter(x => x.id !== j.id)); }}>
-                      <DeleteOutlinedIcon fontSize="small" />
+                      <TrashIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
                 </Box>

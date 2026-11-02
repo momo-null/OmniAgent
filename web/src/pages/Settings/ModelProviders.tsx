@@ -19,9 +19,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
-import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
-import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import { InfoIcon, PlusIcon, TrashIcon } from "../../components/icons";
 import { modelCatalogApi } from "../../api/client";
 import type { ModelProviderDraft, ModelsIndex } from "../../types";
 
@@ -128,7 +126,7 @@ export default function ModelProviders() {
           <Stack direction="row" spacing={0.5} alignItems="center">
             <Typography variant="subtitle2">在线模型</Typography>
             <Tooltip title="模型端点的唯一配置入口（独立于通用配置存放）；Chat 输入框的选择器按这里的提供方分组。不预设厂商，自行添加。">
-              <InfoOutlinedIcon sx={{ fontSize: 15, color: "text.disabled", cursor: "help" }} />
+              <InfoIcon sx={{ fontSize: 15, color: "text.disabled", cursor: "help" }} />
             </Tooltip>
           </Stack>
         </Stack>
@@ -138,7 +136,7 @@ export default function ModelProviders() {
               <Typography variant="caption" color="text.secondary">{s.label}：</Typography>
               <Typography variant="caption">{slotState(s.key)}</Typography>
               <Tooltip title={s.hint}>
-                <InfoOutlinedIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
+                <InfoIcon sx={{ fontSize: 14, color: "text.disabled", cursor: "help" }} />
               </Tooltip>
             </Stack>
           ))}
@@ -152,7 +150,7 @@ export default function ModelProviders() {
             label="新提供方标识（英文 key，如 online / local）" size="small" value={newId}
             onChange={(e) => setNewId(e.target.value)} sx={{ flex: 1 }}
           />
-          <Button variant="outlined" startIcon={<AddOutlinedIcon />} onClick={addProvider} disabled={!newId.trim() || !!drafts[newId.trim()]}>
+          <Button variant="outlined" startIcon={<PlusIcon />} onClick={addProvider} disabled={!newId.trim() || !!drafts[newId.trim()]}>
             添加
           </Button>
         </Stack>
@@ -215,7 +213,7 @@ export default function ModelProviders() {
                         onClick={(e) => setSlotAnchor({ el: e.currentTarget, selection: `${sel}/${m.id}` })} />
                       <IconButton size="small"
                         onClick={() => patch(sel, { models: cur.models.filter((_, j) => j !== i) })}>
-                        <DeleteOutlinedIcon fontSize="small" />
+                        <TrashIcon fontSize="small" />
                       </IconButton>
                     </Stack>
                   ))}
@@ -225,7 +223,7 @@ export default function ModelProviders() {
                   <Stack direction="row" spacing={1}>
                     <TextField label="新增模型 id" size="small" value={newModel}
                       onChange={(e) => setNewModel(e.target.value)} sx={{ flex: 1 }} />
-                    <Button size="small" variant="outlined" startIcon={<AddOutlinedIcon />}
+                    <Button size="small" variant="outlined" startIcon={<PlusIcon />}
                       disabled={!newModel.trim()} onClick={() => addModel(sel)}>添加模型</Button>
                   </Stack>
                 </Stack>

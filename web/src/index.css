@@ -48,10 +48,13 @@ html {
   height: 0;
 }
 
-/* 图标整体柔化（方案C）：保持 Outlined 空心字形不变，全站图标统一降不透明度，
-   弱化与深色背景的黑白对比。想更淡/更实只改这一个变量（0~1）。 */
+/* 图标整体柔化（方案C）：字形是 Lucide 的空心描边（见 components/icons.tsx），这里只做统一降不透明度，
+   弱化与深色背景的黑白对比。想更淡/更实只改这一个变量（0~1）；想整体变粗变细改 icons.tsx 的 LUCIDE_STROKE。
+   遮罩底色两个变量与 theme/appearance.ts 的 OVERLAY 同源：默认纯底、无毛玻璃。 */
 :root {
   --omni-icon-opacity: 0.75;
+  --omni-overlay-bg: #121212;
+  --omni-overlay-blur: 0px;
 }
 .MuiSvgIcon-root {
   opacity: var(--omni-icon-opacity);

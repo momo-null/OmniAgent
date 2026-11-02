@@ -20,26 +20,43 @@ import {
   Button,
   TextField,
 } from "@mui/material";
-import AddOutlinedIcon from "@mui/icons-material/AddOutlined";
-import BuildOutlinedIcon from "@mui/icons-material/BuildOutlined";
-import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
-import ExpandLessOutlined from "@mui/icons-material/ExpandLessOutlined";
-import ExpandMoreOutlined from "@mui/icons-material/ExpandMoreOutlined";
-import ScheduleOutlinedIcon from "@mui/icons-material/ScheduleOutlined";
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ClockIcon,
+  EllipsisVerticalIcon,
+  FolderIcon,
+  FolderOpenIcon,
+  PencilIcon,
+  PlusIcon,
+  SaveIcon,
+  SettingsIcon,
+  TrashIcon,
+  WrenchIcon,
+} from "./icons";
 import CronJobs from "../pages/CronJobs";
-import MoreVertOutlinedIcon from "@mui/icons-material/MoreVertOutlined";
-import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
-import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
-import FolderOpenOutlinedIcon from "@mui/icons-material/FolderOpenOutlined";
 import { taskApi, projectApi } from "../api/client";
-import SaveOutlinedIcon from "@mui/icons-material/SaveOutlined";
-import FolderOutlinedIcon from "@mui/icons-material/FolderOutlined";
 import { useTaskStore, type MainView } from "../store/taskStore.tsx";
 import Chat from "../pages/Chat";
 import SkillsAndTools from "../pages/SkillsAndTools";
 import Settings from "../pages/Settings";
 
 const DRAWER_WIDTH = 260;
+
+// 侧栏与设置/技能工具遮罩的左栏同规格：圆角 2、图标位 28、未选中图标降一档亮度，选中回到 text.primary。
+// 图标整体柔和度仍由全站唯一开关 --omni-icon-opacity（外观 · 图标浓度）负责，这里不再各自加透明度。
+const ROW_SX = {
+  mb: 0.25, py: 0.7, borderRadius: 2,
+  "& .MuiListItemIcon-root": { minWidth: 28, color: "text.secondary" },
+  "&.Mui-selected .MuiListItemIcon-root": { color: "text.primary" },
+};
+// 项目/会话行更密，只收纵向留白，其余规格与入口行一致
+const ROW_DENSE_SX = { ...ROW_SX, py: 0.25, mb: 0 };
+// 文字一律用 rem：外观 · 字号 缩放时侧栏与设置页一起走（标准档 = 今天的像素值）
+const LABEL_NAV = { fontSize: "1rem" };        // 14px
+const LABEL_ROW = { fontSize: "0.9286rem" };   // 13px
+const LABEL_CHILD = { fontSize: "0.8571rem" }; // 12px：项目下的会话，比父行矮一档
+const LABEL_META = { fontSize: "0.7857rem" };  // 11px：副标题 / N 任务
 
 export default function Layout() {
   const {
@@ -49,6 +66,9 @@ export default function Layout() {
   } = useTaskStore();
 
   const [tasksOpen, setTasksOpen] = useState(true);
+  // 设置与技能工具都是盖住整窗的遮罩，不是一种主视图：底稿停在用户原来那一页，关掉即回到原处
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
 
   // 知识分层 C4/C5：项目侧栏 + 保存到项目
   const [projects, setProjects] = useState<{ id: string; display_name: string; session_count: number }[]>([]);
@@ -183,22 +203,24 @@ ${assets}`)) {
 
   const renderMain = () => {
     switch (view) {
-      case "skills": return <SkillsAndTools />;
       case "cron": return <CronJobs />;
-      case "settings": return <Settings />;
       case "chat":
       default: return <Chat />;
     }
   };
 
   const sidebarEntry = (v: MainView, label: string, icon: React.ReactNode) => (
-    <ListItemButton
-      selected={view === v}
-      onClick={() => setView(v)}
-      sx={{ borderRadius: 1, py: 0.5 }}
-    >
-      <ListItemIcon sx={{ minWidth: 32 }}>{icon}</ListItemIcon>
-      <ListItemText primary={label} primaryTypographyProps={{ fontSize: 14 }} />
+    <ListItemButton selected={view === v} onClick={() => setView(v)} sx={ROW_SX}>
+      <ListItemIcon>{icon}</ListItemIcon>
+      <ListItemText primary={label} primaryTypographyProps={LABEL_NAV} />
+    </ListItemButton>
+  );
+
+  // 遮罩类入口（设置 / 技能与工具）：选中态跟着开合走，关掉即回落到原来那页
+  const overlayEntry = (open: boolean, label: string, icon: React.ReactNode, onClick: () => void) => (
+    <ListItemButton selected={open} onClick={onClick} sx={ROW_SX}>
+      <ListItemIcon>{icon}</ListItemIcon>
+      <ListItemText primary={label} primaryTypographyProps={LABEL_NAV} />
     </ListItemButton>
   );
 
@@ -211,8 +233,8 @@ ${assets}`)) {
           "& .MuiDrawer-paper": {
             width: DRAWER_WIDTH, boxSizing: "border-box",
             display: "flex", flexDirection: "column", overflow: "hidden",
-            // 侧栏比内容区亮一档但偏暗（#2e2e2e），层级靠亮度区分
-            borderRight: "none", bgcolor: "#2e2e2e",
+            // 底色保留默认暗色档（比内容区亮一档，层级靠亮度差），值收进 theme.background.sidebar
+            borderRight: "none", bgcolor: "background.sidebar",
           },
         }}
       >
@@ -226,13 +248,13 @@ ${assets}`)) {
         <List sx={{ py: 0 }}>
           <ListItemButton
             onClick={() => { selectTask(""); setView("chat"); }}
-            sx={{ borderRadius: 1, py: 0.5 }}
+            sx={ROW_SX}
           >
-            <ListItemIcon sx={{ minWidth: 32 }}><AddOutlinedIcon /></ListItemIcon>
-            <ListItemText primary="新建对话" primaryTypographyProps={{ fontSize: 14 }} />
+            <ListItemIcon><PlusIcon /></ListItemIcon>
+            <ListItemText primary="新建对话" primaryTypographyProps={LABEL_NAV} />
           </ListItemButton>
-          {sidebarEntry("skills", "技能与工具", <BuildOutlinedIcon />)}
-          {sidebarEntry("cron", "定时任务", <ScheduleOutlinedIcon />)}
+          {overlayEntry(skillsOpen, "技能与工具", <WrenchIcon />, () => setSkillsOpen(true))}
+          {sidebarEntry("cron", "定时任务", <ClockIcon />)}
         </List>
 
         {/* 项目分区（C4）：用户创建的项目（default 为内核缺省归属，不展示）+ 会话数；菜单支持删除（C5） */}
@@ -243,11 +265,11 @@ ${assets}`)) {
             px: 2, py: 0.5,
           }}
         >
-          <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ fontWeight: 500 }}>
             项目
           </Typography>
           <IconButton size="small" onClick={() => setProjectsOpen((o) => !o)} sx={{ p: 0.25 }}>
-            {projectsOpen ? <ExpandLessOutlined fontSize="small" /> : <ExpandMoreOutlined fontSize="small" />}
+            {projectsOpen ? <ChevronUpIcon fontSize="small" /> : <ChevronDownIcon fontSize="small" />}
           </IconButton>
         </Box>
         <Collapse in={projectsOpen} timeout="auto" unmountOnExit>
@@ -264,20 +286,24 @@ ${assets}`)) {
                 return (
                   <Box key={p.id}>
                     <Box
-                      sx={{ display: "flex", alignItems: "center", borderRadius: 1, "&:hover": { bgcolor: "action.hover" } }}
+                      sx={{ display: "flex", alignItems: "center", borderRadius: 2, "&:hover": { bgcolor: "action.hover" } }}
                     >
                       <ListItemButton
                         onClick={() => setOpenProjects((prev) => ({ ...prev, [p.id]: !open }))}
-                        sx={{ borderRadius: 1, py: 0.25, flexGrow: 1, minWidth: 0 }}
+                        sx={{ ...ROW_DENSE_SX, flexGrow: 1, minWidth: 0 }}
                       >
-                        <ListItemIcon sx={{ minWidth: 28 }}>
-                          <FolderOutlinedIcon fontSize="small" />
+                        <ListItemIcon>
+                          {/* 两态跟着下面的 Collapse 走：闭口 → Lucide 的斜口开口。
+                              空项目点开也不会有列表，所以恒用闭口 */}
+                          {open && projTasks.length > 0
+                            ? <FolderOpenIcon fontSize="small" />
+                            : <FolderIcon fontSize="small" />}
                         </ListItemIcon>
                         <ListItemText
                           primary={p.display_name || p.id}
-                          primaryTypographyProps={{ noWrap: true, style: { fontSize: 13 } }}
+                          primaryTypographyProps={{ noWrap: true, sx: LABEL_ROW }}
                           secondary={`${projTasks.length} 任务`}
-                          secondaryTypographyProps={{ noWrap: true, variant: "caption", sx: { fontSize: 11 } }}
+                          secondaryTypographyProps={{ noWrap: true, variant: "caption", sx: LABEL_META }}
                         />
                       </ListItemButton>
                       <IconButton
@@ -290,7 +316,7 @@ ${assets}`)) {
                         }}
                         aria-label="项目操作"
                       >
-                        <MoreVertOutlinedIcon fontSize="small" />
+                        <EllipsisVerticalIcon fontSize="small" />
                       </IconButton>
                     </Box>
                     {/* 项目下的任务（保存到项目的任务挂在这里，点击打开会话） */}
@@ -300,16 +326,16 @@ ${assets}`)) {
                           {projTasks.map((t) => (
                             <Box
                               key={t}
-                              sx={{ display: "flex", alignItems: "center", borderRadius: 1, "&:hover": { bgcolor: "action.hover" } }}
+                              sx={{ display: "flex", alignItems: "center", borderRadius: 2, "&:hover": { bgcolor: "action.hover" } }}
                             >
                               <ListItemButton
                                 selected={t === currentTaskId}
                                 onClick={() => { selectTask(t); setView("chat"); }}
-                                sx={{ borderRadius: 1, py: 0.25, flexGrow: 1, minWidth: 0 }}
+                                sx={{ ...ROW_DENSE_SX, flexGrow: 1, minWidth: 0 }}
                               >
                                 <ListItemText
                                   primary={taskLabel(t)}
-                                  primaryTypographyProps={{ noWrap: true, style: { fontSize: 12.5 } }}
+                                  primaryTypographyProps={{ noWrap: true, sx: LABEL_CHILD }}
                                 />
                               </ListItemButton>
                               <IconButton
@@ -322,7 +348,7 @@ ${assets}`)) {
                                 }}
                                 aria-label="任务操作"
                               >
-                                <MoreVertOutlinedIcon fontSize="small" />
+                                <EllipsisVerticalIcon fontSize="small" />
                               </IconButton>
                             </Box>
                           ))}
@@ -344,11 +370,11 @@ ${assets}`)) {
             px: 2, py: 0.5,
           }}
         >
-          <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 600 }}>
+          <Typography variant="subtitle2" color="text.secondary" sx={{ fontWeight: 500 }}>
             任务
           </Typography>
           <IconButton size="small" onClick={() => setTasksOpen((o) => !o)} sx={{ p: 0.25 }}>
-            {tasksOpen ? <ExpandLessOutlined fontSize="small" /> : <ExpandMoreOutlined fontSize="small" />}
+            {tasksOpen ? <ChevronUpIcon fontSize="small" /> : <ChevronDownIcon fontSize="small" />}
           </IconButton>
         </Box>
         <Collapse in={tasksOpen} timeout="auto" unmountOnExit>
@@ -359,23 +385,23 @@ ${assets}`)) {
               flatTasks.map((t: string) => (
                 <Box
                   key={t}
-                  sx={{ display: "flex", alignItems: "center", borderRadius: 1, "&:hover": { bgcolor: "action.hover" } }}
+                  sx={{ display: "flex", alignItems: "center", borderRadius: 2, "&:hover": { bgcolor: "action.hover" } }}
                 >
                   <ListItemButton
                     selected={t === currentTaskId}
                     onClick={() => { selectTask(t); setView("chat"); }}
-                    sx={{ borderRadius: 1, py: 0.25, flexGrow: 1, minWidth: 0 }}
+                    sx={{ ...ROW_DENSE_SX, flexGrow: 1, minWidth: 0 }}
                   >
                     <ListItemText
                       primary={taskLabel(t)}
-                      primaryTypographyProps={{ noWrap: true, style: { fontSize: 13 } }}
+                      primaryTypographyProps={{ noWrap: true, sx: LABEL_ROW }}
                       secondary={
                         taskProjects[t] && taskProjects[t] !== "default"
                           ? displayNameOf(taskProjects[t])
                           : undefined
                       }
                       secondaryTypographyProps={{
-                        noWrap: true, variant: "caption", sx: { fontSize: 11 },
+                        noWrap: true, variant: "caption", sx: LABEL_META,
                       }}
                     />
                   </ListItemButton>
@@ -389,7 +415,7 @@ ${assets}`)) {
                     }}
                     aria-label="任务操作"
                   >
-                    <MoreVertOutlinedIcon fontSize="small" />
+                    <EllipsisVerticalIcon fontSize="small" />
                   </IconButton>
                 </Box>
               ))
@@ -418,7 +444,7 @@ ${assets}`)) {
               window.alert(`新建会话失败：${err?.response?.data?.error || err?.message || e}`);
             }
           }}>
-            <ListItemIcon sx={{ minWidth: 32 }}><AddOutlinedIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32 }}><PlusIcon fontSize="small" /></ListItemIcon>
             新建会话
           </MenuItem>
           <MenuItem onClick={() => {
@@ -428,7 +454,7 @@ ${assets}`)) {
             setProjRenameOpen(true);
             setProjMenuAnchor(null);
           }}>
-            <ListItemIcon sx={{ minWidth: 32 }}><EditOutlinedIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32 }}><PencilIcon fontSize="small" /></ListItemIcon>
             重命名
           </MenuItem>
           <MenuItem onClick={() => {
@@ -436,7 +462,7 @@ ${assets}`)) {
             setProjMenuAnchor(null);
             void deleteProject(pid);
           }} sx={{ color: "error.main" }}>
-            <ListItemIcon sx={{ minWidth: 32, color: "error.main" }}><DeleteOutlinedIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32, color: "error.main" }}><TrashIcon fontSize="small" /></ListItemIcon>
             删除项目
           </MenuItem>
         </Menu>
@@ -452,7 +478,7 @@ ${assets}`)) {
             setRenameOpen(true);
             setMenuAnchor(null);
           }}>
-            <ListItemIcon sx={{ minWidth: 32 }}><EditOutlinedIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32 }}><PencilIcon fontSize="small" /></ListItemIcon>
             改名
           </MenuItem>
           <MenuItem onClick={async () => {
@@ -466,7 +492,7 @@ ${assets}`)) {
               window.alert(`打开失败：${err?.response?.data?.error || err?.message || e}`);
             }
           }}>
-            <ListItemIcon sx={{ minWidth: 32 }}><FolderOpenOutlinedIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32 }}><FolderOpenIcon fontSize="small" /></ListItemIcon>
             打开文件夹
           </MenuItem>
           {/* 保存到项目：仅未归属用户项目的任务显示（已在项目里的任务无需再保存） */}
@@ -476,7 +502,7 @@ ${assets}`)) {
               setSaveOpen(true);
               setMenuAnchor(null);
             }}>
-              <ListItemIcon sx={{ minWidth: 32 }}><SaveOutlinedIcon fontSize="small" /></ListItemIcon>
+              <ListItemIcon sx={{ minWidth: 32 }}><SaveIcon fontSize="small" /></ListItemIcon>
               保存到项目…
             </MenuItem>
           )}
@@ -487,7 +513,7 @@ ${assets}`)) {
               deleteTask(id);
             }
           }} sx={{ color: "error.main" }}>
-            <ListItemIcon sx={{ minWidth: 32, color: "error.main" }}><DeleteOutlinedIcon fontSize="small" /></ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 32, color: "error.main" }}><TrashIcon fontSize="small" /></ListItemIcon>
             删除
           </MenuItem>
         </Menu>
@@ -551,7 +577,7 @@ ${assets}`)) {
                   onClick={() => { void saveToProject(p.id); }}
                   sx={{ borderRadius: 1, py: 0.5 }}
                 >
-                  <ListItemIcon sx={{ minWidth: 28 }}><FolderOutlinedIcon fontSize="small" /></ListItemIcon>
+                  <ListItemIcon sx={{ minWidth: 28 }}><FolderIcon fontSize="small" /></ListItemIcon>
                   <ListItemText
                     primary={p.display_name || p.id}
                     primaryTypographyProps={{ style: { fontSize: 13 } }}
@@ -578,21 +604,8 @@ ${assets}`)) {
         </Box>
 
         {/* 底部固定：设置入口（距底 20px） */}
-        <Box
-          sx={{
-            flexShrink: 0, display: "flex", alignItems: "center", gap: 1,
-            px: 2, pt: 0.5, pb: "20px",
-          }}
-        >
-          <SettingsOutlinedIcon fontSize="small" />
-          <Typography
-            variant="body2"
-            color="text.secondary"
-            sx={{ fontWeight: 600, cursor: "pointer", "&:hover": { color: "primary.main" } }}
-            onClick={() => setView("settings")}
-          >
-            设置
-          </Typography>
+        <Box sx={{ flexShrink: 0, px: 1, pb: 2.5 }}>
+          {overlayEntry(settingsOpen, "设置", <SettingsIcon />, () => setSettingsOpen(true))}
         </Box>
       </Drawer>
 
@@ -600,6 +613,9 @@ ${assets}`)) {
       <Box component="main" sx={{ flexGrow: 1, minWidth: 0, minHeight: 0, overflow: "auto", height: "100%", p: 0 }}>
         {renderMain()}
       </Box>
+
+      {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
+      {skillsOpen && <SkillsAndTools onClose={() => setSkillsOpen(false)} />}
     </Box>
   );
 }

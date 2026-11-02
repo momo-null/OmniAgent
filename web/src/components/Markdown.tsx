@@ -21,22 +21,22 @@ type P = HTMLAttributes<HTMLElement> & { node?: unknown };
 
 const MD_COMPONENTS = {
   p: ({ node, ...props }: P) => (
-    <Typography variant="body2" component="p" sx={{ fontSize: 14, my: 0.5 }} {...props} />
+    <Typography variant="body2" component="p" sx={{ fontSize: "1rem", my: 0.5 }} {...props} />
   ),
   h1: ({ node, ...props }: P) => <Typography variant="subtitle1" component="h3" sx={{ fontWeight: 600, mt: 1, mb: 0.5 }} {...props} />,
   h2: ({ node, ...props }: P) => <Typography variant="subtitle1" component="h4" sx={{ fontWeight: 600, mt: 1, mb: 0.5 }} {...props} />,
   h3: ({ node, ...props }: P) => <Typography variant="subtitle2" component="h5" sx={{ fontWeight: 600, mt: 0.75, mb: 0.5 }} {...props} />,
-  ul: ({ node, ...props }: P) => <Box component="ul" sx={{ my: 0.5, pl: 3, fontSize: 14, "& li": { my: 0.25 } }} {...props} />,
-  ol: ({ node, ...props }: P) => <Box component="ol" sx={{ my: 0.5, pl: 3, fontSize: 14, "& li": { my: 0.25 } }} {...props} />,
+  ul: ({ node, ...props }: P) => <Box component="ul" sx={{ my: 0.5, pl: 3, fontSize: "1rem", "& li": { my: 0.25 } }} {...props} />,
+  ol: ({ node, ...props }: P) => <Box component="ol" sx={{ my: 0.5, pl: 3, fontSize: "1rem", "& li": { my: 0.25 } }} {...props} />,
   blockquote: ({ node, ...props }: P) => (
-    <Box component="blockquote" sx={{ my: 0.5, pl: 1, borderLeft: 2, borderColor: "divider", color: "text.secondary", fontSize: 14 }} {...props} />
+    <Box component="blockquote" sx={{ my: 0.5, pl: 1, borderLeft: 2, borderColor: "divider", color: "text.secondary", fontSize: "1rem" }} {...props} />
   ),
   a: ({ node, ...props }: P) => <Box component="a" target="_blank" rel="noreferrer" sx={{ color: "primary.main" }} {...props} />,
   table: ({ node, ...props }: P) => (
     <Box
       component="table"
       sx={{
-        my: 0.5, borderCollapse: "collapse", fontSize: 13,
+        my: 0.5, borderCollapse: "collapse", fontSize: "0.9286rem",
         "& td, & th": { border: "1px solid", borderColor: "divider", px: 0.75, py: 0.25, textAlign: "left" },
       }}
       {...props}
@@ -48,13 +48,13 @@ const MD_COMPONENTS = {
       return <code className={className} {...props}>{children}</code>;
     }
     return (
-      <Box component="code" sx={{ bgcolor: "rgba(0,0,0,0.05)", px: 0.5, borderRadius: 0.5, fontFamily: "monospace", fontSize: 13 }}>
+      <Box component="code" sx={{ bgcolor: "rgba(0,0,0,0.05)", px: 0.5, borderRadius: 0.5, fontFamily: "monospace", fontSize: "0.9286rem" }}>
         {children}
       </Box>
     );
   },
   pre: ({ node, ...props }: P) => (
-    <Box component="pre" sx={{ bgcolor: "rgba(0,0,0,0.04)", p: 1, borderRadius: 1, overflow: "auto", fontSize: 13, my: 0.5, "& code": { fontFamily: "monospace" } }} {...props} />
+    <Box component="pre" sx={{ bgcolor: "rgba(0,0,0,0.04)", p: 1, borderRadius: 1, overflow: "auto", fontSize: "0.9286rem", my: 0.5, "& code": { fontFamily: "monospace" } }} {...props} />
   ),
 };
 

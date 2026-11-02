@@ -5,7 +5,6 @@ import {
   TextField,
   Typography,
   Stack,
-  Switch,
   Chip,
   IconButton,
   Button,
@@ -14,27 +13,34 @@ import {
   Alert,
   CircularProgress,
   Popover,
+  Menu,
+  MenuItem,
 } from "@mui/material";
-import SendOutlinedIcon from "@mui/icons-material/SendOutlined";
-import StopOutlinedIcon from "@mui/icons-material/StopOutlined";
-import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
-import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
-import ExpandMoreOutlinedIcon from "@mui/icons-material/ExpandMoreOutlined";
-import ExpandLessOutlinedIcon from "@mui/icons-material/ExpandLessOutlined";
-import ContentCopyOutlinedIcon from "@mui/icons-material/ContentCopyOutlined";
-import CheckOutlinedIcon from "@mui/icons-material/CheckOutlined";
-import PsychologyOutlinedIcon from "@mui/icons-material/PsychologyOutlined";
-import TerminalOutlinedIcon from "@mui/icons-material/TerminalOutlined";
-import WarningAmberOutlined from "@mui/icons-material/WarningAmberOutlined";
-import FolderOutlined from "@mui/icons-material/FolderOutlined";
-import PublicOutlined from "@mui/icons-material/PublicOutlined";
-import DescriptionOutlined from "@mui/icons-material/DescriptionOutlined";
-import ImageOutlinedIcon from "@mui/icons-material/ImageOutlined";
-import InsertDriveFileOutlined from "@mui/icons-material/InsertDriveFileOutlined";
-import MicOutlinedIcon from "@mui/icons-material/MicOutlined";
-import MicOffOutlinedIcon from "@mui/icons-material/MicOffOutlined";
-import VolumeUpOutlinedIcon from "@mui/icons-material/VolumeUpOutlined";
-import GraphicEqOutlinedIcon from "@mui/icons-material/GraphicEqOutlined";
+import {
+  AudioLinesIcon,
+  BrainIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  CopyIcon,
+  FileIcon,
+  FileTextIcon,
+  FolderIcon,
+  GlobeIcon,
+  ImageIcon,
+  MicIcon,
+  MicOffIcon,
+  PanelRightIcon,
+  PencilIcon,
+  PlusIcon,
+  SendIcon,
+  SquareIcon,
+  TerminalIcon,
+  TrashIcon,
+  TriangleAlertIcon,
+  Volume2Icon,
+} from "../../components/icons";
 import { useTaskStore } from "../../store/taskStore.tsx";
 import ScrollArea, { THUMB_RIGHT, THUMB_WIDTH } from "../../components/ScrollArea.tsx";
 import Markdown from "../../components/Markdown.tsx";
@@ -74,7 +80,7 @@ function ApprovalCardView({ card, onDecide }: {
   return (
     <Alert
       severity="warning"
-      icon={<WarningAmberOutlined fontSize="small" />}
+      icon={<TriangleAlertIcon fontSize="small" />}
       sx={{ mb: 1, flexShrink: 0, borderRadius: 2, alignItems: "flex-start" }}
     >
       <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>
@@ -95,7 +101,7 @@ function ApprovalCardView({ card, onDecide }: {
       </Box>
       <Button size="small" sx={{ minWidth: 0, px: 0.5, mb: 0.5 }}
         onClick={() => setArgsOpen((v) => !v)}
-        startIcon={argsOpen ? <ExpandLessOutlinedIcon /> : <ExpandMoreOutlinedIcon />}>
+        startIcon={argsOpen ? <ChevronUpIcon /> : <ChevronDownIcon />}>
         {argsOpen ? "收起参数" : "展开完整参数"}
       </Button>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ flexWrap: "wrap", gap: 0.5 }}>
@@ -192,7 +198,7 @@ const MsgRow = memo(function MsgRow({ m, showRole = true, copyable = false }: { 
         {isReply ? (
           <ReplyBody text={m.text} copyable={copyable} />
         ) : (
-          <Typography variant="body2" component="span" sx={{ fontSize: 14 }}>
+          <Typography variant="body2" component="span" sx={{ fontSize: "1rem" }}>
             {m.text}
           </Typography>
         )}
@@ -275,7 +281,7 @@ function SpeakButton({ text }: { text: string }) {
         "&:hover": { color: "text.primary", bgcolor: "transparent" },
       }}
     >
-      {busy ? <CircularProgress size={14} /> : playing ? <StopOutlinedIcon /> : <VolumeUpOutlinedIcon />}
+      {busy ? <CircularProgress size={14} /> : playing ? <SquareIcon /> : <Volume2Icon />}
     </IconButton>
   );
 }
@@ -327,7 +333,7 @@ function MicButton({ onPressStart, onText }: {
       }}
       sx={{ width: 36, height: 36, flexShrink: 0, color: "text.secondary" }}
     >
-      {busy ? <CircularProgress size={18} /> : <MicOutlinedIcon />}
+      {busy ? <CircularProgress size={18} /> : <MicIcon />}
     </IconButton>
   );
 }
@@ -369,7 +375,7 @@ function CopyButton({ text }: { text: string }) {
         "&:hover": { color: "text.primary", bgcolor: "transparent" },
       }}
     >
-      {done ? <CheckOutlinedIcon sx={{ fontSize: 15 }} /> : <ContentCopyOutlinedIcon sx={{ fontSize: 15 }} />}
+      {done ? <CheckIcon sx={{ fontSize: 15 }} /> : <CopyIcon sx={{ fontSize: 15 }} />}
     </IconButton>
   );
 }
@@ -400,7 +406,7 @@ const ThinkBlock = memo(function ThinkBlock({ item, streaming }: { item: Process
       >
         <Stack direction="row" spacing={0.5} alignItems="center" onClick={() => setOpen((o) => !o)}
                sx={{ cursor: "pointer" }}>
-          <PsychologyOutlinedIcon fontSize="small" sx={{ color: "text.disabled" }} />
+          <BrainIcon fontSize="small" sx={{ color: "text.disabled" }} />
           <Typography variant="caption" sx={{ fontWeight: 500, color: "text.disabled", letterSpacing: 0.5 }}>
             深度思考
           </Typography>
@@ -409,12 +415,12 @@ const ThinkBlock = memo(function ThinkBlock({ item, streaming }: { item: Process
                   sx={{ height: 16, fontSize: 10, color: "text.disabled", borderColor: "divider", "& .MuiChip-label": { px: 0.5 } }} />
           )}
           <Box sx={{ ml: "auto" }}>{open
-            ? <ExpandLessOutlinedIcon fontSize="small" sx={{ color: "text.disabled" }} />
-            : <ExpandMoreOutlinedIcon fontSize="small" sx={{ color: "text.disabled" }} />}</Box>
+            ? <ChevronUpIcon fontSize="small" sx={{ color: "text.disabled" }} />
+            : <ChevronDownIcon fontSize="small" sx={{ color: "text.disabled" }} />}</Box>
         </Stack>
         {open && (
           <ScrollArea maxHeight={200} sx={{ mt: 0.5 }}>
-            <Typography variant="body2" sx={{ fontSize: 13, color: "text.secondary", pr: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", display: "block" }}>
+            <Typography variant="body2" sx={{ fontSize: "0.9286rem", color: "text.secondary", pr: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", display: "block" }}>
               {text}
             </Typography>
           </ScrollArea>
@@ -469,7 +475,7 @@ const ToolCallCard = memo(function ToolCallCard({ item }: { item: ProcessItem })
       {/* 与思考块/回复气泡统一：极淡底 + 无阴影无边框（原 action.hover 灰底像卡片） */}
       <Paper elevation={0} sx={{ maxWidth: "92%", px: 1.25, py: 0.75, borderRadius: 1.5, bgcolor: "rgba(0,0,0,0.03)", boxShadow: "none", border: "none" }}>
         <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap">
-          <TerminalOutlinedIcon fontSize="small" color="action" />
+          <TerminalIcon fontSize="small" color="action" />
           <Typography variant="caption" sx={{ fontWeight: 600 }}>
             🔧 {item.name}
           </Typography>
@@ -478,7 +484,7 @@ const ToolCallCard = memo(function ToolCallCard({ item }: { item: ProcessItem })
                   sx={{ height: 16, fontSize: 10, "& .MuiChip-label": { px: 0.5 } }} />
           )}
           <IconButton size="small" sx={{ py: 0, ml: "auto" }} onClick={() => setOpen((o) => !o)}>
-            {open ? <ExpandLessOutlinedIcon fontSize="small" /> : <ExpandMoreOutlinedIcon fontSize="small" />}
+            {open ? <ChevronUpIcon fontSize="small" /> : <ChevronDownIcon fontSize="small" />}
           </IconButton>
         </Stack>
         {open && (
@@ -513,9 +519,9 @@ const IMAGE_ART_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"
 function artifactIcon(name: string) {
   const i = name.lastIndexOf(".");
   const ext = i >= 0 ? name.slice(i).toLowerCase() : "";
-  if (IMAGE_ART_EXTS.has(ext)) return <ImageOutlinedIcon fontSize="small" sx={{ color: "#42a5f5" }} />;
-  if (ext === ".md" || ext === ".markdown") return <DescriptionOutlined fontSize="small" sx={{ color: "#26c6da" }} />;
-  return <InsertDriveFileOutlined fontSize="small" sx={{ color: "text.disabled" }} />;
+  if (IMAGE_ART_EXTS.has(ext)) return <ImageIcon fontSize="small" sx={{ color: "fileImage.main" }} />;
+  if (ext === ".md" || ext === ".markdown") return <FileTextIcon fontSize="small" sx={{ color: "fileDoc.main" }} />;
+  return <FileIcon fontSize="small" sx={{ color: "text.disabled" }} />;
 }
 
 const ArtifactCards = memo(function ArtifactCards({ artifacts }: { artifacts: ArtifactInfo[] }) {
@@ -618,7 +624,7 @@ const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false
 });
 
 export default function Chat() {
-  const { messages, running, sendMessage, injectOrQueue, removeQueuedAt, queuedMessages, stopTask, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, modeByTask, setModeForTask, pendingApprovals, decideApproval, taskObjectives, dockOpen, openDockMenu, closeDock } = useTaskStore();
+  const { messages, running, sendMessage, injectOrQueue, removeQueuedAt, queuedMessages, stopTask, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, modeByTask, setModeForTask, pendingApprovals, decideApproval, taskObjectives, dockOpen, openDockMenu } = useTaskStore();
   const [draft, setDraft] = useState("");
   // 助手名：从角色卡 frontmatter 解析（缺省 OmniAgent），用于顶栏与消息标签
   const [assistantName, setAssistantName] = useState("OmniAgent");
@@ -629,6 +635,9 @@ export default function Chat() {
       .catch(() => {});
   }, []);
   const [confirmAnchorEl, setConfirmAnchorEl] = useState<HTMLElement | null>(null);
+  // 输入框「+」菜单及其「模式」子菜单的锚点
+  const [plusAnchorEl, setPlusAnchorEl] = useState<HTMLElement | null>(null);
+  const [modeAnchorEl, setModeAnchorEl] = useState<HTMLElement | null>(null);
   // 全局权限档位（设置›安全与审批）；full_access 档开时所有任务已免审批，per-task 开关冗余
   const [globalSecurityMode, setGlobalSecurityMode] = useState<string>("standard");
   useEffect(() => {
@@ -689,12 +698,15 @@ export default function Chat() {
   const timelineViewportRef = useRef<HTMLDivElement | null>(null);
   const pinnedRef = useRef(true);
   const lastTaskRef = useRef(currentTaskId);
+  // 是否贴底：pinnedRef 给滚动逻辑用（不触发渲染），atBottom 给「跳回最新」按钮用
+  const [atBottom, setAtBottom] = useState(true);
 
   // 任务切换：瞬时跳到最新消息（无平滑动画），并重置为贴底跟随
   useEffect(() => {
     if (lastTaskRef.current !== currentTaskId) {
       lastTaskRef.current = currentTaskId;
       pinnedRef.current = true;
+      setAtBottom(true);
     }
     const el = timelineViewportRef.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -706,10 +718,19 @@ export default function Chat() {
     if (!el) return;
     const onScroll = () => {
       pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      setAtBottom(pinnedRef.current);
     };
     el.addEventListener("scroll", onScroll);
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
+
+  const jumpToLatest = () => {
+    const el = timelineViewportRef.current;
+    if (!el) return;
+    pinnedRef.current = true;
+    el.scrollTop = el.scrollHeight;
+    setAtBottom(true);
+  };
 
   // 内容更新（含 SSE 流式追加）：仅在贴底时跟随，瞬时滚动不做平滑动画
   useEffect(() => {
@@ -824,50 +845,50 @@ export default function Chat() {
         sx={{
           flexGrow: 1, minWidth: 0, minHeight: 0,
           display: "flex", flexDirection: "column",
-          px: 2, pb: 4.5,
+          // 左右不留内衬：与侧栏之间那条界线只有 1px（侧栏的左边线），内容贴住它才没有空隙感
+          pl: 0, pr: 0, pb: 2,
           overflow: "hidden",
         }}
       >
         <Stack direction="row" justifyContent="space-between" alignItems="center"
-          sx={{ mb: 1, pt: 1, pb: 1, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
+          sx={{ mb: 1, px: 2, pt: 1, pb: 1, borderBottom: "1px solid", borderColor: "divider", flexShrink: 0 }}>
           {/* 顶栏左侧：显示当前会话名（服务端 title 优先、回退 objective；新对话为空） */}
           <Typography variant="subtitle1" noWrap sx={{ fontWeight: 600 }}>
             {currentTaskId ? (taskObjectives[currentTaskId] || "") : ""}
           </Typography>
-          {/* 顶栏右侧：dock 窗口开关（样式对齐 desktop 导航条 nav-btn：30x22/圆角4/panel-left 图标） */}
-          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
+          {/* 顶栏右侧：dock 开关，只在 dock 收起时出现。展开后收起入口交给 dock 页签条最右那枚
+              （同图标：矩形 + 右侧竖线），顶栏不重复放第二枚，避免两个「收起侧边栏」 */}
+          {!dockOpen && (
             <IconButton
-              onClick={() => (dockOpen ? closeDock() : openDockMenu())}
-              aria-label={dockOpen ? "收起侧栏" : "展开侧栏"}
-              title={dockOpen ? "收起侧栏" : "展开侧栏"}
+              onClick={openDockMenu}
+              aria-label="展开侧栏"
+              title="展开侧栏"
               sx={{
+                flexShrink: 0,
                 width: 30, height: 22, borderRadius: "4px", p: 0,
-                color: dockOpen ? "#e0e0e0" : "#b1b1b1",
-                "&:hover": { bgcolor: "rgba(255,255,255,0.14)", color: "#e0e0e0" },
-                "&:active": { bgcolor: "rgba(255,255,255,0.2)" },
+                color: "text.secondary",
+                "&:hover": { bgcolor: "action.hover", color: "text.primary" },
+                "&:active": { bgcolor: "action.selected" },
               }}
             >
-              {/* panel-left：矩形 + 左侧竖线（与 desktop/resources/titlebar.html 同源） */}
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor"
-                   strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="4" width="18" height="16" rx="2" />
-                <line x1="9" y1="4" x2="9" y2="20" />
-              </svg>
+              {/* panel-right：竖线靠右，指代右侧面板（与 RightDock 的关闭按钮同一枚字形） */}
+              <PanelRightIcon sx={{ fontSize: 16 }} />
             </IconButton>
-          </Stack>
+          )}
         </Stack>
 
         {/* 内容列（宽屏居中，上限 1200）：时间线 / 审批卡 / 输入胶囊；顶栏不在此列内 */}
         <Box
           sx={{
             width: "100%", maxWidth: 1200, mx: "auto",
+            px: 2,
             flexGrow: 1, minHeight: 0,
             display: "flex", flexDirection: "column",
           }}
         >
         <Paper
           elevation={0}
-          sx={{ flexGrow: 1, minHeight: 0, mb: 1, bgcolor: "transparent", borderRadius: 2, overflow: "hidden", display: "flex", flexDirection: "column" }}
+          sx={{ flexGrow: 1, minHeight: 0, mb: 1, bgcolor: "transparent", borderRadius: 2, overflow: "hidden", display: "flex", flexDirection: "column", position: "relative" }}
         >
           <ScrollArea sx={{ flexGrow: 1, minHeight: 0 }} viewportRef={timelineViewportRef}>
             {/* 用户气泡右对齐，右内边距 = 滑块占位 + 20px 呼吸间距，避免气泡贴着滚动条 */}
@@ -918,6 +939,25 @@ export default function Chat() {
             <div ref={endRef} />
             </Box>
           </ScrollArea>
+          {/* 上翻看历史时浮出「跳回最新」：时间线下方居中，点击直接置底到最后一行 */}
+          {!atBottom && (
+            <IconButton
+              size="small"
+              onClick={jumpToLatest}
+              aria-label="跳到最新一条"
+              title="跳到最新一条"
+              sx={{
+                position: "absolute", left: "50%", bottom: 8,
+                transform: "translateX(-50%)",
+                width: 32, height: 32,
+                bgcolor: "background.paper", border: "1px solid", borderColor: "divider",
+                boxShadow: 2, color: "text.secondary",
+                "&:hover": { color: "text.primary" },
+              }}
+            >
+              <ChevronDownIcon fontSize="small" />
+            </IconButton>
+          )}
         </Paper>
 
         {/* S2 审批卡：顶置在输入框上方，不随时间线滚走；决议后收起（§6.3） */}
@@ -936,7 +976,8 @@ export default function Chat() {
             borderRadius: "28px",
             bgcolor: "#2e2e2e",
             p: 1,
-            mx: "40px",
+            // 与时间线正文同一条竖边线：内容列已给 16，这里再让 16（原 40 会明显缩进）
+            mx: 2,
             flexShrink: 0,
           }}
         >
@@ -954,11 +995,11 @@ export default function Chat() {
                   </Typography>
                   <IconButton size="small" title="复制到输入框修改后重新发送" aria-label="编辑排队消息"
                     onClick={() => { setDraft(q); removeQueuedAt(i); }}>
-                    <EditOutlinedIcon fontSize="small" />
+                    <PencilIcon fontSize="small" />
                   </IconButton>
                   <IconButton size="small" title="删除排队消息" aria-label="删除排队消息"
                     onClick={() => removeQueuedAt(i)}>
-                    <DeleteOutlinedIcon fontSize="small" />
+                    <TrashIcon fontSize="small" />
                   </IconButton>
                 </Box>
               ))}
@@ -1009,36 +1050,44 @@ export default function Chat() {
               }
             }}
           />
-          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", px: 1.25, pt: 0.25 }}>
-            <Stack direction="row" spacing={0.75} alignItems="center">
-              {/* 对话取向（与通道解绑，按 task 记忆）：chat=对话纪律 / task=工作 lane；
-                  同一条 run_task 链路，mode 只影响互斥与回播，不改链 */}
-              <Chip size="small" label="chat" sx={{ height: 24 }}
-                variant={chatMode === "chat" ? "filled" : "outlined"}
-                color={chatMode === "chat" ? "primary" : "default"}
-                onClick={() => setModeForTask(currentTaskId, "chat")} />
-              <Chip size="small" label="task" sx={{ height: 24 }}
-                variant={chatMode === "task" ? "filled" : "outlined"}
-                color={chatMode === "task" ? "primary" : "default"}
-                onClick={() => setModeForTask(currentTaskId, "task")} />
-              <FormControlLabel
-              control={
-                <Switch
-                  size="small"
-                  checked={fullAccess || globalFullAccess}
-                  disabled={running || globalFullAccess}
-                  onChange={(e) => {
-                    // 关闭直接生效；开启先在当前位置弹小窗确认风险
-                    if (e.target.checked) setConfirmAnchorEl(e.currentTarget);
-                    else setFullAccessForTask(currentTaskId, false);
-                  }}
-                />
-              }
-              label={globalFullAccess ? "完全访问（已被全局档覆盖）" : "完全访问"}
-              sx={{ mr: 0 }}
-            />
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", rowGap: 0.5, px: 1.25, pt: 0.25 }}>
+            <Stack direction="row" spacing={0.25} alignItems="center" sx={{ minWidth: 0 }}>
+              {/* 同类入口收进一枚 +：现在只有「模式」，后续引用文件等入口往这里挂 */}
+              <IconButton
+                size="small"
+                aria-label="更多"
+                title="模式"
+                onClick={(e) => { setPlusAnchorEl(e.currentTarget); setModeAnchorEl(null); }}
+                sx={{ width: 26, height: 26, flexShrink: 0, color: "text.secondary", "&:hover": { color: "text.primary" } }}
+              >
+                <PlusIcon fontSize="inherit" />
+              </IconButton>
+              {/* 完全访问：不用开关，点这枚文字下拉弹小窗切换（开需确认风险，关立即生效） */}
+              <Box
+                role="button"
+                tabIndex={0}
+                aria-label="完全访问"
+                title={running ? "任务运行中不可切换" : globalFullAccess ? "完全访问：已由全局权限档位开启" : fullAccess ? "完全访问已开启，点击关闭" : "点击开启完全访问（需确认风险）"}
+                onClick={(e) => { if (!running) setConfirmAnchorEl(e.currentTarget); }}
+                onKeyDown={(e) => {
+                  if (running || (e.key !== "Enter" && e.key !== " ")) return;
+                  e.preventDefault();
+                  setConfirmAnchorEl(e.currentTarget as HTMLElement);
+                }}
+                sx={{
+                  display: "flex", alignItems: "center", gap: 0.25, height: 26, px: 0.75, flexShrink: 0,
+                  borderRadius: "13px", fontSize: 12, bgcolor: "transparent",
+                  color: fullAccess || globalFullAccess ? "warning.main" : "text.secondary",
+                  cursor: running ? "not-allowed" : "pointer",
+                  opacity: running ? 0.5 : 1,
+                  "&:hover": running ? {} : { color: "warning.main" },
+                }}
+              >
+                完全访问
+                <ChevronDownIcon sx={{ fontSize: 18 }} />
+              </Box>
             </Stack>
-            <Stack direction="row" spacing={0.5} alignItems="center">
+            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ ml: "auto" }}>
               {/* 免提（对空气说话）：开=常开 VAD 自动判句、回复自动播报、说话即声学打断 */}
               <IconButton
                 onClick={() => setHandsFree((v) => !v)}
@@ -1052,7 +1101,7 @@ export default function Chat() {
                   bgcolor: handsFree ? "action.selected" : "transparent",
                 }}
               >
-                {handsFree ? <GraphicEqOutlinedIcon /> : <MicOffOutlinedIcon />}
+                {handsFree ? <AudioLinesIcon /> : <MicOffIcon />}
               </IconButton>
               {/* 按住说话：免提开启时隐藏（避免与自动判句双路重复提交） */}
               {!handsFree && (
@@ -1091,12 +1140,62 @@ export default function Chat() {
                   "&:disabled": { bgcolor: "action.disabledBackground", color: "action.disabled" },
                 }}
               >
-                {running && !draft.trim() ? <StopOutlinedIcon /> : <SendOutlinedIcon />}
+                {running && !draft.trim() ? <SquareIcon /> : <SendIcon />}
               </IconButton>
             </Stack>
           </Box>
         </Box>
         </Box>
+        {/* 「+」菜单：同类入口收在一起，目前只有「模式」；子菜单=对话取向（与通道解绑，
+            同一条 run_task 链路，mode 只影响互斥与回播），按 task 记忆 */}
+        <Menu
+          anchorEl={plusAnchorEl}
+          open={Boolean(plusAnchorEl)}
+          onClose={() => { setPlusAnchorEl(null); setModeAnchorEl(null); }}
+          anchorOrigin={{ vertical: "top", horizontal: "left" }}
+          transformOrigin={{ vertical: "bottom", horizontal: "left" }}
+          slotProps={{ paper: { sx: { minWidth: 148, borderRadius: 2, mt: -0.5 } } }}
+        >
+          <MenuItem
+            selected={Boolean(modeAnchorEl)}
+            onClick={(e) => setModeAnchorEl(e.currentTarget)}
+            sx={{ fontSize: 13, minHeight: 34 }}
+          >
+            模式
+            <ChevronRightIcon sx={{ fontSize: 18, ml: "auto", color: "text.disabled" }} />
+          </MenuItem>
+        </Menu>
+        <Menu
+          anchorEl={modeAnchorEl}
+          open={Boolean(modeAnchorEl)}
+          onClose={() => setModeAnchorEl(null)}
+          anchorOrigin={{ vertical: "top", horizontal: "right" }}
+          transformOrigin={{ vertical: "top", horizontal: "left" }}
+          slotProps={{ paper: { sx: { minWidth: 176, borderRadius: 2 } } }}
+        >
+          <MenuItem
+            selected={chatMode === "chat"}
+            onClick={() => { setModeForTask(currentTaskId, "chat"); setModeAnchorEl(null); setPlusAnchorEl(null); }}
+            sx={{ fontSize: 13, minHeight: 34, gap: 0.75 }}
+          >
+            <Box component="span" sx={{ width: 16, flexShrink: 0 }}>
+              {chatMode === "chat" && <CheckIcon sx={{ fontSize: 16 }} />}
+            </Box>
+            chat
+            <Typography component="span" variant="caption" sx={{ color: "text.secondary" }}>对话纪律</Typography>
+          </MenuItem>
+          <MenuItem
+            selected={chatMode === "task"}
+            onClick={() => { setModeForTask(currentTaskId, "task"); setModeAnchorEl(null); setPlusAnchorEl(null); }}
+            sx={{ fontSize: 13, minHeight: 34, gap: 0.75 }}
+          >
+            <Box component="span" sx={{ width: 16, flexShrink: 0 }}>
+              {chatMode === "task" && <CheckIcon sx={{ fontSize: 16 }} />}
+            </Box>
+            task
+            <Typography component="span" variant="caption" sx={{ color: "text.secondary" }}>工作 lane</Typography>
+          </MenuItem>
+        </Menu>
         <Popover
           open={Boolean(confirmAnchorEl)}
           anchorEl={confirmAnchorEl}
@@ -1105,31 +1204,67 @@ export default function Chat() {
           transformOrigin={{ vertical: "bottom", horizontal: "left" }}
           slotProps={{ paper: { sx: { p: 2, width: 300, maxWidth: "92vw", borderRadius: 2 } } }}
         >
-          <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
-            <WarningAmberOutlined color="warning" fontSize="small" />
-            <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>要开启完全访问权限吗？</Typography>
-          </Stack>
-          <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1.5 }}>
-            开启后，Agent 在<strong>本次任务</strong>中执行<strong>危险动作</strong>时<strong>不再弹出确认卡片</strong>，直接放行。
-            关闭时（默认），每个危险动作都需要你点头。本开关即审批总闸。
-          </Typography>
-          <Stack spacing={1.25} sx={{ mb: 1.5 }}>
-            <CapabilityRow icon={<FolderOutlined />} label="文件和文件夹" desc="读取、创建、修改或删除任意位置的文件" tag="默认已启用" />
-            <CapabilityRow icon={<TerminalOutlinedIcon />} label="命令执行" desc="在宿主机运行系统命令" tag="默认已启用" />
-            <CapabilityRow icon={<PublicOutlined />} label="互联网和已连接的应用" desc="访问网站、发送数据并使用已启用的工具" tag="默认已启用" />
-          </Stack>
-          <Stack direction="row" justifyContent="flex-end" spacing={1}>
-            <Button size="small" onClick={() => setConfirmAnchorEl(null)}>取消</Button>
-            <Button size="small" color="warning" variant="contained" startIcon={<WarningAmberOutlined />}
-              onClick={() => { setFullAccessForTask(currentTaskId, true); setConfirmAnchorEl(null); }}>
-              确认
-            </Button>
-          </Stack>
+          {globalFullAccess ? (
+            <>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <TriangleAlertIcon color="warning" fontSize="small" />
+                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>完全访问已开启（全局档）</Typography>
+              </Stack>
+              <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1.5 }}>
+                设置 › 安全与审批 的权限档位是 full_access，所有任务都已免审批，本任务的单独开关不起作用。
+              </Typography>
+              <Stack direction="row" justifyContent="flex-end">
+                <Button size="small" onClick={() => setConfirmAnchorEl(null)}>知道了</Button>
+              </Stack>
+            </>
+          ) : fullAccess ? (
+            <>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <TriangleAlertIcon color="warning" fontSize="small" />
+                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>本任务已开启完全访问</Typography>
+              </Stack>
+              <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1.5 }}>
+                Agent 在本次任务中执行<strong>危险动作</strong>时<strong>不再弹出确认卡片</strong>，直接放行。
+                关闭后恢复逐个确认。
+              </Typography>
+              <Stack direction="row" justifyContent="flex-end" spacing={1}>
+                <Button size="small" variant="outlined" color="warning"
+                  onClick={() => { setFullAccessForTask(currentTaskId, false); setConfirmAnchorEl(null); }}>
+                  关闭
+                </Button>
+                <Button size="small" onClick={() => setConfirmAnchorEl(null)}>保持开启</Button>
+              </Stack>
+            </>
+          ) : (
+            <>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <TriangleAlertIcon color="warning" fontSize="small" />
+                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>要开启完全访问权限吗？</Typography>
+              </Stack>
+              <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 1.5 }}>
+                开启后，Agent 在<strong>本次任务</strong>中执行<strong>危险动作</strong>时<strong>不再弹出确认卡片</strong>，直接放行。
+                关闭时（默认），每个危险动作都需要你点头。本开关即审批总闸。
+              </Typography>
+              <Stack spacing={1.25} sx={{ mb: 1.5 }}>
+                <CapabilityRow icon={<FolderIcon />} label="文件和文件夹" desc="读取、创建、修改或删除任意位置的文件" tag="默认已启用" />
+                <CapabilityRow icon={<TerminalIcon />} label="命令执行" desc="在宿主机运行系统命令" tag="默认已启用" />
+                <CapabilityRow icon={<GlobeIcon />} label="互联网和已连接的应用" desc="访问网站、发送数据并使用已启用的工具" tag="默认已启用" />
+              </Stack>
+              <Stack direction="row" justifyContent="flex-end" spacing={1}>
+                <Button size="small" onClick={() => setConfirmAnchorEl(null)}>取消</Button>
+                <Button size="small" color="warning" variant="contained" startIcon={<TriangleAlertIcon />}
+                  onClick={() => { setFullAccessForTask(currentTaskId, true); setConfirmAnchorEl(null); }}>
+                  确认
+                </Button>
+              </Stack>
+            </>
+          )}
         </Popover>
+
       </Box>
 
-      {/* 右：完整侧栏（RightDock）。由顶栏右上角开关整体收起/展开；打开先显示入口菜单，
-          点入口/产物展开 440px 面板，页签：文件/产物 · 浏览器 · git 变更 · 终端 · Debug。
+      {/* 右：完整侧栏（RightDock）。由顶栏右上角开关整体收起/展开，左缘可拖宽；打开先显示入口，
+          点入口/产物展开面板，页签：文件/产物 · 浏览器 · git 变更 · 终端 · Debug。
           Debug 面板仍是可整体删除的独立模块（components/DebugPanel.tsx + api/debugApi.ts） */}
       <RightDock />
     </Box>
