@@ -2,7 +2,7 @@
 
 > **⚠️ 2026-10-03 作废注**：本文的 S1 路径围栏（允许根 / 绝对拒绝区 / ensure_writable 写门）已**整体删除**——写入不设防（用户定案，见 Backlog 2026-10-03 条）。S0 档位与 S2 审批保留。下文 S1 相关章节仅作历史设计记录。
 
-> **状态**：✅ **S0 / S1 / S2 已实施并合入 main**（2026-09-27，commit `fc2db16` / `f64d5e8`；验收用例 `tests/test_policy_paths.py` / `test_approval_gate.py` / `test_approvals_e2e.py`）。未实现项（S3 / MCP 收口 / `deny_read_roots` / mcp.json 过渡期注释）已收割至 `Backlog.md`。本文归档至 `implemented/`。
+> **状态**：✅ **S0 / S1 / S2 已实施并合入 main**（2026-09-27，commit `fc2db16` / `f64d5e8`；验收用例 `tests/test_policy_paths.py` / `test_approval_gate.py` / `test_approvals_e2e.py`）。未实现项（S3 / MCP 收口 / `deny_read_roots` / mcp.json 过渡期注释）已收割至 `Backlog.md`。本文归档至 `doc/plans/implemented/`。
 > **适用范围**：agent 获得「操作电脑」能力（命令执行 / 文件读写 / 键鼠 / 进程）之后的能力边界。
 > **本文＝安全与沙箱（S0-S3）唯一来源**。
 > **实施计划与审计记录**：不在本文件（见内部计划，含证据与实测结论）。
@@ -244,7 +244,7 @@ web Chat 页                      # 顶置审批卡（通用三风险标签，�
 > **推论**：能同时约束「文件工具 + 命令执行」的只有 L2 / S3（OS 级隔离）。
 > **故 L0 的安全前提是：命令执行保持默认关闭，只由人按需开启。**
 >
-> **⚠️ 2026-09-24 变更（与 `implemented/capability-unit-refactor-2026-09-24.md` 对齐）**：命令执行（`shell_exec`）已改为**内核 builtin 默认开**。故本条的「默认关闭」前提**被替换**为「默认开 + S2 审批门（危险动作要人点头）+ `full_access` 绕过」。L0 的路径边界对命令执行仍是**绊线**（非硬边界），能同时约束文件工具与命令执行的硬边界仍只有 **S3（OS 级隔离）**。
+> **⚠️ 2026-09-24 变更（与 `doc/plans/implemented/capability-unit-refactor-2026-09-24.md` 对齐）**：命令执行（`shell_exec`）已改为**内核 builtin 默认开**。故本条的「默认关闭」前提**被替换**为「默认开 + S2 审批门（危险动作要人点头）+ `full_access` 绕过」。L0 的路径边界对命令执行仍是**绊线**（非硬边界），能同时约束文件工具与命令执行的硬边界仍只有 **S3（OS 级隔离）**。
 
 ### L1 —— 粗闸门（第二批）
 

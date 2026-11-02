@@ -87,7 +87,7 @@ def _get_stt():
         if missing:
             raise RuntimeError(
                 "SenseVoice 模型缺失: " + ", ".join(missing)
-                + "（下载见 doc/plans/voice-2026-10-31.md §4）")
+                + "（下载见 doc/plans/implemented/voice-2026-10-31.md §4）")
         import sherpa_onnx
 
         _STT = sherpa_onnx.OfflineRecognizer.from_sense_voice(

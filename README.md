@@ -167,7 +167,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | 架构图集 N1–N10 |
 | [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | 架构决策权威（单一事实来源） |
 | [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | 消息通道机制（协议 / 能力门 / 场合自述） |
-| [`doc/plans/memory-architecture.md`](doc/plans/memory-architecture.md) | 记忆架构（L0–L3） |
+| [`doc/plans/implemented/memory-architecture.md`](doc/plans/implemented/memory-architecture.md) | 记忆架构（L0–L3） |
 | [`spec/coding_standard.md`](spec/coding_standard.md) | 工程规范 |
 
 > 以上设计文档均为中文。许可证见 [LICENSE](LICENSE)。
@@ -340,7 +340,7 @@ One line: **agent loop** (OpenAI Agents SDK `Runner`) → **tool layer** (plugin
 | [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | Architecture diagrams N1–N10 |
 | [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | Authoritative architecture decisions |
 | [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | Message-channel design (protocol / tool gate / narration) |
-| [`doc/plans/memory-architecture.md`](doc/plans/memory-architecture.md) | Memory architecture (L0–L3) |
+| [`doc/plans/implemented/memory-architecture.md`](doc/plans/implemented/memory-architecture.md) | Memory architecture (L0–L3) |
 | [`spec/coding_standard.md`](spec/coding_standard.md) | Engineering standard |
 
 > The design documents above are written in Chinese. License: [LICENSE](LICENSE).

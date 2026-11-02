@@ -5,8 +5,8 @@
 
 ## 待办
 
-### skill 宏轴 · 有效性验证（memory-architecture.md §7.4）
-- 来源：`doc/plans/memory-architecture.md` §7.4（skill 宏轴有效性验证）
+### skill 宏轴 · 有效性验证（skill-architecture.md §3）
+- 来源：`doc/plans/implemented/skill-architecture.md` §3（遗留链路与回放口径）
 - 状态：🟡 **实现已落地（2026-10-04 生产者于 2026-10-05 重接至任务收尾）；真机试点已收口——机制层跑通
   （蒸馏链 5/5 成功、entry_id 正确分结构），但注入技能形态零步数收益
   （Δsteps=0 负观测）**。⇒ 价值全系于 `replay_skill` 回放执行器（跳过每步 LLM 决策），不在注入参考。
@@ -46,10 +46,10 @@
     3. **`security.deny_read_roots`**：可选的凭证目录读取黑名单 glob。读路径当前完全放开（S1 撤销后无读网关）；若凭证泄漏成为实际风险再立项。
 
 ### 画像/角色卡/记忆 · 遗留项
-- 来源：`doc/plans/memory-architecture.md`
+- 来源：`doc/plans/implemented/memory-architecture.md`
 - 待办：
     1. **检索升级（向量臂 + RRF）**：现行 L1 为 FTS5 字面召回，升级路径与硬约束见
-       `doc/plans/memory-architecture.md` §2.2。**触发条件**：两库 atoms 合计 > 100
+       `doc/plans/implemented/memory-architecture.md` §2.2。**触发条件**：两库 atoms 合计 > 100
        或出现实测漏召回（同义改写查不到已存事实）——满足前不动工（早期试点实测：
        池子 1 条时排序无差别）。
     2. **多角色记忆档位 1-3**（§5.3）：档位 1 = per-role 记忆隔离（`memory/roles/<role>/`，
@@ -67,7 +67,7 @@
     6. **顺序依赖测试基线（暂缓）**：单进程按序执行时，`TOOL_REGISTRY` 等进程级全局会造成污染；该问题不阻断当前功能，按用户决定不作为近期主线。
 
 ### 上下文压缩 · 遗留项
-- 来源：`doc/plans/context-compression.md`（现行架构）
+- 来源：`doc/plans/implemented/context-compression.md`（现行架构）
 - 待办：
     1. **`compress_threshold` 调优**：估算口径修正（CJK 每字 1 token）后，实际触发点已回到
        真实 token 量级（22.5 万估算 ≈ 22.5 万真值）；建议先真机观察一轮再决定是否调低。

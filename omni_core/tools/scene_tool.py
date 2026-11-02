@@ -3,7 +3,7 @@
 L2 消费形态对齐 TAM(auto-recall / scene-navigation):场景块**全文不进上下文**——
 system 只放 ``<scene-navigation>`` 摘要导航(多入口,heat 降序);模型按导航判断当前
 任务需要某场景的完整环境事实时,调本工具读取。由此保证记忆内容不随每步请求重发、
-不占尾部注意力(placement 三不变量见 doc/plans/memory-architecture.md §5)。
+不占尾部注意力(placement 三不变量见 doc/plans/implemented/memory-architecture.md §5)。
 
 块存储与索引在 scene_executor(TAM scene-extractor 移植,多文件主题块)。
 project 定位与 load_skill 同款:绑定当前 task_id → 所属项目库。

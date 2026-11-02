@@ -267,13 +267,13 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
             # 注入块字符上限（纪律块与记忆块共用），超限截断并标注
             "instructions_limit": 8192,
         },
-        # 知识层 gate（TAM 移植，现行架构见 doc/plans/memory-architecture.md）：
+        # 知识层 gate（TAM 移植，现行架构见 doc/plans/implemented/memory-architecture.md）：
         # memory.enabled = 记忆轴总开关（注入 + L1 提炼 + L2 场景维护全链路；设置页「伙伴 → 记忆」）
         "knowledge": {
             "memory": {"enabled": False},
         },
     },
-    # 知识层（TAM 移植；现行架构见 doc/plans/memory-architecture.md）
+    # 知识层（TAM 移植；现行架构见 doc/plans/implemented/memory-architecture.md）
     "knowledge": {
         # 记忆层总 gate（L1 检索注入 + L2 场景维护 + L3 画像；brain.db 单库）
         "memory": {"enabled": False},
