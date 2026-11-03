@@ -153,12 +153,18 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
 
     try:
         import config
+        from omni_core.brain import router as model_router
         from omni_core.local.loop import ToolLoop, TaskSpec
         from omni_core.local.task_store import TaskStore, ProjectStore
 
-        brain_cfg = (config.load_config() or {}).get("brain", {})
+        # 端点真源收敛（2026-11-03）：与 Web /chat 同源——端点一律来自 models.json
+        # main 槽位（defaults.main），config.brain 只保留引擎参数；旧端点键不再被读取。
+        brain_src = (config.load_config() or {}).get("brain", {}) or {}
+        brain_cfg = model_router.resolve_main_with_engine(brain_src)
+        if not (brain_cfg.get("base_url") and brain_cfg.get("model")):
+            raise RuntimeError("大脑未配置（models.json 未设置 main 槽位默认模型），无法派发任务")
         if not (brain_cfg.get("api_key") or brain_cfg.get("api_key_env")):
-            raise RuntimeError("大脑未配置（config.brain 或环境变量），无法派发任务")
+            raise RuntimeError("大脑端点缺 api_key（models.json provider），无法派发任务")
 
         # ── 任务落 TaskStore（UI 项目/会话列表实时可见过程）──
         # 三种形态：

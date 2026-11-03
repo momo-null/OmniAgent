@@ -19,7 +19,13 @@ def _brain():
 def _brain_cfg() -> Dict[str, Any]:
     try:
         import config
-        return dict(config.get_config("brain") or {})
+        from omni_core.brain import router as model_router
+
+        # 端点真源收敛（2026-11-03）：与主链路同源，端点来自 models.json main 槽位；
+        # config.brain 只提供引擎参数（旧端点键不再被读取）。
+        src = (config.load_config() or {}).get("brain", {}) or {}
+        cfg = model_router.resolve_main_with_engine(src)
+        return cfg if (cfg.get("base_url") and cfg.get("model")) else {}
     except Exception:
         return {}
 

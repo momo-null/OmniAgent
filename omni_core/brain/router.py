@@ -134,6 +134,25 @@ def current_selection(slot: str) -> Optional[str]:
     return str(d).strip() if d else None
 
 
+def resolve_main_with_engine(cfg_brain: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """main 槽位端点 + config.brain 引擎参数 → LLMClient 形状的 brain_cfg。
+
+    端点真源是 models.json（main 槽位 defaults）；``config.brain`` 里的旧端点键
+    （base_url/model/api_key 等）**不参与解析**。目录里 main 未配置时返回仅含
+    引擎参数的 dict（调用方据 ``base_url``/``model`` 缺失自行报错）。
+    """
+    src = dict(cfg_brain or {})
+    out: Dict[str, Any] = {
+        "reasoning_mode": str(src.get("reasoning_mode", "native") or "native"),
+        "maxInputTokens": int(src.get("maxInputTokens", 0) or 0),
+        "long_task": dict(src.get("long_task") or {}),
+    }
+    ep = resolve_slot("main")
+    if ep:
+        out.update(ep)
+    return out
+
+
 # --- 目录视图（供 API / 前端） ----------------------------------------------
 def list_models() -> Dict[str, Any]:
     """返回按提供方分组的模型目录 + 各槽位当前生效端点（密钥脱敏）。"""
