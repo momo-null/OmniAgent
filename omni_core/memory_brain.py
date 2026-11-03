@@ -157,7 +157,7 @@ def _fts_ok(conn: sqlite3.Connection) -> bool:
             ver = row[0] if row else None
         except Exception:
             pass
-        target = f"{tok}-1"
+        target = f"{tok}-2"   # -2（2026-11-03）：老库索引里存了陈旧副本，换版即重建回填
         if ver != target:
             conn.execute("DROP TABLE IF EXISTS atoms_fts")  # FTS5 无 ALTER,只能重建
             conn.execute(
@@ -269,7 +269,7 @@ def _fts_neighbors(conn: sqlite3.Connection, query: str, exclude_id: str,
     if match:
         try:
             rows = conn.execute(
-                "SELECT f.record_id, f.content FROM atoms_fts f "
+                "SELECT f.record_id, a.content FROM atoms_fts f "
                 "JOIN atoms a ON a.record_id = f.record_id "
                 "WHERE atoms_fts MATCH ? AND a.state='active' AND f.record_id != ? "
                 "ORDER BY bm25(atoms_fts) LIMIT ?",
@@ -623,7 +623,7 @@ def _extract_detail(digest: str, brain_cfg) -> Tuple[List[Dict[str, Any]], str]:
         for f in (data.get("facts") or []):
             text = str((f.get("text") if isinstance(f, dict) else f) or "").strip()
             if text:
-                out.append({"text": text[:200]})
+                out.append({"text": text[:_MAX_ATOM_CHARS]})
         if not out:
             return [], "白卷(模型判无可沉淀的跨会话事实)"
         return out, ""
@@ -785,13 +785,27 @@ _VALUE_SYSTEM = (
     '只返回 JSON:{"items": [{"idx": 序号, "keep": true, "kind": "fact", "importance": 0.5, "peer": ""}]}'
 )
 
+#: 单条记忆的字数硬线。**在合并这一步它是拒绝线，不是截断线**（2026-11-03 定）：
+#: 静默截断会把合并结果的后半句砍掉，而合并本身又是「谁吞掉谁」的判定——两头合起来
+#: 就是把同一条 rule 越并越宽，养成"什么都管的大话"（实测最宽的一条 active rule 已到
+#: 117 字，而判定提示要求 ≤100 字）。merge 超线一律拒并：两条并存、下一轮再判——对齐
+#: 「保不住就不判断，绝不猜」的红线（`doc/agent-control-master-spec.md` §6.4）。
+#: 提炼侧与 `remember`/`update_memory` 的单条写入仍按本线截断（那是"模型写长了留前段"，
+#: 不涉及吞掉另一条记忆）。
+_MAX_ATOM_CHARS = 200
+
 _CONSIST_SYSTEM = (
     "你是记忆一致性评审器。给你「新事实」列表和「已有记忆」候选(带编号)。"
     "对每条新事实判定:"
     "与某条候选表达同一事实 → duplicate(返回 target_id,旧条将强化而非新增);"
-    "与某条互补可合并为更完整一条 → merge(返回 target_id 与 merged_content,≤100 字,不丢关键信息);"
+    "与某条**同一适用域**(同一场景、同一约束对象)且互补,并成一条后双方的条件与"
+    "禁止项都还在 → merge(返回 target_id 与 merged_content,≤100 字);"
     "与某条矛盾且新信息更可信 → conflict(返回 target_id,旧条将作废、新条入库);"
-    "是新信息 → novel。拿不准 → novel。"
+    "是新信息 → novel。"
+    "**跨适用域不许 merge**——把「群聊里怎么说话」和「本机某个工程事实」并成一条，"
+    "等于写出谁也用不上的大话;这种情况返回 novel,让它们各自成条。"
+    "并完会丢掉某一方的条件、或需要把两条改写成更笼统的一句话才装得下 → novel。"
+    "拿不准 → novel。"
     '只返回 JSON:{"decisions": [{"idx": 序号, "action": "novel|duplicate|merge|conflict",'
     ' "target_id": "...", "merged_content": "..."}]}'
 )
@@ -814,7 +828,7 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
     """
     persona = persona or str(_cfg("persona") or "")
     stats: Dict[str, int] = {"extracted": 0, "kept": 0, "stored": 0, "duplicated": 0,
-                             "merged": 0, "conflict": 0, "dropped": 0}
+                             "merged": 0, "merge_rejected": 0, "conflict": 0, "dropped": 0}
     msgs = pop_capture(project_id) if msgs is None else msgs
     if not enabled() or not brain_cfg or len(msgs) < _FLUSH_MIN_ROLES:
         return stats
@@ -868,7 +882,7 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
             imp = 0.5
         # peer 归属（关于谁，M3）：LLM 给了就收（截断防脏长），没给/给歪了保守置空
         peer = str(it.get("peer") or "").strip()[:80]
-        kept.append((idx, {"text": str(atoms[idx].get("text", ""))[:200],
+        kept.append((idx, {"text": str(atoms[idx].get("text", ""))[:_MAX_ATOM_CHARS],
                            "kind": kind, "importance": imp, "peer": peer}))
     stats["kept"] = len(kept)
     if not kept:
@@ -916,13 +930,20 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
                          (now, now, it["importance"], str(d.get("target_id"))))
             stats["duplicated"] += 1
         elif action == "merge":
-            merged = str(d.get("merged_content") or it["text"])[:200]
-            conn.execute("UPDATE atoms SET content=?, updated=?, importance=max(importance, ?), "
-                         "access_count=access_count+1, last_access=? WHERE record_id=?",
-                         (merged, now, it["importance"], now, str(d.get("target_id"))))
-            conn.execute("INSERT OR REPLACE INTO atoms_fts(record_id, content) VALUES(?,?)",
-                         (str(d.get("target_id")), merged))
-            stats["merged"] += 1
+            raw = str(d.get("merged_content") or "").strip()
+            if len(raw) > _MAX_ATOM_CHARS:
+                # 超线 = 模型把两个域并成了一条大话。静默截断会砍掉后半句，所以拒并：
+                # 旧条一字不动、新条独立入库，下一轮巩固再判（2026-11-03，见 §5 不变量 6）
+                _insert_atom(conn, rid, it, persona, project_id, source_task, now)
+                stats["stored"] += 1
+                stats["merge_rejected"] += 1
+            else:
+                merged = raw or it["text"]
+                conn.execute("UPDATE atoms SET content=?, updated=?, importance=max(importance, ?), "
+                             "access_count=access_count+1, last_access=? WHERE record_id=?",
+                             (merged, now, it["importance"], now, str(d.get("target_id"))))
+                _fts_upsert(conn, str(d.get("target_id")), merged)
+                stats["merged"] += 1
         elif action == "conflict":
             conn.execute("UPDATE atoms SET state='tombstone', superseded_by=?, updated=? "
                          "WHERE record_id=?", (rid, now, str(d.get("target_id"))))
@@ -963,6 +984,21 @@ def _new_id() -> str:
     return f"m_{uuid.uuid4().hex[:12]}"
 
 
+def _fts_upsert(conn: sqlite3.Connection, record_id: str, content: str) -> None:
+    """``atoms_fts`` 的唯一写入通道：一条记忆在索引里**恒为一行**（先删后插）。
+
+    为什么不能直接 ``INSERT OR REPLACE``：FTS5 虚表只有 rowid，``record_id`` 是
+    UNINDEXED 普通列、没有唯一约束，``OR REPLACE`` 撞不到任何冲突 → 等价于**追加**。
+    巩固期每次 merge 重写文本都留一份陈旧副本，检索的 ``JOIN atoms USING(record_id)``
+    于是把同一条记忆返回 N 次（2026-11-03 实测：55 索引行 / 37 条 atoms，6 条 active
+    各背 2-6 份旧文本，40 样本里 43% 的 top_k 槽位被陈旧副本占掉，且旧文本措辞与
+    现行文本不同，12 字前缀去冗余挡不住）。所有写点统一走这里。
+    """
+    conn.execute("DELETE FROM atoms_fts WHERE record_id=?", (str(record_id),))
+    conn.execute("INSERT INTO atoms_fts(record_id, content) VALUES(?,?)",
+                 (str(record_id), content))
+
+
 def _insert_atom(conn: sqlite3.Connection, rid: str, it: Dict[str, Any],
                  persona: str, origin: str, source_task: str, now: str,
                  owner: str = "world") -> None:
@@ -973,8 +1009,7 @@ def _insert_atom(conn: sqlite3.Connection, rid: str, it: Dict[str, Any],
                   source_task or "", float(it.get("importance", 0.5)),
                   float(it.get("importance", 0.5)), 0, "", "active", 1, now, now,
                   owner or "world", str(it.get("peer") or "")))
-    conn.execute("INSERT OR REPLACE INTO atoms_fts(record_id, content) VALUES(?,?)",
-                 (rid, it["text"]))
+    _fts_upsert(conn, rid, it["text"])
 
 
 # ---- 读链：融合排序 + 召回强化 ----
@@ -1054,7 +1089,7 @@ def search_brain(query: str, persona: str = "", k: Optional[int] = None,
                 params.append(persona)
             params.append(max(k * 3, 15))
             rows = c.execute(
-                f"SELECT f.record_id, f.content, bm25(atoms_fts) AS r, a.kind, a.importance, "
+                f"SELECT f.record_id, a.content, bm25(atoms_fts) AS r, a.kind, a.importance, "
                 f"a.access_count, a.updated, a.last_access, a.peer FROM atoms_fts f "
                 f"JOIN atoms a ON a.record_id = f.record_id "
                 f"WHERE atoms_fts MATCH ? AND a.state IN {states} {pfilter} "
@@ -1284,8 +1319,8 @@ def _consolidation_worker(brain_cfg: Dict[str, Any], persona: str) -> None:
 
 def _consolidate_impl(brain_cfg: Dict[str, Any], persona: str) -> Dict[str, Any]:
     conn = open_brain()
-    out: Dict[str, Any] = {"dedup_checked": 0, "merged": 0, "abstracted": 0,
-                           "conflict": 0}
+    out: Dict[str, Any] = {"dedup_checked": 0, "merged": 0, "merge_rejected": 0,
+                           "abstracted": 0, "conflict": 0}
     if not _fts_ok(conn):
         conn.close()
         return out
@@ -1315,10 +1350,14 @@ def _consolidate_impl(brain_cfg: Dict[str, Any], persona: str) -> Dict[str, Any]
             act = str(d.get("action") or "")
             tgt = str(d.get("target_id") or "")
             if act == "merge" and tgt and d.get("merged_content"):
-                merged = str(d["merged_content"])[:200]
+                merged = str(d["merged_content"]).strip()
+                if len(merged) > _MAX_ATOM_CHARS:
+                    # 超线拒并：两条都保持 active，下一轮再判（不静默截断成半句话）
+                    out["merge_rejected"] += 1
+                    continue
                 conn.execute("UPDATE atoms SET content=?, updated=? WHERE record_id=? AND record_id!=?",
                              (merged, now, tgt, rid))
-                conn.execute("INSERT OR REPLACE INTO atoms_fts(record_id, content) VALUES(?,?)", (tgt, merged))
+                _fts_upsert(conn, tgt, merged)
                 conn.execute("UPDATE atoms SET state='tombstone', superseded_by=?, updated=? WHERE record_id=?",
                              (tgt, now, rid))
                 out["merged"] += 1
@@ -1327,6 +1366,7 @@ def _consolidate_impl(brain_cfg: Dict[str, Any], persona: str) -> Dict[str, Any]
                 conn.execute("UPDATE atoms SET state='tombstone', superseded_by=?, updated=? "
                              "WHERE record_id=? AND record_id!=?", (rid, now, tgt, rid))
                 out["conflict"] += 1
+    out["dedup_checked"] = checked   # 观测：本轮真正确实送进评审器的条数（2026-11-03 补，此前恒 0）
 
     # 2) 抽象提升：同主题 episode ≥3（peer 分组，M3：同一人的账放一起抽象）→ 1 条 rule（有界）
     episodes = conn.execute(
@@ -1749,7 +1789,7 @@ def remember(text: str, kind: str = "fact", importance: float = 0.8,
              persona: str = "", brain_cfg: Optional[Dict[str, Any]] = None,
              origin: str = "", source_task: str = "remember") -> str:
     """显式写入一条记忆（agent/用户主动）。返回 record_id；失败返回空串。"""
-    text = (text or "").strip()[:200]
+    text = (text or "").strip()[:_MAX_ATOM_CHARS]
     if not text or not enabled():
         return ""
     kind = kind if kind in ("fact", "preference", "rule", "episode") else "fact"
@@ -1773,7 +1813,7 @@ def remember(text: str, kind: str = "fact", importance: float = 0.8,
 
 def update_memory(record_id: str, new_text: str, persona: str = "") -> str:
     """更正记忆：旧条 tombstone(superseded_by=新条)，新条入库。返回新 record_id 或空串。"""
-    new_text = (new_text or "").strip()[:200]
+    new_text = (new_text or "").strip()[:_MAX_ATOM_CHARS]
     if not new_text or not enabled():
         return ""
     conn = open_brain()

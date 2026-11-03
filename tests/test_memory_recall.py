@@ -2,7 +2,9 @@
 
 覆盖：绝对分（bm25_rank_to_score）、覆盖门槛（单命中高频词才丢，低频专名保留）、
 同主题去冗余、
-新鲜度轮换（×0.85 只降权不排除）、巩固期 FTS 近邻候选（P5）、
+新鲜度轮换（×0.85 只降权不排除）、索引一条一行（P0.5：FTS5 上 OR REPLACE 等于追加，
+2026-11-03 修）、巩固期 FTS 近邻候选（P5）、合并保真（merge 超线拒并不截断 + 巩固判数
+可见，P0.6）、
 state 只剩 active/tombstone 且 salience=importance 零衰减（P7）、
 top_k=5 与每 run 自取观测行 memory_recall.jsonl（P1）。
 
@@ -128,6 +130,115 @@ def test_recency_rotation_penalizes_only(brain):
     conn.close()
 
 
+# ---- P0.5 索引一条一行（2026-11-03 陈旧副本修复）----
+
+def _fts_rows(conn, record_id: str) -> int:
+    return int(conn.execute("SELECT COUNT(*) FROM atoms_fts WHERE record_id=?",
+                            (str(record_id),)).fetchone()[0])
+
+
+def test_update_atom_keeps_one_fts_row(brain):
+    """反复改写同一条只留一行：``INSERT OR REPLACE`` 打在 FTS5 虚表上等于**追加**。
+
+    record_id 只是 UNINDEXED 普通列、没有唯一约束 → OR REPLACE 撞不到冲突，旧文本
+    长期留在索引里（2026-11-03 实测 55 索引行 / 37 条 atoms，检索把同一条的陈旧版本
+    返回多次，40 样本里 43% 的 top_k 槽位被占掉）。
+    """
+    conn = memory_brain.open_brain()
+    now = memory_brain._now()
+    memory_brain._insert_atom(conn, "u1", {"text": "群聊回复要短不分段", "kind": "rule",
+                                           "importance": 0.9}, "", "p", "t", now)
+    conn.commit()
+    for text in ("群聊回复要短、不分段、不刷屏", "群聊回复格式：一句话说完、不分段"):
+        conn.execute("UPDATE atoms SET content=? WHERE record_id=?", (text, "u1"))
+        memory_brain._fts_upsert(conn, "u1", text)
+        conn.commit()
+    assert _fts_rows(conn, "u1") == 1
+    hits = memory_brain.search_brain("群聊回复格式", conn=conn, reinforce=False)
+    conn.close()
+    assert [h["record_id"] for h in hits] == ["u1"]
+    assert hits[0]["content"] == "群聊回复格式：一句话说完、不分段"
+
+
+def test_search_reads_live_text_when_index_is_stale(brain):
+    """历史遗留库里索引行多于 atoms 行时，返回的仍是 atoms 的现行文本、且不重复占坑。
+
+    手工多插一行旧措辞复现修复前的库形状——读链取 ``a.content`` 而非 ``f.content``，
+    所以模型看到的永远是现行文本，同一条也只占一个槽位（前缀去冗余此时才生效）。
+    """
+    conn = memory_brain.open_brain()
+    now = memory_brain._now()
+    memory_brain._insert_atom(conn, "v1", {"text": "白丝照片一律不给", "kind": "rule",
+                                           "importance": 0.9}, "", "p", "t", now)
+    assert memory_brain._fts_ok(conn)       # 先让版本迁移落定，否则脏行会被重建一起清掉
+    conn.execute("INSERT INTO atoms_fts(record_id, content) VALUES(?,?)",
+                 ("v1", "白丝什么的你想都别想"))
+    conn.commit()
+    rows = _fts_rows(conn, "v1")
+    hits = memory_brain.search_brain("白丝", conn=conn, reinforce=False, k=5)
+    conn.close()
+    assert rows == 2                                  # 索引确实是脏的
+    assert hits and len({h["record_id"] for h in hits}) == len(hits)
+    assert hits[0]["content"] == "白丝照片一律不给"   # 现行文本，不是索引里的旧措辞
+
+
+def test_consolidate_merge_leaves_no_stale_copy(brain, monkeypatch):
+    """巩固期 merge（写 content 的另一条路径）同样保持「一条一行」。"""
+    now = memory_brain._now()
+    conn = memory_brain.open_brain()
+    memory_brain._insert_atom(conn, "g1", {"text": "提醒：以主人身份只在飞书", "kind": "rule",
+                                           "importance": 0.9}, "", "p", "t", now)
+    memory_brain._insert_atom(conn, "g2", {"text": "QQ 上也以主人身份说话", "kind": "rule",
+                                           "importance": 0.9}, "", "p", "t", now)
+    conn.commit()
+    conn.close()
+    for fn in ("maintain_profile", "maintain_diary", "maintain_month_diary",
+               "maintain_relations"):
+        monkeypatch.setattr(memory_brain, fn, lambda *a, **k: 0)
+
+    def _router(cfg, system, user, timeout=60.0):
+        if "一致性评审器" in system:
+            return {"decisions": [{"idx": 0, "action": "merge", "target_id": "g2",
+                                   "merged_content": "主人身份在飞书与 QQ 都说"}]}
+        return {"rule": ""}
+
+    monkeypatch.setattr(memory_brain.llm_judge, "chat_json", _router)
+    assert memory_brain._consolidate_impl({"base_url": "http://x"}, "tangtang")["merged"] >= 1
+    conn = memory_brain.open_brain()
+    assert _fts_rows(conn, "g2") == 1
+    n_fts = int(conn.execute("SELECT COUNT(*) FROM atoms_fts").fetchone()[0])
+    n_atoms = int(conn.execute("SELECT COUNT(*) FROM atoms").fetchone()[0])
+    conn.close()
+    assert n_fts == n_atoms                           # 索引与 atoms 一一对应
+
+
+def test_fts_version_bump_repairs_dirty_index(brain):
+    """线上老库的一次性自愈：schema 版本从 -1 换到 -2，``_fts_ok`` 即 DROP 重建 + 从 atoms 回填。
+
+    修复不能只靠新写入——现网库里已经躺着陈旧副本。版本号 +1 借用已有的「切换分词器即
+    重建回填」通道，首次访问就把索引收成「一条一行」（重建不回填 = 索引恒空，是老坑）。
+    """
+    conn = memory_brain.open_brain()
+    now = memory_brain._now()
+    memory_brain._insert_atom(conn, "w1", {"text": "盘前分析包含一句话结论", "kind": "rule",
+                                           "importance": 0.9}, "", "p", "t", now)
+    tok = memory_brain._fts_tokenizer()
+    conn.execute("INSERT INTO atoms_fts(record_id, content) VALUES(?,?)",
+                 ("w1", "盘前分析固定包含结论"))
+    conn.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('fts_schema_version',?)",
+                 (f"{tok}-1",))           # 老库版本号
+    conn.commit()
+    assert _fts_rows(conn, "w1") == 2
+    assert memory_brain._fts_ok(conn)
+    assert _fts_rows(conn, "w1") == 1
+    n_fts = int(conn.execute("SELECT COUNT(*) FROM atoms_fts").fetchone()[0])
+    n_atoms = int(conn.execute("SELECT COUNT(*) FROM atoms").fetchone()[0])
+    ver = conn.execute("SELECT v FROM meta WHERE k='fts_schema_version'").fetchone()[0]
+    conn.close()
+    assert n_fts == n_atoms and ver == f"{tok}-2"
+    assert memory_brain.search_brain("盘前分析", reinforce=False)  # 重建后仍可召回
+
+
 # ---- P5 巩固期全文近邻候选 ----
 
 def test_fts_neighbors_full_text_candidates(brain):
@@ -182,8 +293,50 @@ def test_consolidate_uses_fulltext_neighbors_and_merges(brain, monkeypatch):
     st1 = conn.execute("SELECT state FROM atoms WHERE record_id='m1'").fetchone()
     conn.close()
     assert out["merged"] >= 1
+    assert out["dedup_checked"] >= 1                  # 观测字段有值（此前恒 0，看不出判了几条）
     assert st1[0] == "tombstone"                      # 被取代 → tombstone（P7 保留态）
     assert st2[1] == "active" and "飞书" in st2[0]
+
+
+def test_consolidate_rejects_overlong_merge(brain, monkeypatch):
+    """merge 结果超 `_MAX_ATOM_CHARS` → **拒并**：两条都留 active，不截成半句话（P0.6）。
+
+    静默截断 + 「能并就并」正是宽口大规则的成因：每并一次吞掉一句、又被砍掉一句，
+    最后变成一条什么都管、什么都没说清的 rule。
+    """
+    now = memory_brain._now()
+    conn = memory_brain.open_brain()
+    memory_brain._insert_atom(conn, "o1", {"text": "提醒：以主人身份只在飞书", "kind": "rule",
+                                           "importance": 0.9}, "", "p", "t", now)
+    memory_brain._insert_atom(conn, "o2", {"text": "QQ 上也以主人身份说话", "kind": "rule",
+                                           "importance": 0.9}, "", "p", "t", now)
+    conn.commit()
+    conn.close()
+    for fn in ("maintain_profile", "maintain_diary", "maintain_month_diary",
+               "maintain_relations"):
+        monkeypatch.setattr(memory_brain, fn, lambda *a, **k: 0)
+    over = "并" * (memory_brain._MAX_ATOM_CHARS + 1)
+
+    def _router(cfg, system, user, timeout=60.0):
+        if "一致性评审器" in system:
+            return {"decisions": [{"idx": 0, "action": "merge", "target_id": "o2",
+                                   "merged_content": over}]}
+
+        return {"rule": ""}
+
+    monkeypatch.setattr(memory_brain.llm_judge, "chat_json", _router)
+    out = memory_brain._consolidate_impl({"base_url": "http://x"}, "tangtang")
+    conn = memory_brain.open_brain()
+    rows = {r[0]: {"content": r[1], "state": r[2]} for r in conn.execute(
+        "SELECT record_id, content, state FROM atoms WHERE record_id IN ('o1','o2')").fetchall()}
+    n_fts = conn.execute("SELECT COUNT(*) FROM atoms_fts").fetchone()[0]
+    n_atoms = conn.execute("SELECT COUNT(*) FROM atoms").fetchone()[0]
+    o2_rows = _fts_rows(conn, "o2")
+    conn.close()
+    assert out["merged"] == 0 and out["merge_rejected"] >= 1
+    assert rows["o1"]["state"] == "active" and rows["o2"]["state"] == "active"  # 都没被判死
+    assert rows["o2"]["content"] == "QQ 上也以主人身份说话"                        # 旧条一字未动
+    assert o2_rows == 1 and n_fts == n_atoms                                  # 拒并也不脏索引
 
 
 # ---- P7 遗忘删除 ----

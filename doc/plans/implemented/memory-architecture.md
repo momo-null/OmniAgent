@@ -75,7 +75,8 @@ L0 索引把同一标注解析成 `speaker` 列。
 
 - **写链**:`flush_brain` → 会话要点 digest(LLM 提炼,**宁缺毋滥**,单次 ≤5 条) →
   **第一段判**(价值/一次性过滤 + `kind` + `importance`) → **第二段判**(一致性四态
-  `novel / duplicate / merge / conflict`;候选 = 各自 top-3 的并集,一次批量 LLM) → 落库 + FTS 同步。
+  `novel / duplicate / merge / conflict`;候选 = 各自 top-3 的并集,一次批量 LLM) → 落库 + FTS 同步
+  (**同一条恒为一行**,`_fts_upsert` 唯一写通道——见 §5 不变量 5)。
   LLM 失败一律保守保留(宁重复不丢失);`duplicate` 只强化旧条,`conflict` 旧条 tombstone 并入库新条。
 - **读链**:`search_brain(query, persona, peer, k)`——`_match_expr` 切词(simple 模式按 2 字滑窗短语 OR,
   trigram 模式 3-gram OR + 2 字词 LIKE 兜底)→ `state='active'` → 排序(P0 + P7,2026-11-02):
@@ -90,7 +91,8 @@ L0 索引把同一标注解析成 `speaker` 列。
   也丢——单命中低频/专名是真主题,留)、**去冗余**(`(kind, peer, content[:12])` 同组只留最高分,
   保证 k 条是 k 个方面)、**轮换环**(`deque(maxlen=64)`,进程内,重启即清)。
   `top_k = 5`(原 8→5,对齐上游 `maxResults`;工具返回同受此约束)。命中即强化
-  (`access_count+1`、`last_access=now`、入环)。
+  (`access_count+1`、`last_access=now`、入环)。返回的 `content` 取 `a.content`(**现行文本**),
+  索引行只用于定位与 bm25(§5 不变量 5)。
   > **检索结果永不自动注入(P1,2026-11-02 方案 C)**:`inject_text_brain` 仍出
   > `<relevant-memories>` 文本,但**只有 `memory_recall` 工具与调试面板会调它**——run 起始
   > 不再挂 lead-in user 消息,system 常驻的是 `<memory-usage-rules>`(§4)。详见 §5 不变量 4。
@@ -298,7 +300,7 @@ agent(大脑)──通过──→ memory_remember/recall/update/forget 工具 �
 **环境事实平面**(`_build_user` 的世界模型摘要 / 续跑 resume hint / 运行时上下文块)
 有 A/B 有效性证据(中位步数 41→21),保持原样,不并入记忆注入。
 
-## 5. 三条不变量(防回退红线)
+## 5. 不变量(防回退红线)
 
 1. **静态内容禁止每步重发**:尾部每步追加固定内容的 Model 包装(`_TailInjectModel`)
    已删除,不得以任何形式回流——静态记忆每步在会话尾部重发 = 每步强化一次
@@ -314,6 +316,24 @@ agent(大脑)──通过──→ memory_remember/recall/update/forget 工具 �
    (`memory_recall` / `conversation_search`,每轮合计 ≤3 次)进入上下文;通道只注入
    **消息上下文**(场合自述、群窗口、来源标注)与 **L2/L3 索引**——记忆全局,不按通道/场景
    做注入特例。锁:`memory_injected` 层列表不得含 L1;新增注入面前先过本条。
+5. **一条记忆在 `atoms_fts` 里恒为一行**(2026-11-03 定):FTS5 虚表只有 rowid,
+   `record_id` 是 UNINDEXED 普通列、**没有唯一约束**,所以 `INSERT OR REPLACE` 撞不到任何
+   冲突 = 纯追加;改写一条记忆必须在**同一处**先 `DELETE` 再 `INSERT`(`_fts_upsert` 是唯一
+   写通道,写点只有 `_insert_atom` 与两处 merge)。索引行多于 `atoms` 行时,检索的
+   `JOIN atoms USING(record_id)` 会把同一条的旧措辞当独立记忆返回多次,顶掉 top_k 槽位、
+   且 12 字前缀去冗余挡不住(措辞不同)。读链一律取 `a.content`(现行文本),永不取
+   `f.content`——索引只负责"找得到",内容以 `atoms` 为准。
+   锁:`test_memory_recall` 的 P0.5 三例(改写后一行 / 脏索引读现行文本 / 版本迁移自愈)。
+6. **合并只在同一适用域内发生,保不住就不并**(2026-11-03 定):`_CONSIST_SYSTEM` 的 merge
+   条件 = 同场景、同约束对象,且并完**双方的条件与禁止项都还在**;跨域(「群聊里怎么说话」
+   × 「某个工程事实」)一律 novel——让它们各自成条。`merged_content` 超 `_MAX_ATOM_CHARS`
+   = **拒并**:收尾侧旧条一字不动、新条独立入库(`stats.merge_rejected`),巩固侧两条都留
+   active(`out.merge_rejected`),下一轮再判。**不做静默截断**——截断砍掉的正是合并结果的
+   后半句,而"能并就并 + 砍尾"就是同一条 rule 越并越宽、最终变成什么都管的大话的成因
+   (实测最宽一条 active rule 117 字,而判定提示要求 ≤100 字)。
+   红线不变:什么算同域、能不能保住语义**全交模型**,工程侧只给一条拒绝线,不写判定规则。
+   锁:`test_memory_brain` 的超线拒并例 + `test_memory_recall` 的 P0.6 例(巩固侧拒并、
+   `dedup_checked` 必须有值——此前该字段从未赋值,恒 0,看不出这轮真判了几条)。
 
 ## 6. 收尾意图门(oneshot 误判保护)
 
@@ -390,6 +410,14 @@ skill 不再与记忆混写,**全部内容见 `doc/plans/implemented/skill-archi
   L0 表(`l0_messages`/`l0_fts`)同库,直接用 sqlite 查即可;它不是调试面的固定段落。
 - 自检工具:`memory_overview`(总量 / active 数 / kind 分布 / 最近条目 / 上次巩固时间;
   P7 后不再报 dormant/archived 状态分布,因为那两态已不存在)。
+- **索引健康度**:`SELECT COUNT(*) FROM atoms_fts` 必须等于 `SELECT COUNT(*) FROM atoms`
+  (一条一行,§5 不变量 5)。索引多于 atoms = 有陈旧副本,`verify_memory_recall.py --live`
+  的满额注入率与 top1 重复率会一起抬头(2026-11-03 实测:55/37 时 0.325 与 0.361,
+  重建后 0.025 与 0.219)。
+- **巩固判定健康度**(`meta.last_consolidation_stats` 与 `memory_flush` 事件):
+  `dedup_checked` = 本轮真送进一致性评审器的条数(2026-11-03 前该字段从未赋值、恒 0,
+  只能靠 merged/conflict 反推);`merge_rejected` = 因超 `_MAX_ATOM_CHARS` 被拒的合并数,
+  它涨说明模型在跨域并条(见 §5 不变量 6),该改判定提示而不是去删条目。
 - 真机回归:`python scripts/verify_memory_recall.py [--live]`——词法召回断言表(2 字词 /
   标点 / 长句 / 空 query)+ **P0 分布断言**(40 条样本:满额率 <25%、top1 重复率 <20%、
   0 召回率 ≤10%、平均注入字符 150–250);

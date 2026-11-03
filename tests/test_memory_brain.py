@@ -147,6 +147,34 @@ def test_conflict_tombstones_old_row(brain):
     assert sum(1 for v in states.values() if v == "active") == 1
 
 
+def test_overlong_merge_is_rejected_not_truncated(brain):
+    """merge 结果超线 → 旧条不动、新条独立入库（stats.merge_rejected），**不截成半句话**。
+
+    成因见 ``_MAX_ATOM_CHARS`` 注释：静默截断把每次合并的尾巴砍掉，同一条 rule
+    于是越并越宽（2026-11-03 实测最宽一条 117 字，仍在往 200 线走）。
+    """
+    brain.script = [_extract("改我代码前先给方案"), _value("rule", 0.9)]
+    memory_brain.capture("p", "user", "改我代码前先给方案")
+    memory_brain.capture("p", "assistant", "好")
+    memory_brain.flush_brain("p", {"base_url": "http://x"}, persona="tangtang")
+    conn = memory_brain.open_brain()
+    rid, old = conn.execute("SELECT record_id, content FROM atoms").fetchone()
+    conn.close()
+    brain.script = [_extract("改我代码前先给方案，并且要等我点头"), _value("rule", 0.9),
+                    _decide("merge", target_id=rid, merged="约" * 250)]
+    memory_brain.capture("p", "user", "再补一句：改我代码前先给方案，并且要等我点头")
+    memory_brain.capture("p", "assistant", "嗯")
+    stats = memory_brain.flush_brain("p", {"base_url": "http://x"}, persona="tangtang")
+    assert stats["merged"] == 0 and stats["merge_rejected"] == 1
+    conn = memory_brain.open_brain()
+    rows = conn.execute("SELECT record_id, content, state FROM atoms").fetchall()
+    n_fts = conn.execute("SELECT COUNT(*) FROM atoms_fts").fetchone()[0]
+    conn.close()
+    assert len(rows) == 2 and all(r[2] == "active" for r in rows)
+    assert dict((r[0], r[1]) for r in rows)[rid] == old     # 旧条一字未动
+    assert n_fts == len(rows)                               # 拒并路径同样一条一行
+
+
 def test_search_persona_filter_and_reinforce(brain):
     rid = memory_brain.remember("糖糖的新闻简报来自四个来源", kind="fact",
                                 importance=0.8, persona="tangtang")
