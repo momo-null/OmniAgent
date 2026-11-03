@@ -57,6 +57,75 @@ def _extract_summary(result: Any) -> str:
     return ""
 
 
+#: IM 历史窗时间上限（分钟；与条数上限 12/40 取交集）。「指代」时效是分钟级，
+#: 跨窗旧话一律 conversation_search 现查（2026-11-02 实测：安静群的 40 条窗
+#: 最远覆盖到 50 小时前，全是低相关闲聊原文）。可经 config: gateway.im_history_minutes 覆盖。
+_IM_HISTORY_MINUTES = 90
+
+#: 会话尾部原始行预读上限（read_session 的 limit）：coalesce 把 partial 并回 final，
+#: 400 行原始对 40 条成品有足够余量。会话按聊天终身累积（无滚动策略），长会话
+#: 因此不必每个 run 都整份解析 jsonl（该 limit 参数此前一直没用上）。
+_HISTORY_RAW_LIMIT = 400
+
+
+def _im_history_minutes() -> int:
+    try:
+        import config as _config
+        return max(1, int(_config.get_config("gateway.im_history_minutes",
+                                             _IM_HISTORY_MINUTES)
+                          or _IM_HISTORY_MINUTES))
+    except Exception:
+        return _IM_HISTORY_MINUTES
+
+
+def _is_silent_run(steps: Any) -> bool:
+    """本轮是否「零发言」：没调过任何 msg_send_* 工具。静默 run 的叙述不进历史。"""
+    return not any(isinstance(s, dict) and s.get("type") == "tool_call"
+                   and str(s.get("name") or "").startswith("msg_send")
+                   for s in steps or [])
+
+
+def _build_history_items(records: List[Dict[str, Any]], explicit: bool,
+                         now_ts: Optional[float] = None) -> List[Dict[str, Any]]:
+    """会话记录 → TaskSpec.history（群上下文种子组装，2026-11-03 杠杆 1/2/3）。
+
+    - 杠杆1：静默 run（零 msg_send_*，``extra.silent`` 打标）的叙述不进历史——
+      「这轮没人点我」的零信息叙述此前灌满 40 条窗，还被后续每个 run 复读一遍；
+    - 杠杆2：时间上限 ``_im_history_minutes`` 分钟——条数 ∩ 时间双约束，
+      「指代」是分钟级的事，跨窗旧话走 conversation_search 现查；
+    - 杠杆3：``[上轮执行]`` 只留工具名——思考全文已持久化进会话记录（Web 端展示用），
+      再摘 200 字要点进历史是纯死重（与思考链持久化联动，否则左手省右手花）；
+    - 条数上限维持 12（explicit）/ 40（ambient），压缩归大脑（超 150k 才触发，
+      群 run 恒不触发——本函数是群 run 上下文的唯一塑形处）。
+    """
+    from datetime import datetime
+
+    cut = (now_ts if now_ts is not None else time.time()) - _im_history_minutes() * 60
+    items: List[Dict[str, Any]] = []
+    for r in records or []:
+        role = r.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        if role == "assistant" and (r.get("extra") or {}).get("silent"):
+            continue                                    # 杠杆1：静默叙述不留
+        ts = str(r.get("ts") or "")
+        if ts:
+            try:
+                if datetime.fromisoformat(ts).timestamp() < cut:
+                    continue                            # 杠杆2：出窗的旧话不留
+            except ValueError:
+                pass                                    # 异常时间戳按在窗内处理（fail-open）
+        content = str(r.get("content") or "")
+        steps = (r.get("extra") or {}).get("steps") or []
+        if role == "assistant" and steps:
+            tool_names = [s.get("name") for s in steps if s.get("type") == "tool_call"]
+            seg = f"[上轮执行] 工具: {', '.join(filter(None, tool_names)) or '无'}"
+            content = f"{content}\n{seg}".strip()       # 杠杆3：不带思考要点
+        if content:
+            items.append({"role": role, "content": content})
+    return items[-(12 if explicit else 40):]
+
+
 #: 后端地址（桌面壳拉起网关时注入实际端口，默认按 8000）
 _BACKEND_URL_ENV = "OMNIAGENT_BACKEND_URL"
 _BACKEND_URL_DEFAULT = "http://127.0.0.1:8000"
@@ -219,6 +288,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         turn_steps: list = []
         _flushed = 0
         _last_answer = ""
+        _think_acc: Dict[str, Dict[str, Any]] = {}
         # 显式模式：本轮到底发出去了什么（前端据此标「已发送 / 未发送」）
         send_info: Dict[str, Any] = {}
 
@@ -253,13 +323,29 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
 
         def _on_llm_delta(role: str, kind: str, block_id: str, text: str, model: str) -> None:
             nonlocal _last_answer
-            if kind == "message" and role == "brain":
+            if kind == "reasoning" and role == "brain":
+                # 思考链持久化（2026-11-03）：emitter 把推理作为 reasoning 增量发出，
+                # 此前这里只认 message、思考全被丢弃——会话记录里 197 条 assistant
+                # 仅 3 条带 thinking step 的根因。按 block_id 累积成 thinking step
+                # 进 turn_steps，Web 端 ThinkBlock 由此渲染；partial 快照由 final
+                # 收口覆盖，历史组装不带思考要点（杠杆3），无上下文成本。
+                st = _think_acc.get(block_id)
+                if st is None:
+                    st = {"type": "thinking", "id": block_id, "model": model, "content": ""}
+                    _think_acc[block_id] = st
+                    turn_steps.append(st)
+                st["content"] += text
+                _flush_partial()
+            elif kind == "message" and role == "brain":
                 _last_answer = text
 
         def _record_final(content: str) -> None:
             if not (pid and sid):
                 return
             extra: Dict[str, Any] = {"steps": turn_steps, "run_key": run_key}
+            # 杠杆1（2026-11-03）：零发言 run 打 silent 标——历史组装时整条跳过。
+            if _is_silent_run(turn_steps):
+                extra["silent"] = True
             if explicit:
                 # 显式模式：标记这一轮到底发出去没有（前端画「已发送 / 未发送」）
                 extra["send"] = dict(send_info)
@@ -284,29 +370,11 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         history_items = []
         if pid and sid:
             try:
-                _recs = ProjectStore.coalesce_records(ProjectStore.read_session(pid, sid))
-                for r in _recs:
-                    role = r.get("role")
-                    if role not in ("user", "assistant"):
-                        continue
-                    ex = r.get("extra") or {}
-                    content = str(r.get("content") or "")
-                    steps = ex.get("steps") or []
-                    # agent 轮：把已执行的步骤摘要并入口播文本，模型记得做过什么
-                    if role == "assistant" and steps:
-                        tool_names = [s.get("name") for s in steps if s.get("type") == "tool_call"]
-                        thought = next((s.get("content", "") for s in reversed(steps)
-                                        if s.get("type") == "thinking"), "")
-                        seg = f"[上轮执行] 工具: {', '.join(filter(None, tool_names)) or '无'}"
-                        if thought:
-                            seg += f"；要点: {thought[:200]}"
-                        content = f"{content}\n{seg}".strip()
-                    if content:
-                        history_items.append({"role": role, "content": content})
-                # 防超长（消息级滑窗，压缩归大脑）。IM 通道（群/私聊）另有通道侧背景
-                # （群上下文块），故收窄到 12 条：40 条原文在活跃群里
-                # 几乎全是闲聊与她自己的回帖，成本固定而相关性下降（plan §5）。
-                history_items = history_items[-(12 if explicit else 40):]
+                # 杠杆5：尾部预读（limit=400）——长会话不整份解析；coalesce 把
+                # partial 并回 final，40 条成品绰绰有余。
+                _recs = ProjectStore.coalesce_records(
+                    ProjectStore.read_session(pid, sid, limit=_HISTORY_RAW_LIMIT))
+                history_items = _build_history_items(_recs, explicit)
             except Exception:
                 history_items = []
 

@@ -19,7 +19,14 @@ class _FakeLoop:
 
 
 def _fake_brain(monkeypatch):
-    monkeypatch.setattr(cfg_mod, "load_config", lambda: {"brain": {"api_key": "test"}})
+    monkeypatch.setattr(cfg_mod, "load_config", lambda: {"brain": {"reasoning_mode": "native"}})
+    # 端点真源是 models.json（router 解析）：测试里 stub 目录，不读真实用户配置
+    from omni_core.brain import router as model_router
+    monkeypatch.setattr(model_router, "_catalog", lambda: {
+        "providers": {"testprov": {"label": "t", "base_url": "http://127.0.0.1:9",
+                                   "api_key": "test", "models": [{"id": "m1", "label": "m1", "vision": True}]}},
+        "defaults": {"main": "testprov/m1"},
+    })
     import omni_core.local.loop as loop_mod
     monkeypatch.setattr(loop_mod, "ToolLoop", _FakeLoop)
 
@@ -672,7 +679,7 @@ def test_dispatch_marks_external_source_during_run(monkeypatch):
             seen["external"] = ch_ctx.get_source_external()
             return {"success": True, "summary": "好的"}
 
-    monkeypatch.setattr(cfg_mod, "load_config", lambda: {"brain": {"api_key": "test"}})
+    _fake_brain(monkeypatch)
     import omni_core.local.loop as loop_mod
     monkeypatch.setattr(loop_mod, "ToolLoop", _Cap)
 
@@ -685,3 +692,100 @@ def test_dispatch_marks_external_source_during_run(monkeypatch):
     dispatch.dispatch_sync("在吗", session_id="s_ext_2", reply=_Reply(),
                            reply_mode="auto", tools_enabled=True)
     assert seen["external"] is False
+
+
+# === 群上下文种子组装（2026-11-03 杠杆 1/2/3/5）+ 思考链持久化 ==================
+
+class _CapturingLoop:
+    """抓 TaskSpec 的假 Loop：验证注入给模型的历史形状。"""
+    specs: list = []
+
+    def __init__(self, *args, **kwargs):
+        self.kwargs = kwargs
+
+    def run_task(self, spec):
+        _CapturingLoop.specs.append(spec)
+        return {"success": True, "summary": "好的"}
+
+
+class _ReasoningLoop(_CapturingLoop):
+    """模拟 emitter：reasoning 增量（同 block_id 两段）+ message 增量。"""
+
+    def run_task(self, spec):
+        cb = self.kwargs.get("on_llm_delta")
+        if cb:
+            cb("brain", "reasoning", "brain-R0-x", "这是", "m")
+            cb("brain", "reasoning", "brain-R0-x", "思考链", "m")
+            cb("brain", "message", "brain-M0-x", "回话", "m")
+        return super().run_task(spec)
+
+
+def _rec(role, content, ts, steps=None, silent=False):
+    extra: dict = {}
+    if steps is not None:
+        extra["steps"] = steps
+    if silent:
+        extra["silent"] = True
+    return {"role": role, "content": content, "ts": ts, "extra": extra}
+
+
+def test_history_builder_filters_silent_time_and_thought():
+    """杠杆1/2/3：静默叙述跳过、出窗（>90min）旧话跳过、[上轮执行] 只留工具名。"""
+    import time as _time
+    from datetime import datetime, timezone
+
+    now = _time.time()
+    fmt = lambda sec_ago: datetime.fromtimestamp(now - sec_ago, tz=timezone.utc).isoformat()
+    recs = [
+        _rec("user", "两小时前的话题", fmt(2 * 3600)),             # 出窗
+        _rec("assistant", "这轮不接话", fmt(1800), silent=True),    # 静默 → 跳过
+        _rec("assistant", "回话", fmt(60), steps=[
+            {"type": "thinking", "content": "很长" * 300},
+            {"type": "tool_call", "name": "msg_send_text"},
+            {"type": "tool_call", "name": "read_scene"},
+        ]),
+        _rec("user", "新消息", fmt(30)),
+        _rec("system", "系统行", fmt(20)),
+    ]
+    items = dispatch._build_history_items(recs, explicit=False, now_ts=now)
+    assert [i["content"] for i in items] == [
+        "回话\n[上轮执行] 工具: msg_send_text, read_scene", "新消息"]
+    assert "很长" not in items[0]["content"]              # 思考要点不进历史
+    many = [_rec("user", f"m{i}", fmt(i)) for i in range(30)]
+    assert len(dispatch._build_history_items(many, explicit=True, now_ts=now)) == 12
+
+
+def test_silent_run_marked_and_skipped_from_history(monkeypatch):
+    """零发言 run 落库带 silent 标；下一轮种子组装不再带它的叙述。"""
+    _fake_brain(monkeypatch)
+    import omni_core.local.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "ToolLoop", _CapturingLoop)
+    _CapturingLoop.specs = []
+    dispatch.dispatch_sync("（场合自述）第一条", session_id="s_silent", display_text="第一条")
+    dispatch.dispatch_sync("（场合自述）第二条", session_id="s_silent", display_text="第二条")
+    task = [t for t in TaskStore.list() if t.get("session_id") == "s_silent"][0]
+    recs = ProjectStore.read_session(task["project_id"], "s_silent")
+    finals = [m for m in recs if m.get("role") == "assistant"
+              and not (m.get("extra") or {}).get("partial")]
+    assert finals and all((m.get("extra") or {}).get("silent") for m in finals)
+    # 第二轮的 history：只剩 user 记录，第一轮的「好的」叙述被剔除（杠杆1）
+    hist = _CapturingLoop.specs[-1].history
+    assert all(h["role"] == "user" for h in hist)
+    assert [h["content"] for h in hist] == ["第一条", "第二条"]
+
+
+def test_reasoning_delta_persisted_as_thinking_step(monkeypatch):
+    """思考链修复：reasoning 增量按 block_id 累积成 thinking step 落库。"""
+    _fake_brain(monkeypatch)
+    import omni_core.local.loop as loop_mod
+    monkeypatch.setattr(loop_mod, "ToolLoop", _ReasoningLoop)
+    _CapturingLoop.specs = []
+    r = dispatch.dispatch_sync("（场合自述）问题", session_id="s_think", display_text="问题")
+    task = [t for t in TaskStore.list() if t["task_id"] == r.task_id][0]
+    recs = ProjectStore.read_session(task["project_id"], "s_think")
+    finals = [m for m in recs if m.get("role") == "assistant"
+              and not (m.get("extra") or {}).get("partial")]
+    thinks = [s for s in finals[0]["extra"]["steps"] if s.get("type") == "thinking"]
+    assert len(thinks) == 1
+    assert thinks[0]["content"] == "这是思考链"          # 同 block_id 两段累积
+    assert thinks[0]["id"] == "brain-R0-x"
