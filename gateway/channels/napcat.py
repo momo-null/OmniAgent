@@ -441,6 +441,10 @@ class NapcatReply:
         """语音回发（语音对语音）：TTS → record 段。失败由调用方降级纯文本。"""
         return self._adapter.send_voice(self.chat_id, text)
 
+    def send_sing(self, wav_path: str, dedup_text: str = "") -> Dict[str, Any]:
+        """清唱回发（唱歌）：SVC 产物 wav → record 段。失败由调用方降级纯文本。"""
+        return self._adapter.send_sing(self.chat_id, wav_path, dedup_text)
+
 
 class NapcatAdapter:
     """QQ（NapCat / OneBot 11）通道适配器。"""
@@ -658,6 +662,69 @@ class NapcatAdapter:
         from urllib.parse import urlparse
 
         return urlparse(self.http_url).hostname in ("127.0.0.1", "localhost", "::1")
+
+    def send_sing(self, chat_id: str, wav_path: str, dedup_text: str = "") -> Dict[str, Any]:
+        """清唱发送：SVC 产物 wav（文件）→ record 段。
+
+        与 send_voice 同一套发送机制（本机临时文件 file URI 优先、base64 兜底、
+        语音不带引用段），但输入是**转换好的 wav 文件**而非 TTS 即时合成；
+        去重按 ``dedup_text``（约定 song:<id>，见 sing plan §7——同歌副歌重唱
+        不误判、不同歌互不挤兑）。刻意不与 send_voice 共用函数：send_voice 是
+        生产路径，等唱歌验收通过后再合并重构。
+        """
+        import base64
+        import tempfile
+        from pathlib import Path
+
+        if not os.path.isfile(wav_path):
+            return {"ok": False, "error": f"清唱文件不存在: {wav_path!r}"}
+        kind, _, ident = (chat_id or "").partition(":")
+        if kind not in ("private", "group") or not ident:
+            return {"ok": False, "error": f"chat_id 非法（应形如 private:<qq> / group:<群号>）: {chat_id!r}"}
+        # 去重键必须**同一个值**去查和去记：原写法查 `dedup_text or wav_path`、记
+        # `dedup_text or "[唱歌] basename"`，dedup_text 为空时永远对不上（刷屏保护形同
+        # 虚设）。且 wav_path 是按 (输入,key,seed,index_rate) 哈希的产物名，换 seed 就变，
+        # 拿它当键连"同一首点两次"都拦不住——兜底用稳定的 song 文件名。
+        dedup_key = dedup_text or f"sing:{os.path.basename(wav_path)}"
+        if self._is_dup_send(chat_id, dedup_key):
+            return {"ok": True, "duplicate": True,
+                    "note": "同一首歌刚唱过，已跳过（防刷屏）"}
+        action = "send_group_msg" if kind == "group" else "send_private_msg"
+        id_key = "group_id" if kind == "group" else "user_id"
+        with open(wav_path, "rb") as f:
+            wav = f.read()
+        if not wav:
+            return {"ok": False, "error": "清唱文件为空"}
+
+        def _send_record(file_ref: str) -> Dict[str, Any]:
+            payload = {id_key: _to_int(ident),
+                       "message": [{"type": "record", "data": {"file": file_ref}}]}
+            return self._api(action, payload)
+
+        sent = False
+        error = ""
+        fd = None
+        try:
+            if self._napcat_is_local():
+                fd = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+                fd.write(wav)
+                fd.close()
+                result = _send_record(Path(fd.name).as_uri())
+                sent = bool(result.get("ok"))
+            if not sent:
+                result = _send_record("base64://" + base64.b64encode(wav).decode("ascii"))
+                sent = bool(result.get("ok"))
+            if not sent:
+                error = result.get("error", "清唱发送失败")
+        finally:
+            if fd is not None:
+                try:
+                    os.unlink(fd.name)
+                except OSError:
+                    pass
+        if sent:
+            self._remember_sent(chat_id, dedup_key)
+        return {"ok": True} if sent else {"ok": False, "error": error}
 
     #: 群名缓存 TTL（群改名极少；取失败也缓存，避免每条消息都白跑一次 HTTP）
     _GROUP_NAME_TTL = 3600.0

@@ -43,6 +43,16 @@ from typing import List, Optional
 
 from utils import get_logger
 
+# 唱歌（SVC）的运行时状态（RVC 子进程单例 + voice 配置）住在 sing_runtime，不在这里。
+# 原因：loader 按文件路径把本文件装载成 `_omni_plugin_voice`，而 sing_acquire /
+# song_source 按包名 import 的是另一个模块对象——同一份文件 exec 两遍，写在这里的
+# 单例会变成两份（两个 RVC 子进程、两把串行锁、两个回收线程，2026-11-03 实测踩过）。
+# 依赖方向必须单向：plugin → sing_runtime（反向会把二次装载又引回来）。
+from plugins.voice.sing_runtime import _SING_WORKER, sing, voice_cfg
+
+#: 本文件 STT/TTS 段沿用的旧名字：**同一个函数**，不是第二份实现
+_cfg = voice_cfg
+
 logger = get_logger("plugins.voice")
 
 #: STT 留在本进程（SenseVoice ONNX，200-300MB，转写要即时）；TTS 引擎在子进程
@@ -61,15 +71,6 @@ _TTS_BOOT_TIMEOUT = 300.0
 _TTS_CALL_TIMEOUT = 300.0
 #: 空闲监视线程间隔
 _TTS_MONITOR_SEC = 30.0
-
-
-def _cfg() -> dict:
-    try:
-        from omni_core.tools.loader import plugin_config
-
-        return plugin_config("voice") or {}
-    except Exception:
-        return {}
 
 
 def _default_model(*parts: str) -> str:
@@ -381,21 +382,29 @@ def tts(text: str, voice: str = "") -> bytes:
     return _tts_dispatch(text, voice)
 
 
+# ── 唱歌（SVC）：实现整体在 sing_runtime（worker 单例 / sing / sing_cut_chorus /
+# sing_f0_key / 声库与解释器路径）。本文件只保留两处装配：startup 把 sing 注册成
+# voice_sing 能力、shutdown 回收那**唯一**的子进程。搬走的原因见文件头 import 注释。
+
+
 def startup(ctx) -> None:
     """注册 capability（audio_api 薄壳按名转发；未启用 = 端点 404）。"""
     from omni_core.tools.capability import register_capability
 
     register_capability("voice_transcribe", transcribe)
     register_capability("voice_tts", tts)
-    logger.info("语音插件已启用（STT/TTS 将在首次调用时懒加载）")
+    register_capability("voice_sing", sing)
+    logger.info("语音插件已启用（STT/TTS 将在首次调用时懒加载；SVC 声库缺失时报明确错误）")
 
 
 def shutdown() -> None:
-    """注销能力并回收 TTS 子进程（STT 模型随进程退出释放）。"""
+    """注销能力并回收 TTS/SVC 子进程（STT 模型随进程退出释放）。"""
     from omni_core.tools.capability import unregister_capability
 
     unregister_capability("voice_transcribe")
     unregister_capability("voice_tts")
+    unregister_capability("voice_sing")
     global _STT
     _STT = None
     _WORKER.shutdown()
+    _SING_WORKER.shutdown()

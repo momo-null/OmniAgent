@@ -317,7 +317,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
                         # 能自己查——memory_recall/read_scene/conversation_search 皆纯读，
                         # conversation_search 的 scope 对来源外部强制锁死在当前会话/群）
                         tool_allowlist=(["msg_send_text", "msg_send_voice", "msg_send_card",
-                                         "msg_group_history", "msg_group_image",
+                                         "msg_group_history", "msg_group_image", "msg_sing",
                                          "memory_recall", "read_scene", "conversation_search"]
                                         if explicit else None))
         spec = TaskSpec(

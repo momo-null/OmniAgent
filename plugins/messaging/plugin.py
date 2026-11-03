@@ -13,10 +13,15 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from omni_core.tools.base import function_tool
+from utils import get_logger
+
+logger = get_logger("messaging.sing")
 
 #: 本插件自有配置（~/.omniagent/plugins/messaging.yaml），网关未跑时的缺省通道
 _CFG: Dict[str, Any] = {"default_channel": ""}
@@ -168,6 +173,228 @@ def msg_send_voice(text: str, channel: str = "", target: str = "") -> Dict[str, 
         return _external_note(result)
     except Exception as e:
         return {"ok": False, "error": f"语音发送失败: {e}"}
+
+
+def _sing_manifest() -> Dict[str, Any]:
+    """曲库 manifest（~/.omniagent/models/sing/songs/manifest.json）；缺失=空曲库。"""
+    import json
+    import os
+
+    path = os.path.join(os.path.expanduser("~"), ".omniagent", "models", "sing",
+                        "songs", "manifest.json")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf8") as f:
+            data = json.load(f)
+        return data.get("songs") if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001 —— manifest 坏了不炸工具，返回空让上层说"不会唱"
+        return {}
+
+
+def _sing_norm(s: Any) -> str:
+    """点歌话术归一：去空白与常见标点、小写（群友说"陈奕迅 的《孤勇者》!"要能认得出）。"""
+    return re.sub(r"[\s、,，。.!！?？~～·\"'“”《》〈〉()（）\[\]{}]+", "", str(s or "")).lower()
+
+
+def _sing_lookup(song_id: str) -> Dict[str, Any]:
+    """按 id / 别名 / 歌名包含匹配曲库条目；命中条目附 ``_id``=规范曲库键；找不到返回 {}。
+
+    两遍匹配：**正向**（点的话就是歌名/别名，或其子串）与**反向**（话里嵌着已知歌名，
+    如"唱一首陈奕迅的孤勇者呗"）。反向取最长命中，避免短别名乱撞。漏了这一层会
+    直接掉进在线获取——同一首歌被下两遍、群里等两分钟，比唱错更难看。
+    """
+    songs = _sing_manifest()
+    sid = _sing_norm(song_id)
+    if not sid:
+        return {}
+    if sid in songs:
+        return {**songs[sid], "_id": sid}
+    best, best_len, best_id = None, 0, ""
+    for key, item in songs.items():
+        title_n = _sing_norm(item.get("title"))
+        needles = [title_n]
+        needles += [a for a in (_sing_norm(x) for x in (item.get("aliases") or [])) if a]
+        needles.append(_sing_norm(key))
+        needles = [n for n in needles if n]
+        # 正向：点的话 == 歌名/别名，或是它们的子串（"青花"→青花瓷）
+        if sid in needles or any(len(sid) >= 2 and sid in n for n in needles):
+            return {**item, "_id": key}
+        # 反向：已知歌名/别名嵌在点歌话里
+        for needle in needles:
+            if len(needle) >= 2 and needle in sid and len(needle) > best_len:
+                best, best_len, best_id = item, len(needle), key
+    if best is not None:
+        return {**best, "_id": best_id}
+    return {}
+
+
+#: 点歌进行中登记表（plan §5 并发护栏）：**同一首在练/在转时二次点歌，直接回"在唱了"，
+#: 不排队不重算**——转换 ~10s、在线全链 1–2min，重复跑既抢 GPU 又会在群里发两遍。
+#: value=占位时间戳；超过 TTL 视为陈旧自动回收（守护线程被硬杀 / 起线程失败时不留死锁）。
+_SING_BUSY: Dict[str, float] = {}
+_SING_BUSY_LOCK = threading.Lock()
+_SING_BUSY_TTL = 900.0
+
+
+def _sing_busy_claim(key: str) -> bool:
+    """占位成功=True（可以开工）；已在进行中=False（调用方据此回"在唱了"）。"""
+    now = time.time()
+    with _SING_BUSY_LOCK:
+        for k, t in list(_SING_BUSY.items()):
+            if now - t > _SING_BUSY_TTL:
+                _SING_BUSY.pop(k, None)
+        if key in _SING_BUSY:
+            return False
+        _SING_BUSY[key] = now
+        return True
+
+
+def _sing_busy_release(key: str) -> None:
+    with _SING_BUSY_LOCK:
+        _SING_BUSY.pop(key, None)
+
+
+def _sing_busy_key(raw: str, prefix: str) -> str:
+    """归一化点歌键：``song:<曲库id>`` / ``acq:<去空格小写歌名>``。"""
+    return f"{prefix}:" + re.sub(r"\s+", "", str(raw or "")).strip().lower()
+
+
+@function_tool(
+    description="唱歌：从曲库点一首歌，把副歌清唱成语音发出去（**清唱、无伴奏**）。song_id 支持"
+                "歌名/别名（如 '青花瓷' 或 'qinghuaci'）。曲库内转换约几秒到十几秒；曲库外的歌"
+                "在在线曲库开启时会先应下（'我练练'），后台获取约 1–2 分钟后自动发——两者都属正常，"
+                "曲库外且在线曲库未开启时才回复'这首我还不会唱'。返回里 ``inflight``=true 表示这首"
+                "已经在唱/已经在练了，回一句'在唱了，等一下'就行，**不要再调一次**（重算没用）。",
+    unit="messaging",
+)
+def msg_sing(song_id: str, channel: str = "", target: str = "") -> Dict[str, Any]:
+    """点歌清唱：曲库内副歌 → SVC 转换 → 语音发送；曲库外走在线获取（若开启）。
+
+    Args:
+        song_id: 歌名 / 别名 / 曲库 id（见曲库 manifest）。
+        channel: 通道名（缺省=来源通道）。
+        target: 会话 ID（缺省=来源会话）。
+    """
+    adapter, chat_id, err = _resolve(channel, target)
+    if err:
+        return {"ok": False, "error": err}
+    item = _sing_lookup(song_id)
+    if not item:
+        # L1 miss → 在线曲库（step 4，拍板 §10.2）：总闸开 + 有源插件才应下；
+        # 后台线程全链获取→转换→发送，**失败也要补投说话**（_async_sing）。
+        try:
+            from plugins.voice import song_source as _ss
+        except Exception:  # noqa: BLE001
+            _ss = None
+        if _ss is not None and _ss.online_enabled() and _ss.load_sources():
+            busy = _sing_busy_key(song_id, "acq")
+            if not _sing_busy_claim(busy):
+                # 同一首已在后台练：不重开任务、不排队（plan §5 并发护栏）
+                return {"ok": True, "inflight": True,
+                        "note": "回复群友：这首我正在练呢，练好了第一个发你"}
+            try:
+                threading.Thread(target=_async_sing, args=(busy, song_id, adapter, chat_id),
+                                 name="sing-acquire", daemon=True).start()
+            except Exception as e:  # noqa: BLE001 —— 起线程失败不能把占位永久留着
+                _sing_busy_release(busy)
+                return {"ok": False, "error": f"后台获取启动失败: {e}",
+                        "note": "回复群友：这首我还不会唱，换一首试试"}
+            return {"ok": True, "pending": True,
+                    "note": "已应下这首（后台搜歌/分离/转换约 1–2 分钟，完成后自动发语音）；"
+                            "回复群友：好嘞我练练，唱好了发你"}
+        return {"ok": False, "error": "曲库里没有这首歌",
+                "note": "回复群友：这首我还不会唱，换一首试试"}
+    chorus = str(item.get("chorus") or "")
+    if not chorus:
+        return {"ok": False, "error": "曲库条目缺 chorus 段"}
+    try:
+        from omni_core.tools.capability import get_capability
+    except Exception:
+        get_capability = None
+    cap = get_capability("voice_sing") if get_capability else None
+    if cap is None:
+        return {"ok": False, "error": "voice 插件未启用（无 voice_sing 能力）"}
+    # 库内歌同样要 in-flight 去重：转换 ~10s 且 worker 串行，二次点歌若放行，
+    # 第二次只是白抢 GPU（发送侧 dup 拦得住重复刷屏，拦不住重算）。
+    busy = _sing_busy_key(item.get("_id") or song_id, "song")
+    if not _sing_busy_claim(busy):
+        return {"ok": True, "inflight": True,
+                "note": "回复群友：这首正在唱，稍等一下下就好"}
+    try:
+        try:
+            meta = cap(chorus, key=int(item.get("key") or 0),
+                       seed=int(item.get("seed") or 1234),
+                       index_rate=float(item.get("index_rate") or 0.66))
+        except Exception as e:
+            return {"ok": False, "error": f"唱歌转换失败: {e}",
+                    "note": "回复群友：这首我唱砸了，换一首试试"}
+        try:
+            reply = adapter.reply_to(chat_id)
+            send_sing = getattr(reply, "send_sing", None)
+            if not callable(send_sing):
+                return {"ok": False,
+                        "error": f"通道 {getattr(adapter, 'name', '') or '该'} 不支持语音，请改用 msg_send_text"}
+            title = str(item.get("title") or song_id)
+            result = send_sing(meta["out"], dedup_text=busy)
+            if not isinstance(result, dict):
+                return {"ok": False, "error": f"清唱发送返回异常: {result!r}"}
+            if result.get("ok"):
+                result.setdefault("song", title)
+                result.setdefault("seconds", meta.get("seconds"))
+            return _external_note(result)
+        except Exception as e:
+            return {"ok": False, "error": f"清唱发送失败: {e}"}
+    finally:
+        _sing_busy_release(busy)
+
+
+def _async_sing(busy_key: str, query: str, adapter, chat_id: str) -> None:
+    """后台线程：库外歌 获取→转换→发送。**失败也要补投说话**（拍板 §10.2，不许静默吞）。
+
+    守护线程随网关退出而消亡：重启丢任务 = 群友等到的是沉默而非承诺过的歌——
+    已知的 MVP 缺口（真正的 run 级补投要做后端 auto-chain 接线，plan §5）。
+    ``busy_key`` 由调用方占位，这里负责释放。
+    """
+    try:
+        from plugins.voice import sing_acquire as _acq
+    except Exception as e:  # noqa: BLE001 —— 走到这里 voice 包必然可导入（msg_sing 探测过）
+        logger.warning("在线曲库模块导入失败（query=%s）: %s", query, e)
+        _sing_busy_release(busy_key)
+        return
+    try:
+        entry = _acq.acquire(query)
+        from omni_core.tools.capability import get_capability
+
+        cap = get_capability("voice_sing")
+        if cap is None:
+            raise RuntimeError("voice_sing 能力缺失")
+        meta = cap(entry["chorus"], key=int(entry.get("key") or 0),
+                   seed=int(entry.get("seed") or 1234),
+                   index_rate=float(entry.get("index_rate") or 0.66))
+        reply = adapter.reply_to(chat_id)
+        send_sing = getattr(reply, "send_sing", None)
+        if not callable(send_sing):
+            raise RuntimeError("通道不支持语音发送")
+        # 发送去重键与库内路径同namespace：入库后用 ``song:<song_id>``，
+        # 这样"在线练成 → 之后库里再点同一首"能正确命中刷屏保护。
+        r = send_sing(meta["out"], dedup_text="song:" + str(entry["song_id"]).lower())
+        if not (isinstance(r, dict) and r.get("ok")):
+            raise RuntimeError(str((r or {}).get("error") or "发送失败"))
+        logger.info("在线曲库完成并发送：%s（%s）", entry["song_id"], entry["title"])
+    except _acq.InFlightError:
+        # 极窄竞态：本层占位之后、acquire 占位之前被同 query 的其它请求抢走。
+        # 那一次已经口播过"我练练"，歌也照样会发出来——这里再说话就是重复刷屏。
+        logger.info("同歌获取已被占下，静默退出（query=%s）", query)
+    except Exception as e:  # noqa: BLE001 —— 失败也要说话
+        logger.warning("在线曲库失败（query=%s）: %s: %s", query, type(e).__name__, e)
+        try:
+            reply = adapter.reply_to(chat_id)
+            reply.send_text("这首练劈了……换一首我试试？")
+        except Exception:  # noqa: BLE001 —— 连失败播报都发不出去就只留日志
+            logger.warning("在线曲库失败播报也发送失败（chat=%s）", chat_id)
+    finally:
+        _sing_busy_release(busy_key)
 
 
 @function_tool(
