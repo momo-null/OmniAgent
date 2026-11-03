@@ -206,7 +206,8 @@ class _TimingModel(Model):
         return ""
 
     def _report(self, t0: float, t_evt: Optional[float], t_delta: Optional[float],
-                t1: float, chars: int, stream: bool) -> None:
+                t1: float, chars: int, stream: bool,
+                prompt_chars: int = -1) -> None:
         if self._on_timing is None:
             return
         self._seq += 1
@@ -226,21 +227,51 @@ class _TimingModel(Model):
             "first_delta_ms": int((t_delta - t0) * 1000) if t_delta else -1,
             "total_ms": int((t1 - t0) * 1000),
             "output_chars": chars,
+            # 请求侧字符量（system 指令 + input 序列化，不含工具 schema）：
+            # 成本观测的基座——没有它，每 run 的 prompt 体量只能靠估（2026-11-03）。
+            "prompt_chars": prompt_chars,
         }
         try:
             self._on_timing(payload)
         except Exception:
             pass
 
+    @staticmethod
+    def _prompt_chars(args: tuple, kwargs: dict) -> int:
+        """请求侧字符量近似：system 指令 + input（str 直长；列表序列化）。
+
+        与 output_chars 同口径（字符不是 token）；不含 tools schema——那是每表面
+        的常量，观测要看的变量是消息体。取不到 input 时返回 -1（不计入）。
+        """
+        total = 0
+        sys_ins = kwargs.get("system_instructions")
+        if sys_ins is None and args:
+            sys_ins = args[0]
+        if isinstance(sys_ins, str):
+            total += len(sys_ins)
+        inp = kwargs.get("input")
+        if inp is None and len(args) >= 2:
+            inp = args[1]
+        try:
+            if isinstance(inp, str):
+                total += len(inp)
+            elif inp is not None:
+                total += len(json.dumps(list(inp), ensure_ascii=False, default=str))
+        except Exception:
+            return total if total else -1
+        return total if total else -1
+
     async def get_response(self, *args: Any, **kwargs: Any) -> Any:
         t0 = time.time()
+        pc = self._prompt_chars(args, kwargs)
         try:
             resp = await self._inner.get_response(*args, **kwargs)
             self._report(t0, None, None, time.time(),
-                         len(str(getattr(resp, "final_output", "") or "")), stream=False)
+                         len(str(getattr(resp, "final_output", "") or "")), stream=False,
+                         prompt_chars=pc)
             return resp
         except BaseException:
-            self._report(t0, None, None, time.time(), 0, stream=False)
+            self._report(t0, None, None, time.time(), 0, stream=False, prompt_chars=pc)
             raise
 
     async def stream_response(self, *args: Any, **kwargs: Any) -> Any:
@@ -248,6 +279,7 @@ class _TimingModel(Model):
         t_evt: Optional[float] = None
         t_delta: Optional[float] = None
         chars = 0
+        pc = self._prompt_chars(args, kwargs)
         try:
             async for chunk in self._inner.stream_response(*args, **kwargs):
                 now = time.time()
@@ -260,7 +292,8 @@ class _TimingModel(Model):
                     chars += len(txt)
                 yield chunk
         finally:
-            self._report(t0, t_evt, t_delta, time.time(), chars, stream=True)
+            self._report(t0, t_evt, t_delta, time.time(), chars, stream=True,
+                         prompt_chars=pc)
 
 
 class _BudgetHintModel(Model):
