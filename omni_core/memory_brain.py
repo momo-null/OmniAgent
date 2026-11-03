@@ -1375,10 +1375,12 @@ def _consolidate_impl(brain_cfg: Dict[str, Any], persona: str) -> Dict[str, Any]
     if maintain_profile(brain_cfg, persona):
         out["profile_rewritten"] = 1
 
-    # 8) 日记步（plan persona-social-memory M2）：她的一天 → L2 diary 块（失败静默）
+    # 8) 日记步（plan persona-social-memory M2）：她的一天 → L2 diary 块（失败静默）。
+    #    补齐模式（2026-11-03）：不在线的日子由下一次巩固补写，回看 7 天，超窗放弃。
     try:
-        if maintain_diary(brain_cfg, persona):
-            out["diary_written"] = 1
+        diary_n = maintain_diaries(brain_cfg, persona)
+        if diary_n:
+            out["diary_written"] = diary_n
         if maintain_month_diary(brain_cfg, persona):
             out["month_diary_written"] = 1
         # 9) 关系卡步：按**人**把近期往来压成印象卡（全局一份，跨群/跨项目）
@@ -1547,6 +1549,38 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
                 continue
             if scene_executor.write_diary_block(pid, day, diary):
                 written += 1
+        except Exception:
+            continue
+    return written
+
+
+#: 日记补齐回看窗口（2026-11-03 用户定）：巩固期除昨日外，把窗口内缺日记的日子一并补写；
+#: 超窗的缺口放弃——时效已过，且 L0-消息不受影响（conversation_search 仍可查回原话）。
+#: 背景：用户不会时刻开着 agent，整日不在线时「只写昨日」会让那天的日记永久缺失
+#: （2026-11-02 本地实测确认的洞；10-29/10-30 两篇当时就是靠显式 day 人工补跑出来的）。
+_DIARY_CATCHUP_DAYS = 7
+
+
+def _catchup_diary_days(now: Optional[datetime] = None) -> List[str]:
+    """巩固期日记补齐的日期表（UTC 日）：昨日优先，共 ``_DIARY_CATCHUP_DAYS`` 天。
+
+    显式补跑（直接调 ``maintain_diary(day=...)``）不受此窗口限制——本函数只服务巩固路径。
+    """
+    base = (now or datetime.now(timezone.utc)).date()
+    return [(base - timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range(1, _DIARY_CATCHUP_DAYS + 1)]
+
+
+def maintain_diaries(brain_cfg: Optional[Dict[str, Any]], persona: str = "") -> int:
+    """日记步总入口（巩固期第 8 步，补齐模式）：对窗口内每天独立尝试 ``maintain_diary``。
+
+    已有日记幂等跳过、素材太薄白卷跳过（两者都不调 LLM）；只有「缺日记且有素材」的
+    日子才产生一次 LLM 调用，单次巩固最多 ``_DIARY_CATCHUP_DAYS`` 次。
+    """
+    written = 0
+    for day in _catchup_diary_days():
+        try:
+            written += maintain_diary(brain_cfg, persona, day=day)
         except Exception:
             continue
     return written

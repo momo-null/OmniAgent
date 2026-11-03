@@ -76,9 +76,65 @@ def test_scene_write_rejects_diary(brain_cfg):
 def test_consolidation_calls_diary_step(monkeypatch, tmp_path):
     monkeypatch.setattr(mb, "_fts_ok", lambda conn: True)   # 隔离库不探 FTS，直测第 8 步挂载
     calls = []
-    monkeypatch.setattr(mb, "maintain_diary", lambda cfg, persona="": calls.append(1) or 0)
+    monkeypatch.setattr(mb, "maintain_diary",
+                        lambda cfg, persona="", day="": calls.append(day) or 0)
     mb._consolidate_impl({"base_url": "http://x", "model": "m"}, "")
-    assert calls
+    # 补齐模式（2026-11-03）：巩固期对回看窗口内每天各调一次（昨日优先）
+    assert len(calls) == mb._DIARY_CATCHUP_DAYS
+    assert calls[0] == mb._catchup_diary_days()[0]
+
+
+def test_catchup_diary_days_window():
+    """补齐窗口：昨日优先、共 7 天、不重不漏。"""
+    from datetime import datetime, timedelta, timezone
+
+    days = mb._catchup_diary_days()
+    assert len(days) == mb._DIARY_CATCHUP_DAYS == 7
+    base = datetime.now(timezone.utc).date()
+    assert days[0] == (base - timedelta(days=1)).strftime("%Y-%m-%d")   # 昨日（D+1 语义）
+    assert days[-1] == (base - timedelta(days=7)).strftime("%Y-%m-%d")  # 超窗的旧账不管
+    assert len(set(days)) == 7
+
+
+def test_catchup_backfills_within_window_only(monkeypatch, brain_cfg):
+    """缺日记且有素材的日子补写；超窗（>7 天）放弃；已有日记幂等不重写。"""
+    import sys
+    import types
+    from datetime import datetime, timedelta, timezone
+
+    from omni_core.local import runtime_paths as rp
+
+    stub = types.ModuleType("config")
+    stub.get_config = lambda k, d=None: True
+    monkeypatch.setitem(sys.modules, "config", stub)
+    monkeypatch.setattr(mb, "enabled", lambda: True)
+
+    base = datetime.now(timezone.utc).date()
+    d2 = (base - timedelta(days=2)).strftime("%Y-%m-%d")    # 窗口内，缺日记
+    d9 = (base - timedelta(days=9)).strftime("%Y-%m-%d")    # 超窗：时效已过，放弃
+    sdir = rp.projects_root() / "qq"
+    sdir.mkdir(parents=True, exist_ok=True)
+    body = ("「张三」(1): 今天群里可热闹了，先是大肥鱼们为了一碗白米饭吵了一整个上午，"
+            "下午又有谁踩了谁的语音被追着怼了半天，到了晚上大家还聊起剑网3梦江南的新副本，"
+            "这条素材拉长是为了稳稳超过八十字的白卷门槛")
+    (sdir / "s_t.jsonl").write_text(
+        "\n".join(json.dumps({"ts": f"{d}T12:00:00", "role": "user", "content": body},
+                             ensure_ascii=False) for d in (d2, d9)) + "\n",
+        encoding="utf-8")
+    llm_calls = []
+    monkeypatch.setattr(mb.llm_judge, "chat_json",
+                        lambda *a, **k: llm_calls.append(1) or {"diary": "这天鱼缸很热闹"})
+
+    n = mb.maintain_diaries(brain_cfg, "")
+    assert n == 1                                    # 只有 d2 成篇
+    sblocks = sdir / "memory" / "scene_blocks"
+    assert (sblocks / f"diary-{d2}.md").exists()
+    assert not (sblocks / f"diary-{d9}.md").exists()  # 超窗不补
+    assert len(llm_calls) == 1                        # 其余日子白卷/无素材，不调 LLM
+
+    # 幂等：再跑一遍不再产出、不再调 LLM
+    assert mb.maintain_diaries(brain_cfg, "") == 0
+    assert len(llm_calls) == 1
 
 
 def test_napcat_display_attribution(monkeypatch, tmp_path):
