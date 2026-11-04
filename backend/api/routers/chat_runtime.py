@@ -324,6 +324,14 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             "steps": result.get("steps"),
             "escalated": result.get("escalated"),
             "collected": result.get("collected_count"),
+            # 真实 token 用量（主链+子 agent 汇总；端点不回 usage 时为 0，前端显示「—」）
+            "tokens_in": int(result.get("tokens_in", 0) or 0),
+            "tokens_out": int(result.get("tokens_out", 0) or 0),
+            "tokens_cached": int(result.get("tokens_cached", 0) or 0),
+            # 最后一次请求的真实 input_tokens = 模型实际看到的上下文大小（上下文圆环用）
+            "ctx_tokens": int(result.get("ctx_tokens", 0) or 0),
+            # 本轮 run_task 墙钟耗时（不含收尾后的异步记忆沉淀）
+            "duration_ms": int((time.time() - _turn_ts0) * 1000),
         }
         # 结论直取（B10，2026-09-17 用户确认拆除 68333ee 的抽取链）：
         # LLM 收尾轮 message 就是最终结果（闲聊回答 = 任务结论，同一种东西），

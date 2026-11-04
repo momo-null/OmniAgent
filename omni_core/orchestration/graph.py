@@ -61,6 +61,11 @@ class OmniState(TypedDict, total=False):
     last_escalate_reason: str
     last_provider_error: bool     # U3：主 agent 本轮是否命中 provider 服务侧错误
     paused: bool                  # F2.2：daemon 模式纯文本收尾→任务保持活跃等续跑
+    # 主链真实 token 用量中转（_main 写入，_finalize_fn 汇总进终态结果）
+    last_tokens_in: int
+    last_tokens_out: int
+    last_tokens_cached: int
+    last_ctx_tokens: int
     result: Dict[str, Any]        # 终态结果（结束节点写入）
 
 
@@ -112,6 +117,11 @@ def build_agent_graph(
             "last_escalate_reason": out.get("escalate_reason", "") or "",
             "last_provider_error": bool(out.get("provider_error")),
             "paused": bool(out.get("paused")),
+            # 主链真实 token 用量中转（收尾节点 _finalize_fn 汇总用）
+            "last_tokens_in": int(out.get("tokens_in", 0) or 0),
+            "last_tokens_out": int(out.get("tokens_out", 0) or 0),
+            "last_tokens_cached": int(out.get("tokens_cached", 0) or 0),
+            "last_ctx_tokens": int(out.get("ctx_tokens", 0) or 0),
             "consumed": len(state.get("results", [])),
             "injected_seen": len(state.get("injected", [])),
         }

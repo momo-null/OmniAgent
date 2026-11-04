@@ -66,6 +66,13 @@ class SubtaskState:
     llm_calls: int = 0
     # F1.2：repeat-guard 累计失败次数（模型可自愈的参数错误等，供 retry_count 接通）
     repeat_failures: int = 0
+    # 真实 token 用量（on_llm_end 从 ModelResponse.usage 累计；流式经 include_usage
+    # 获取，端点不回 usage 时保持 0）。ctx_tokens = 最后一次请求的真实 input_tokens
+    # （即模型实际看到的上下文大小，压缩后真实回落），供前端上下文圆环使用。
+    tokens_in: int = 0
+    tokens_out: int = 0
+    tokens_cached: int = 0
+    ctx_tokens: int = 0
 
 
 # --- M8 长任务：预算感知提示 -------------------------------------------------
@@ -116,6 +123,34 @@ def parse_dispatch_items(raw: Any) -> List[Dict[str, str]]:
                 entry["agent"] = _agent
             out.append(entry)
     return out
+
+
+def _usage_of(resp: Any) -> Optional[Dict[str, int]]:
+    """从 ModelResponse.usage 取真实 token 用量（端点不回 usage 时返回 None）。
+
+    SDK 已把 chat-completions / responses 两协议归一化为
+    ``Usage(input_tokens/output_tokens/input_tokens_details.cached_tokens)``；
+    旧字段名（prompt_tokens 等）仅作异构自定义 Model 的兜底。cached_tokens 是
+    计费折扣口径，KV cache 照样占窗口——上下文占用判断必须用 input_tokens 全额。
+    """
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return None
+
+    def _g(*keys: str) -> int:
+        for k in keys:
+            v = getattr(u, k, None)
+            if isinstance(v, (int, float)) and v > 0:
+                return int(v)
+        return 0
+
+    inp = _g("input_tokens", "prompt_tokens")
+    out = _g("output_tokens", "completion_tokens")
+    if inp <= 0 and out <= 0:
+        return None
+    details = getattr(u, "input_tokens_details", None)
+    cached = int(getattr(details, "cached_tokens", 0) or 0) if details is not None else 0
+    return {"in": inp, "out": out, "cached": max(0, cached)}
 
 
 class OmniHooks(RunHooks):
@@ -179,6 +214,17 @@ class OmniHooks(RunHooks):
             st.llm_calls += 1
         except Exception:
             pass
+        # 真实 token 用量累计（流式/非流式统一在此触发；异常静默不影响主流程）
+        try:
+            u = _usage_of(response)
+            if u is not None:
+                st.tokens_in += u["in"]
+                st.tokens_out += u["out"]
+                st.tokens_cached += u["cached"]
+                if u["in"] > 0:
+                    st.ctx_tokens = u["in"]
+        except Exception:
+            pass
 
 
 class _TimingModel(Model):
@@ -207,7 +253,7 @@ class _TimingModel(Model):
 
     def _report(self, t0: float, t_evt: Optional[float], t_delta: Optional[float],
                 t1: float, chars: int, stream: bool,
-                prompt_chars: int = -1) -> None:
+                prompt_chars: int = -1, usage: Optional[Dict[str, int]] = None) -> None:
         if self._on_timing is None:
             return
         self._seq += 1
@@ -231,6 +277,14 @@ class _TimingModel(Model):
             # 成本观测的基座——没有它，每 run 的 prompt 体量只能靠估（2026-11-03）。
             "prompt_chars": prompt_chars,
         }
+        # 真实 token 用量（usage 来自本次响应；端点不回 usage 时缺省，前端显示「—」）。
+        # tokens_in = 本次请求的真实上下文全额 → 前端上下文圆环的实时数据源。
+        if usage is not None:
+            payload.update({
+                "tokens_in": usage["in"],
+                "tokens_out": usage["out"],
+                "tokens_cached": usage["cached"],
+            })
         try:
             self._on_timing(payload)
         except Exception:
@@ -268,7 +322,7 @@ class _TimingModel(Model):
             resp = await self._inner.get_response(*args, **kwargs)
             self._report(t0, None, None, time.time(),
                          len(str(getattr(resp, "final_output", "") or "")), stream=False,
-                         prompt_chars=pc)
+                         prompt_chars=pc, usage=_usage_of(resp))
             return resp
         except BaseException:
             self._report(t0, None, None, time.time(), 0, stream=False, prompt_chars=pc)
@@ -280,11 +334,15 @@ class _TimingModel(Model):
         t_delta: Optional[float] = None
         chars = 0
         pc = self._prompt_chars(args, kwargs)
+        usage: Optional[Dict[str, int]] = None
         try:
             async for chunk in self._inner.stream_response(*args, **kwargs):
                 now = time.time()
                 if t_evt is None:
                     t_evt = now
+                # usage 随 response.completed 事件到达（include_usage 开启时）
+                if getattr(chunk, "type", None) == "response.completed":
+                    usage = _usage_of(getattr(chunk, "response", None))
                 txt = self._chunk_text(chunk)
                 if txt:
                     if t_delta is None:
@@ -293,7 +351,7 @@ class _TimingModel(Model):
                 yield chunk
         finally:
             self._report(t0, t_evt, t_delta, time.time(), chars, stream=True,
-                         prompt_chars=pc)
+                         prompt_chars=pc, usage=usage)
 
 
 class _BudgetHintModel(Model):
@@ -420,6 +478,12 @@ class _CompactionModel(Model):
         # 粘性状态：上次压缩产物与其覆盖到的位点
         self.summary_msg: Optional[Dict[str, Any]] = None
         self.kept_from: int = 0
+        # 真实 usage 自校准（2026-11-05）：k = 真实 input_tokens / 估算值 的 EMA。
+        # 估算对 ASCII 密集工具输出系统性低估（4 字符/token vs 实际 ~3），阈值长期
+        # 偏松；每次响应的 usage 提供绝对真值锚点，k 逐次收敛。端点不回 usage 时
+        # k=0 → _predict 退化为纯估算，与历史行为完全一致（不会更差）。
+        self._k: float = 0.0
+        self._k_samples: int = 0
 
     def _safe_on_compact(self) -> None:
         """触发压缩检查点回调（异常吞掉：检查点动作不得打断运行中的任务）。"""
@@ -428,6 +492,42 @@ class _CompactionModel(Model):
                 self._on_compact()
         except Exception:
             pass
+
+    # --- 真实 usage 自校准 ------------------------------------------------------
+    def _observe(self, sent_items: Any, resp: Any) -> None:
+        """响应回来后用真实 usage 校准估算密度（异常静默，绝不影响主流程）。
+
+        每次响应的 usage.input_tokens 是**绝对真值**（含 system/tools schema 的全额
+        上下文）：k = 真实/估算 逐次重锚定，误差只在「上一锚点以来的增量」一段，
+        不跨调用累积——长任务（几小时几百次调用）恰是收敛最好的场景。压缩触发后
+        上下文骤降，下一次响应自动重锚，无需特殊处理。离谱样本（端点切换/异常）
+        不入学率；EMA 平滑防单次抖动。
+        """
+        try:
+            u = _usage_of(resp)
+            if u is None or u["in"] <= 0:
+                return
+            if not isinstance(sent_items, list) or not sent_items:
+                return
+            est = _estimate_tokens(sent_items)
+            if est <= 0:
+                return
+            sample = u["in"] / est
+            if not (0.2 <= sample <= 8.0):
+                return
+            if self._k_samples == 0:
+                self._k = sample              # 首样本直接锚定（冷启动主要误差来源）
+            else:
+                self._k = 0.7 * self._k + 0.3 * sample
+            self._k_samples += 1
+        except Exception:
+            pass
+
+    def _predict(self, est: int) -> int:
+        """估算值 → 真实 token 预测：乘以校准系数 k；无 usage 样本时原样返回（纯估算）。"""
+        if est <= 0:
+            return 0
+        return int(est * self._k) if self._k > 0 else est
 
     # --- 请求改写 -------------------------------------------------------------
     @staticmethod
@@ -444,7 +544,11 @@ class _CompactionModel(Model):
         return (lambda items: (args, kwargs)), None, None
 
     def _compact(self, system_instructions: Any, items: Any) -> Optional[List[Any]]:
-        """返回本次请求应使用的 items；返回 None 表示零干预（原样透传）。"""
+        """返回本次请求应使用的 items；返回 None 表示零干预（原样透传）。
+
+        阈值判断走 ``_predict``（真实 usage 校准）：有样本时用「校准预测」替代纯
+        估算，无样本/端点不回 usage 时退化为原纯估算——行为分支只可能更准。
+        """
         if self._threshold <= 0 or self._summarize is None:
             return None
         if not isinstance(items, list) or not items:
@@ -454,9 +558,9 @@ class _CompactionModel(Model):
             items, _ = _prune_tool_results(
                 items, self._prune_threshold, self._prune_head, self._prune_tail
             )
-            if _estimate_tokens(items) <= self._threshold:
+            if self._predict(_estimate_tokens(items)) <= self._threshold:
                 return items                               # 修剪后已达标：不必压缩
-        elif _estimate_tokens(items) <= self._threshold:
+        elif self._predict(_estimate_tokens(items)) <= self._threshold:
             return None                                    # 低于阈值：透传、零开销
         cut = self._cut_index(items)
         summary = self._sticky_summary(system_instructions, items, cut)
@@ -464,7 +568,7 @@ class _CompactionModel(Model):
             return _hard_keep(items, self._keep_rounds)   # 摘要失效：纯滑窗降级
         tail_from = max(cut, self.kept_from)
         new_items = [summary] + list(items[tail_from:])
-        if self._hard and _estimate_tokens(new_items) > self._hard:
+        if self._hard and self._predict(_estimate_tokens(new_items)) > self._hard:
             return _hard_keep(items, self._keep_rounds)   # 硬上限兜底
         return new_items
 
@@ -523,16 +627,23 @@ class _CompactionModel(Model):
     async def get_response(self, *args: Any, **kwargs: Any) -> Any:
         pack, si, items = self._unpack(args, kwargs)
         new_items = self._compact(si, items)
+        sent = new_items if new_items is not None else items
         if new_items is not None:
             args, kwargs = pack(new_items)
-        return await self._inner.get_response(*args, **kwargs)
+        resp = await self._inner.get_response(*args, **kwargs)
+        self._observe(sent, resp)
+        return resp
 
     async def stream_response(self, *args: Any, **kwargs: Any) -> Any:
         pack, si, items = self._unpack(args, kwargs)
         new_items = self._compact(si, items)
+        sent = new_items if new_items is not None else items
         if new_items is not None:
             args, kwargs = pack(new_items)
         async for chunk in self._inner.stream_response(*args, **kwargs):
+            # 流式：usage 随 response.completed 事件到达（include_usage 开启时）
+            if getattr(chunk, "type", None) == "response.completed":
+                self._observe(sent, getattr(chunk, "response", None))
             yield chunk
 
 
@@ -1511,7 +1622,8 @@ def _assemble_agent_stack(
         _stop_behavior: Any = StopAtTools(stop_at_tool_names=stop_tools)
     elif tool_allowlist:
         # 受限能力（如消息通道的「显式发送」）：只暴露白名单里的工具，
-        # 不装配核内元工具 / MCP——模型能做的唯一动作就是发送，不会越权。
+        # 不装配核内元工具 / MCP——模型能做的动作只有白名单声明的那些
+        # （发送 / 显式沉默 / 只读查询），不会越权。
         _allow = {str(x) for x in tool_allowlist if str(x)}
         _mcp_connected = []
         _agent_tools = [t for t in tools if getattr(t, "name", "") in _allow]
@@ -1717,7 +1829,7 @@ def run_subtask_sdk(
     _finish_intent_nudges = 0  # 收尾意图门已纠正次数（run 级,限 _FINISH_INTENT_MAX）
     while max_steps is None or state.steps < max_steps:
         if should_stop():
-            return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+            return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
 
         if on_state:
             on_state("EXECUTING")
@@ -1791,7 +1903,7 @@ def run_subtask_sdk(
             if state.steps >= max_steps:
                 # 真实步数耗尽：正常终止（reason 标注真实上下限，可观测、可追溯）
                 return _result(False, f"budget_exhausted: 已达步数上限 {max_steps}（实际执行 {state.steps} 步）",
-                               state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                               state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
             # 仅单块回合跑满、全局仍有预算：跨块续跑下一块（有限块数内必抵终态，无死循环）
             continue
         except Exception as e:
@@ -1806,7 +1918,7 @@ def run_subtask_sdk(
             # - 空 choices（_is_empty_choices）：provider 偶发空响应，归入可退避重试的瞬时抖动。
             if _is_context_overflow(e):
                 if should_stop():
-                    return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                    return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
                 if not overflow_retried:
                     overflow_retried = True
                     keep_rounds = getattr(model, "_keep_rounds", 0) or 8
@@ -1815,21 +1927,21 @@ def run_subtask_sdk(
                 # 上下文溢出重试仍失败 -> 落入下方原有失败逻辑（落 reason）
             elif _is_length_truncation(e):
                 if should_stop():
-                    return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                    return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
                 length_retry += 1
                 if length_retry >= LENGTH_RETRY_LIMIT:
                     return _result(False,
                         f"runner 异常: 输出多次被 max_tokens 截断且无有效内容(length x{length_retry})，弱模型反复空转",
                         state.steps, True,
                         f"runner 异常: 输出多次被 max_tokens 截断(length x{length_retry})",
-                        llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                        llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
                 keep_rounds = getattr(model, "_keep_rounds", 0) or 8
                 items = _hard_keep(items, keep_rounds)
                 items = _append_runtime_note(items, _LEN_TRUNC_MSG)
                 continue
             elif _is_tool_not_found(e):
                 if should_stop():
-                    return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                    return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
                 tool_not_found_retry += 1
                 name = _extract_missing_tool(e)
                 if tool_not_found_retry >= TOOL_NOT_FOUND_RETRY_LIMIT:
@@ -1837,7 +1949,7 @@ def run_subtask_sdk(
                         f"runner 异常: 模型反复调用不存在的工具{' ' + name if name else ''}（x{tool_not_found_retry}），无法自愈",
                         state.steps, True,
                         f"runner 异常: 反复调用不存在的工具{' ' + name if name else ''}",
-                        llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                        llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
                 items = _append_runtime_note(items,
                     f"工具{' ' + name if name else ''}不存在，请严格使用系统提供的真实工具列表，不要臆造工具名。")
                 continue
@@ -1859,16 +1971,16 @@ def run_subtask_sdk(
                             pass
                         if should_stop():
                             return _result(False, "用户主动停止", state.steps, False, "",
-                                           llm_calls=state.llm_calls,
+                                           llm_calls=state.llm_calls, **_usage_kwargs(state),
                                            repeat_failures=state.repeat_failures + provider_retry)
                         continue  # 同批模型调用重试（items 不变，进度不丢）
                 # 服务侧错误：暂停交回上级（绝静默 success）
                 return _result(False, provider_msg, state.steps, True, provider_msg,
-                               provider_error=True, llm_calls=state.llm_calls,
+                               provider_error=True, llm_calls=state.llm_calls, **_usage_kwargs(state),
                                repeat_failures=state.repeat_failures + provider_retry)
             _err_first = str(e).splitlines()[0] if str(e).strip() else type(e).__name__
             return _result(False, f"runner 异常: {type(e).__name__}: {_err_first}", state.steps, True,
-                           f"runner 异常: {type(e).__name__}: {_err_first}", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                           f"runner 异常: {type(e).__name__}: {_err_first}", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
 
         # 方案 B（正常 agent 收尾）：模型以「纯文本」结束本批——即未调 task_done/
         # verify/escalate/dispatch、也无待执行工具调用——且已执行过动作，则视为主动
@@ -1908,15 +2020,15 @@ def run_subtask_sdk(
                         # F2.2：daemon 模式纯文本收尾不触发 success 终态，改为 paused 等待续跑
                         if task_mode == "daemon":
                             return _result(False, "daemon 模式汇报后暂停，等待唤醒", state.steps, False, "",
-                                           paused=True, llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
-                        return _result(True, why or "模型已收尾，判定完成", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                                           paused=True, llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
+                        return _result(True, why or "模型已收尾，判定完成", state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
                 else:
                     state.done = True
                     # F2.2：daemon 模式纯文本收尾不触发 success 终态，改为 paused 等待续跑
                     if task_mode == "daemon":
                         return _result(False, "daemon 模式汇报后暂停，等待唤醒", state.steps, False, "",
-                                       paused=True, llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
-                    return _result(True, why or "模型已收尾，判定完成", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                                       paused=True, llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
+                    return _result(True, why or "模型已收尾，判定完成", state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
             # 有验证条件但未满足：不直接判失败，提示模型继续推进
             items.append({
                 "role": "user",
@@ -1930,23 +2042,23 @@ def run_subtask_sdk(
 
         # 升级判定优先于收尾（沿旧循环语义）：已达成但仍触发升级条件时交回上级。
         if state.escalated:
-            return _result(False, state.escalate_reason, state.steps, True, state.escalate_reason, llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+            return _result(False, state.escalate_reason, state.steps, True, state.escalate_reason, llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
         if state.no_confidence:
             return _result(False, "no_confidence: 工具结果无置信", state.steps, True,
-                           "no_confidence: 工具结果无置信", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                           "no_confidence: 工具结果无置信", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
         # verify 失败上限：子任务用配置档（缺省 3，超限升级交回上级）；主链
         # （verify_fail_max=0，无升级）给硬兜底上限，防止无界空转。
         _verify_cap = verify_fail_max if verify_fail_max > 0 else _VERIFY_FAIL_HARD_CAP
         if state.verify_fail >= _verify_cap:
             return _result(False, f"verify 连续失败 {state.verify_fail} 次", state.steps,
                            verify_fail_max > 0,
-                           f"verify 连续失败 {state.verify_fail} 次", llm_calls=state.llm_calls,
+                           f"verify 连续失败 {state.verify_fail} 次", llm_calls=state.llm_calls, **_usage_kwargs(state),
                            repeat_failures=state.repeat_failures)
         # 墙钟结算扣除审批等待（等待是人的延迟，不是 agent 的延迟；§6.2）——
         # 否则 worker 子任务（缺省 120s 墙钟）里一次长等待会在批准后被误判墙钟超时
         from omni_core.tools.policy import gate_wait_seconds
         if wallclock_sec and (time.time() - started - gate_wait_seconds()) >= wallclock_sec:
-            return _result(False, "墙钟超时（wallclock_sec）", state.steps, True, "墙钟超时（wallclock_sec）", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+            return _result(False, "墙钟超时（wallclock_sec）", state.steps, True, "墙钟超时（wallclock_sec）", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
 
         # 显式完成条件短路（沿旧循环语义）：已达成即收尾，不必等 task_done。
         if gate.has_condition:
@@ -1954,15 +2066,15 @@ def run_subtask_sdk(
                 on_state("VERIFYING")
             passed, why = gate.peek()
             if passed:
-                return _result(True, why or "状态命中完成条件", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+                return _result(True, why or "状态命中完成条件", state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
 
         if state.done:
-            return _result(True, state.done_reason or "task_done", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+            return _result(True, state.done_reason or "task_done", state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
         # M7：主 agent 派发了子任务 → 立刻交回编排层去做并行扇出（不要接着跑下一块）
         if state.dispatch_plan:
-            return _result(False, "dispatch: 已派发子任务", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+            return _result(False, "dispatch: 已派发子任务", state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
         if should_stop():
-            return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+            return _result(False, "用户主动停止", state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
 
         # 注：M8 的预算提示由 `_BudgetHintModel` 在 Model 适配层注入（见其文档字符串），
         # 不走块与块之间——本版 SDK 在 max_turns 用尽时拿不回历史，切块会丢上下文。
@@ -1978,7 +2090,7 @@ def run_subtask_sdk(
 
     # 走到这里 = 步数预算耗尽（未 task_done、未 verify 通过、未升级）。
     # 与旧循环一致：预算耗尽即失败，并写 budget_exhausted 供编排层终止。
-    return _result(False, f"budget_exhausted: 已达步数上限 {max_steps}", state.steps, False, "", llm_calls=state.llm_calls, repeat_failures=state.repeat_failures)
+    return _result(False, f"budget_exhausted: 已达步数上限 {max_steps}", state.steps, False, "", llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
 
 
 
@@ -2157,9 +2269,22 @@ def _append_runtime_note(items: List[Any], note: str) -> List[Any]:
     return items
 
 
+def _usage_kwargs(state: Optional["SubtaskState"]) -> Dict[str, int]:
+    """从 SubtaskState 取真实 token 用量，展开进 ``_result(...)``（无 state 时空 dict）。"""
+    if state is None:
+        return {}
+    return {
+        "tokens_in": state.tokens_in,
+        "tokens_out": state.tokens_out,
+        "tokens_cached": state.tokens_cached,
+        "ctx_tokens": state.ctx_tokens,
+    }
+
+
 def _result(success: bool, reason: str, steps: int, escalated: bool, escalate_reason: str,
             provider_error: bool = False, llm_calls: int = 0, repeat_failures: int = 0,
-            paused: bool = False) -> Dict[str, Any]:
+            paused: bool = False, tokens_in: int = 0, tokens_out: int = 0,
+            tokens_cached: int = 0, ctx_tokens: int = 0) -> Dict[str, Any]:
     return {
         "success": success,
         "reason": reason,
@@ -2170,4 +2295,8 @@ def _result(success: bool, reason: str, steps: int, escalated: bool, escalate_re
         "llm_calls": int(llm_calls or 0),
         "repeat_failures": int(repeat_failures or 0),
         "paused": bool(paused),
+        "tokens_in": int(tokens_in or 0),
+        "tokens_out": int(tokens_out or 0),
+        "tokens_cached": int(tokens_cached or 0),
+        "ctx_tokens": int(ctx_tokens or 0),
     }

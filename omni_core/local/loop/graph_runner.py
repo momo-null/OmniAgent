@@ -244,6 +244,11 @@ class GraphRunnerMixin:
             "provider_error": bool(res.get("provider_error")),
             "budget_exhausted": "budget_exhausted" in (res.get("reason") or ""),
             "paused": bool(res.get("paused")),
+            # 主链真实 token 用量（SubtaskState 累计；经图状态中转到收尾汇总）
+            "tokens_in": int(res.get("tokens_in", 0) or 0),
+            "tokens_out": int(res.get("tokens_out", 0) or 0),
+            "tokens_cached": int(res.get("tokens_cached", 0) or 0),
+            "ctx_tokens": int(res.get("ctx_tokens", 0) or 0),
         }
 
     def _run_graph(self, spec: TaskSpec) -> Dict[str, Any]:
@@ -376,7 +381,11 @@ class GraphRunnerMixin:
                  # T4.3（U5a）：交接面字段透传至任务汇总
                  "done_when_hit": bool(r.get("done_when_hit")),
                  "artifacts": list(r.get("artifacts") or []),
-                 "failure_point": str(r.get("failure_point") or "")}
+                 "failure_point": str(r.get("failure_point") or ""),
+                 # 子 agent 真实 token 用量（收尾汇总「本轮总量」用；缺省 0）
+                 "tokens_in": int(r.get("tokens_in", 0) or 0),
+                 "tokens_out": int(r.get("tokens_out", 0) or 0),
+                 "tokens_cached": int(r.get("tokens_cached", 0) or 0)}
                 for r in (state.get("results") or [])
             ]
             return {
@@ -389,6 +398,11 @@ class GraphRunnerMixin:
                 "paused": bool(paused),
                 "rounds": rounds,
                 "subtask_results": subtask_results,
+                # 主链真实 token 用量（图状态中转，见 OmniState.last_tokens_*）
+                "tokens_in": int(state.get("last_tokens_in", 0) or 0),
+                "tokens_out": int(state.get("last_tokens_out", 0) or 0),
+                "tokens_cached": int(state.get("last_tokens_cached", 0) or 0),
+                "ctx_tokens": int(state.get("last_ctx_tokens", 0) or 0),
             }
 
         # M8：checkpointer 是软注入（update_state）与崩溃恢复的载体；
@@ -487,6 +501,14 @@ class GraphRunnerMixin:
         base["paused"] = bool(res.get("paused"))
         base["rounds"] = rounds
         base["subtask_results"] = subtask_results
+        # 真实 token 用量汇总（本轮口径 = 主链 + 全部子 agent；端点不回 usage 时为 0，
+        # 前端按缺省显示「—」）。ctx_tokens 取主链最后一次请求的真实 input_tokens
+        # （= 模型实际看到的上下文，压缩后真实回落），供前端上下文圆环使用。
+        _sum = lambda k: int(res.get(k, 0) or 0) + sum(int(r.get(k, 0) or 0) for r in subtask_results)  # noqa: E731
+        base["tokens_in"] = _sum("tokens_in")
+        base["tokens_out"] = _sum("tokens_out")
+        base["tokens_cached"] = _sum("tokens_cached")
+        base["ctx_tokens"] = int(res.get("ctx_tokens", 0) or 0)
         # M5: 把采集结果随运行结果一并返回，并落盘 tasks/<task_id>/collected.json
         base["collected"] = [dict(c) for c in world.collected]
         base["notes"] = list(world.notes)

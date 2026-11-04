@@ -28,25 +28,42 @@
 
 1. **Prune-First**：`_prune_tool_results` 先把超长 `function_call_output` 首尾截断
    （阈值 8192 字符，头 4096 + 尾 1024；只改本次请求副本，不落 SDK items）；
-   修剪后已低于阈值 → 直接返回，不压。
-2. 切点：从末尾累计到「阈值 × retain_ratio」为止，之前为待压缩区。
-3. **粘性摘要**：待压区间无新增 → 复用旧摘要（请求前缀逐字节稳定，前缀缓存友好）；
+   修剪后已低于阈值（校准口径，见 §4）→ 直接返回，不压。
+2. **阈值判断（校准口径）**：`_predict(估算) > threshold` 才继续压缩——有真实
+   usage 样本时用校准预测，无样本退化为纯估算（§4）。
+3. 切点：从末尾累计到「阈值 × retain_ratio」为止，之前为待压缩区。
+4. **粘性摘要**：待压区间无新增 → 复用旧摘要（请求前缀逐字节稳定，前缀缓存友好）；
    有新增 → 增量重压（旧摘要 + 增量）。摘要指令统一为八段结构化检查点
    `SUMMARY_INSTRUCTION`（任务目标 / 已完成动作 / 关键观测与工具结果 / 已生成产物 /
    当前状态 / 未决问题 / 下一步计划 / 风险与约束），经 `_compress_history` 的
    **system prompt** 下发，指令本身不混入待压正文，总长目标 ≤ 原文 40%。
-4. 产出单条 `[历史压缩摘要] …` user 消息，`items = [摘要] + 尾部会话`。
-5. 兜底：摘要失败 / 无效（新摘要 ≥ 原文 60%，视为没压动）/ 超硬顶 → `_hard_keep` 纯滑窗。
+5. 产出单条 `[历史压缩摘要] …` user 消息，`items = [摘要] + 尾部会话`。
+6. 兜底：摘要失败 / 无效（新摘要 ≥ 原文 60%，视为没压动）/ 超硬顶（校准口径）→
+   `_hard_keep` 纯滑窗。
 
 - SDK 原始 items 不动（只改本次请求入参副本）——会话历史不因压缩增长。
 - 每次产出**新**摘要触发一次 `on_compact` 回调（压缩检查点；粘性复用不触发，
   回调异常被吞绝不影响请求）。挂点已备，上层当前未消费（未传 `on_compaction` → 空操作）。
 
-## 4. token 估算口径
+## 4. token 口径：估算基座 + 真实 usage 自校准（2026-11-05）
 
-`_estimate_tokens` 依次累加 message 的 `content / name` 与工具调用的 `arguments / output`
-四类字段；`_text_tokens` 按 **CJK 每字记 1、其余每 4 字符记 1** 估算。压缩阈值与占比判断
-全走此口径——中文语义下按字符/4 估算会把阈值放大约 4 倍，使压缩形同虚设。
+两层口径：
+
+- **估算基座 `_estimate_tokens`**：依次累加 message 的 `content / name` 与工具调用的
+  `arguments / output` 四类字段；`_text_tokens` 按 **CJK 每字记 1、其余每 4 字符记 1**。
+  对 ASCII 密集的工具输出系统性低估（4 字符/token vs 实际 ~3）——历史教训：中文语义下
+  按字符/4 会把阈值放大约 4 倍，使压缩形同虚设（旧口径 bug，自校准的引入动机之一）。
+- **真实 usage 自校准（`_CompactionModel._observe` / `_predict`）**：每次模型响应的
+  `usage.input_tokens` 是**绝对真值**（含 system / tools schema 全额上下文）。
+  k = 真实/估算 按 EMA 收敛（首样本直接锚定；比率出 `[0.2, 8]` 视为离群拒收，
+  防端点切换/异常响应污染）。**阈值与硬顶判断走 `k × 估算` 的校准预测**。
+  逐次重锚定：误差只在「上次真值以来的增量」一段，不跨调用累积——长任务
+  （几小时几百次调用）恰是收敛最好的场景；压缩触发后上下文骤降，下一次响应自动重锚。
+- **降级链**：端点不回 usage（流式未开 `brain.request.include_usage` / 端点不支持）
+  → k 恒 0 → 完全退化为纯估算，与历史行为一致（不会更差）。第 1 次请求发出前
+  是唯一无真值窗口（彼时上下文最小，纯估算误差无谓）。
+- **仍走纯估算的判断**：切点保留比例（retain_ratio）等相对量判断——只需比例关系，
+  不需绝对精度。
 
 ## 5. 压缩产物的两个落点
 
@@ -84,13 +101,17 @@ facts 只在压缩真实触发后产生——任务没跑到阈值时 facts 为 
 | `brain.long_task.retain_ratio` | config.py | 0.5 |
 | `brain.long_task.prune.threshold_chars / head_chars / tail_chars` | config.py | 8192 / 4096 / 1024 |
 | `brain.long_task.compress` | bridge（缺省 true） | true（关闭时摘要为占位文本、不写 facts） |
+| `brain.request.include_usage` | bridge（缺省 true） | true（流式请求随单 usage——真实用量/截断检测/自校准的数据源；个别拒收该参数的端点可关） |
 | `runtime.escalation.worker_history_keep` | config.py | 3（worker 硬滑窗保留轮数） |
 
 ## 9. 观测与验收
 
 - 压缩是否触发：world facts 中是否出现 `[压缩提取]` 前缀（§5）。
 - prune 生效：命中计数 > 0（`tests/test_t22_prune.py`）。
+- 真实用量观测：每次 LLM 调用的 `tokens_in / tokens_out / tokens_cached` 随 `llm_timing`
+  落轨迹（SSE `trajectory_append` 实时推前端）；run 收尾按「主链+子 agent」汇总进
+  result → Chat 页 meta（完成行 + 上下文圆环消费）。端点不回 usage 时为 0。
 - 相关测试：`test_t21_estimate_tokens.py`（估算口径）/ `test_t22_prune.py`（Prune-First）/
-  `test_t32_compaction_model.py`（粘性压缩全链 + 摘要指令统一）/
+  `test_t32_compaction_model.py`（粘性压缩全链 + 摘要指令统一 + **真实 usage 自校准**）/
   `test_world_model.py`（状态层持久化）/ `test_stream_turn_blocks.py`（流式回归）。
 - 真机验收口径：长任务 A/B 步数与 token 对比。

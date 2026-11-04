@@ -572,11 +572,110 @@ const ArtifactCards = memo(function ArtifactCards({ artifacts }: { artifacts: Ar
   );
 });
 
+// token 数紧凑显示（完成行/圆环详情用；精确值看圆环点击详情）
+const fmtCompact = (n: number): string => {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+};
+
+// 全量数字（明细浮框用，千分位）：5,207,062
+const fmtFull = (n: number): string => Math.round(n).toLocaleString("en-US");
+
+// 明细浮框行（图2 风格：色块 + 标签 + 右对齐数值）
+function DetailRow({ color, label, value, indent = false }: { color: string; label: string; value: string; indent?: boolean }) {
+  return (
+    <Stack direction="row" alignItems="center" spacing={0.75} sx={{ py: 0.25, pl: indent ? 2 : 0 }}>
+      <Box sx={{ width: 8, height: 8, borderRadius: 0.5, bgcolor: color, flexShrink: 0 }} />
+      <Typography sx={{ fontSize: 12, flex: 1, color: "text.secondary" }}>{label}</Typography>
+      <Typography sx={{ fontSize: 12 }}>{value}</Typography>
+    </Stack>
+  );
+}
+
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <Stack direction="row" alignItems="center" spacing={0.5}>
+      <Box sx={{ width: 7, height: 7, borderRadius: 0.5, bgcolor: color }} />
+      <Typography sx={{ fontSize: 11, color: "text.secondary" }}>{label}</Typography>
+    </Stack>
+  );
+}
+
+// 墙钟耗时：45s / 3m 25s
+const fmtDuration = (ms: number): string => {
+  if (ms <= 0) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+};
+
+// 上下文用量圆环：运行中随每轮 LLM 响应实时更新（llm_timing 经 SSE trajectory_append
+// 推送），空闲时回退到最后一条 agent 消息 meta 的 ctx_tokens（随历史持久化，刷新可恢复）。
+// 分母 = 当前生效模型的标称上下文窗口（目录 contextWindow）；未配置时只显示绝对值。
+// 颜色分层：≥75% 黄色预警、≥90% 红色；无数据 = 0% 口径。
+// 手绘 SVG（不用 MUI CircularProgress）：5.15 的 determinate 没有 track 元素，
+// 底环/进度弧全部自控——底环用中性灰（暗色下可见，对齐参考样式），外面也不套
+// IconButton（按钮本体会在圆环底下留一块背景）。
+const ContextRing = memo(function ContextRing({ tokens, windowSize }: { tokens: number; windowSize: number }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const pct = windowSize > 0 ? Math.min(100, (tokens / windowSize) * 100) : 0;
+  const ringColor = pct >= 90 ? "error.main" : pct >= 75 ? "warning.main" : "text.secondary";
+  const detail = windowSize > 0
+    ? `${pct.toFixed(1)}% · ${fmtCompact(tokens)} / ${fmtCompact(windowSize)} 上下文已使用`
+    : `${fmtCompact(tokens)} tokens 上下文已使用（未配置模型窗口，设置页可填）`;
+  const C = 2 * Math.PI * 8;  // r=8 的周长（viewBox 20，strokeWidth 3）
+  return (
+    <>
+      <Box
+        onClick={(e) => setAnchor(e.currentTarget)}
+        title={detail}
+        aria-label="上下文用量"
+        sx={{
+          width: 36, height: 36, flexShrink: 0, cursor: "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          borderRadius: "50%", bgcolor: "transparent",
+          color: tokens > 0 ? ringColor : "text.disabled",
+          "&:hover": { bgcolor: "action.hover" },
+        }}
+      >
+        <svg width={20} height={20} viewBox="0 0 20 20" style={{ transform: "rotate(-90deg)" }}>
+          {/* 底环：中性灰轨道（暗色下可见；无数据时唯一可见的部分） */}
+          <circle cx={10} cy={10} r={8} fill="none" stroke="rgba(128,128,128,0.4)" strokeWidth={3} />
+          {/* 进度弧：strokeDasharray 按百分比截断 */}
+          <circle
+            cx={10} cy={10} r={8} fill="none" stroke="currentColor" strokeWidth={3}
+            strokeLinecap="round"
+            strokeDasharray={`${(pct / 100) * C} ${C}`}
+          />
+        </svg>
+      </Box>
+      <Popover
+        open={!!anchor}
+        anchorEl={anchor}
+        onClose={() => setAnchor(null)}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Typography sx={{ p: 1.25, fontSize: 12.5, whiteSpace: "nowrap" }} color="text.secondary">
+          {detail}
+        </Typography>
+      </Popover>
+    </>
+  );
+});
+
 // 结构化 agent turn：把「思考 + 工具调用 + 结论」渲染为一个归属 agent 的整体，
 // 顺序固定为 思考/工具 在上、结论在中、状态脚注在下（绝不结论在最上）。
 const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false }: { m: ChatMsg; showRole?: boolean; copyable?: boolean }) {
   const steps = m.extra?.steps || [];
   const meta = m.extra?.meta;
+  // 真实 token 用量（行内只显示总数；明细进点击浮框——缓存写入/思考-回复拆分端点不给，缺省不显示）
+  const [tokAnchor, setTokAnchor] = useState<HTMLElement | null>(null);
+  const tin = Number(meta?.tokens_in) || 0;
+  const tout = Number(meta?.tokens_out) || 0;
+  const tcached = Math.min(Number(meta?.tokens_cached) || 0, tin || 0);  // 防脏数据：命中 ≤ 输入
+  const tokTotal = tin + tout;
   // 结论 = LLM 返回内容（B9）：若与最后一条 message step 同源则不重复渲染，
   // 否则以普通 MessageBubble 追加。不再用独立的「最终结果」醒目卡片。
   const lastMsg = [...steps].reverse().find((s) => s.type === "message") as ProcessItem | undefined;
@@ -618,14 +717,63 @@ const AgentTurn = memo(function AgentTurn({ m, showRole = true, copyable = false
       {meta ? (
         <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
           ✅ 完成：success={meta.success ? "True" : "False"} steps={String(meta.steps)} escalated={String(meta.escalated)} collected={String(meta.collected)}
+          {/* 真实 token 用量：行内只显示总数，明细在点击浮框（端点不回 usage 时省略） */}
+          {tokTotal > 0 && (
+            <Box
+              component="span"
+              onClick={(e) => setTokAnchor(e.currentTarget)}
+              title="Token 消耗明细"
+              sx={{ cursor: "pointer", ml: 0.5, "&:hover": { color: "text.primary" } }}
+            >
+              · Tokens: {fmtCompact(tokTotal)}
+            </Box>
+          )}
+          {(Number(meta.duration_ms) || 0) > 0 ? ` · 耗时 ${fmtDuration(Number(meta.duration_ms) || 0)}` : ""}
         </Typography>
       ) : null}
+      {/* Token 消耗明细浮框（图2 风格；端点没给的维度不显示） */}
+      <Popover
+        open={!!tokAnchor}
+        anchorEl={tokAnchor}
+        onClose={() => setTokAnchor(null)}
+        anchorOrigin={{ vertical: "top", horizontal: "left" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "left" }}
+      >
+        <Box sx={{ p: 1.5, minWidth: 250 }}>
+          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.75 }}>
+            <Typography sx={{ fontSize: 12.5, fontWeight: 600 }}>Token 消耗明细</Typography>
+            <Typography sx={{ fontSize: 12.5, color: "text.secondary" }}>总计 {fmtFull(tokTotal)}</Typography>
+          </Stack>
+          <DetailRow color="#4fc3f7" label="输入" value={fmtFull(tin)} />
+          {tcached > 0 && <DetailRow color="#66bb6a" label="缓存命中" value={fmtFull(tcached)} indent />}
+          {tcached > 0 && tin > tcached && <DetailRow color="#ef5350" label="缓存未命中" value={fmtFull(tin - tcached)} indent />}
+          <DetailRow color="#ba68c8" label="输出" value={fmtFull(tout)} />
+          {tin > 0 && tcached > 0 && (
+            <Box sx={{ mt: 1 }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
+                <Typography sx={{ fontSize: 12 }}>⚡ 缓存命中率</Typography>
+                <Typography sx={{ fontSize: 12, fontWeight: 600, color: "success.main" }}>
+                  {((tcached / tin) * 100).toFixed(1)}%
+                </Typography>
+              </Stack>
+              {/* 命中绿 / 未命中红的双色条（缓存写入端点未回传，不参与） */}
+              <Box sx={{ height: 6, borderRadius: 3, overflow: "hidden", display: "flex", bgcolor: "#ef5350" }}>
+                <Box sx={{ width: `${(tcached / tin) * 100}%`, bgcolor: "#66bb6a" }} />
+              </Box>
+              <Stack direction="row" spacing={1.5} sx={{ mt: 0.5 }}>
+                <LegendDot color="#66bb6a" label="命中" />
+                <LegendDot color="#ef5350" label="未命中" />
+              </Stack>
+            </Box>
+          )}
+        </Box>
+      </Popover>
     </Box>
   );
 });
 
 export default function Chat() {
-  const { messages, running, sendMessage, injectOrQueue, removeQueuedAt, queuedMessages, stopTask, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, modeByTask, setModeForTask, pendingApprovals, decideApproval, taskObjectives, dockOpen, openDockMenu } = useTaskStore();
+  const { messages, running, sendMessage, injectOrQueue, removeQueuedAt, queuedMessages, stopTask, processLogs, currentTaskId, fullAccessByTask, setFullAccessForTask, modeByTask, setModeForTask, pendingApprovals, decideApproval, taskObjectives, dockOpen, openDockMenu, snapshot } = useTaskStore();
   const [draft, setDraft] = useState("");
   // 助手名：从角色卡 frontmatter 解析（缺省 OmniAgent），用于顶栏与消息标签
   const [assistantName, setAssistantName] = useState("OmniAgent");
@@ -678,6 +826,28 @@ export default function Chat() {
     // 选中即成为该槽位默认（写回目录）；失败不影响本轮发送（发送时仍按 selection 覆盖）
     modelCatalogApi.setDefault("main", sel).catch(() => {});
   };
+
+  // ── 上下文圆环：真实 input_tokens（模型实际看到的上下文）+ 模型标称窗口 ──
+  // 运行中：本轮最新一次 llm_timing 的 tokens_in（SSE 实时推，每次模型响应更新）；
+  // 空闲/刷新后：回退最后一条带 meta 的 agent 消息（ctx_tokens 随历史持久化）。
+  const liveCtxTokens = useMemo(() => {
+    const traj = (snapshot?.trajectory || []) as Array<Record<string, unknown>>;
+    for (let i = traj.length - 1; i >= 0; i--) {
+      const s = traj[i];
+      if (s?.kind === "llm_timing" && (Number(s.tokens_in) || 0) > 0) return Number(s.tokens_in);
+    }
+    return 0;
+  }, [snapshot?.trajectory]);
+  const lastCtxTokens = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const mt = messages[i]?.extra?.meta as Record<string, unknown> | undefined;
+      const c = Number(mt?.ctx_tokens) || 0;
+      if (c > 0) return c;
+    }
+    return 0;
+  }, [messages]);
+  const ctxTokens = running && liveCtxTokens > 0 ? liveCtxTokens : lastCtxTokens;
+  const ctxWindow = Number(catalog?.current?.main?.context_window) || 0;
 
   // 对话时间线：messages（user/agent/system）+ 实时过程流（thinking/tool_call）
   // 按 ts 归并，过程流自然落在对应 user 消息与最终 agent 总结之间。
@@ -1094,6 +1264,8 @@ export default function Chat() {
               </Box>
             </Stack>
             <Stack direction="row" spacing={0.5} alignItems="center" sx={{ ml: "auto" }}>
+              {/* 上下文用量圆环：真实 input_tokens / 模型窗口，点击看详情 */}
+              <ContextRing tokens={ctxTokens} windowSize={ctxWindow} />
               {/* 免提（对空气说话）：开=常开 VAD 自动判句、回复自动播报、说话即声学打断 */}
               <IconButton
                 onClick={() => setHandsFree((v) => !v)}

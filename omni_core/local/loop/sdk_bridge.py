@@ -465,19 +465,28 @@ class SdkBridgeMixin:
         # T4.7：把 request（temperature / max_tokens）真正下发给模型——此前 SDK 主链路
         # 未传 model_settings，配置里的 request.max_tokens 形同虚设（模型用服务端默认）。
         # 同时登记「输出触顶上限」回调：被截断不报错，只会产出半截 JSON/工具参数。
+        # include_usage（2026-11-05）：SDK 只对官方 OpenAI 端点默认随流式请求 usage，
+        # OpenAI 兼容端点（DeepSeek 等）流式响应一律不带 usage → 真实 token 用量与
+        # 输出截断检测全部失效。这里显式请求；个别拒收该参数的端点可在 config 设
+        # brain.request.include_usage: false 关闭（关闭后退回端点默认行为）。
         _model_settings = None
         _max_output_tokens = 0
         try:
             _req = (self.brain_cfg or {}).get("request") or {}
             _mt = int(_req.get("max_tokens", 0) or 0)
-            if _mt > 0:
-                _max_output_tokens = _mt
+            _iu = bool(config.get_config("brain.request.include_usage", True))
+            if _mt > 0 or _iu:
                 from agents import ModelSettings
 
+                # 与原语义一致：仅 max_tokens>0 时下发 temperature/max_tokens；
+                # 否则只请求 usage，其余字段保持 None（沿用服务端默认）。
                 _model_settings = ModelSettings(
-                    temperature=float(_req.get("temperature", 0.3) or 0.3),
-                    max_tokens=_mt,
+                    temperature=float(_req.get("temperature", 0.3) or 0.3) if _mt > 0 else None,
+                    max_tokens=_mt if _mt > 0 else None,
+                    include_usage=True if _iu else None,
                 )
+                if _mt > 0:
+                    _max_output_tokens = _mt
         except Exception:
             _model_settings = None
             _max_output_tokens = 0

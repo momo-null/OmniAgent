@@ -329,3 +329,105 @@ def test_compress_history_uses_summary_instruction_and_strips_duplicate():
     assert SUMMARY_INSTRUCTION not in user_msg["content"]
     assert "旧上下文一行" in user_msg["content"]
     assert out[0]["content"].startswith("[历史压缩摘要]")
+
+
+# --- 真实 usage 自校准（2026-11-05）--------------------------------------------
+def _usage_ns(inp: int, out: int = 10, cached: int = 0):
+    """构造 SDK Usage 形状的响应替身（input_tokens_details.cached_tokens 含在内）。"""
+    return types.SimpleNamespace(
+        output=[],
+        usage=types.SimpleNamespace(
+            input_tokens=inp, output_tokens=out, total_tokens=inp + out,
+            input_tokens_details=types.SimpleNamespace(cached_tokens=cached),
+            output_tokens_details=types.SimpleNamespace(reasoning_tokens=0),
+        ),
+    )
+
+
+class _UsageInnerModel(_InnerModel):
+    """内层模型替身（带 usage）：input_tokens 可按调用序号由测试指定。"""
+
+    def __init__(self, inputs):
+        super().__init__()
+        self.inputs = list(inputs)      # 每次调用的 input_tokens；用尽后保持最后值
+
+    async def get_response(self, *args, **kwargs):
+        r = await super().get_response(*args, **kwargs)
+        r.usage = types.SimpleNamespace(
+            input_tokens=self.inputs[min(len(self.calls) - 1, len(self.inputs) - 1)],
+            output_tokens=10, total_tokens=0,
+            input_tokens_details=types.SimpleNamespace(cached_tokens=0),
+            output_tokens_details=types.SimpleNamespace(reasoning_tokens=0),
+        )
+        return r
+
+
+def test_calibration_anchors_on_first_usage_and_triggers_compaction():
+    """首个真实 usage 直接锚定 k：纯估算低于阈值的内容，按校准预测应触发压缩。"""
+    calls = []
+
+    def summ(items, si=None):
+        calls.append(1)
+        return "校准后的摘要"
+
+    inner = _UsageInnerModel([1500])   # 真实 1500 / 估算 300 → k = 5.0
+    model = _CompactionModel(inner, threshold_tokens=1000, retain_ratio=0.5,
+                            summarize=summ)
+    items = [_msg("a" * 400) for _ in range(3)]       # est = 3 × 100 = 300
+    _invoke(model, items)
+    assert model._k_samples == 1 and abs(model._k - 5.0) < 1e-9, "首样本应直接锚定"
+
+    # 第二次调用：同样 est=300，纯估算 < 1000 不该压；校准预测 1500 > 1000 必须压
+    _invoke(model, items)
+    assert calls, "校准预测超阈值应触发压缩（纯估算会漏）"
+    sent = inner.calls[-1]["input"]
+    assert sent[0].get("content", "").startswith("[历史压缩摘要]"), "压缩产物应在请求头部"
+
+
+def test_no_usage_keeps_pure_estimate_behavior():
+    """端点不回 usage：k 恒为 0，_predict 退化为纯估算，行为与历史版本一致。"""
+    calls = []
+
+    def summ(items, si=None):
+        calls.append(1)
+        return "不该被调用"
+
+    model, inner = _mk_model(summ)
+    items = [_msg("a" * 400) for _ in range(3)]
+    _invoke(model, items)
+    _invoke(model, items)
+    assert model._k_samples == 0 and model._k == 0.0
+    assert calls == [], "无 usage 时纯估算 300 < 1000 不得压缩"
+    assert inner.calls[-1]["input"] == items
+
+
+def test_calibration_rejects_outlier_samples():
+    """离谱样本（比率超出 [0.2, 8]）不入学率：k 保持 0（纯估算）。"""
+    inner = _UsageInnerModel([150000])   # 真实/估算 = 500 → 离群
+    model = _CompactionModel(inner, threshold_tokens=1000, retain_ratio=0.5,
+                             summarize=lambda items, si=None: "摘要")
+    _invoke(model, [_msg("a" * 400) for _ in range(3)])
+    assert model._k_samples == 0 and model._k == 0.0
+
+
+def test_calibration_ema_smoothing():
+    """第二次起按 EMA（0.7 旧 + 0.3 新）平滑，防单次抖动。"""
+    inner = _UsageInnerModel([1500, 300])   # 样本1 k=5.0；样本2 k=1.0
+    model = _CompactionModel(inner, threshold_tokens=100000, retain_ratio=0.5,
+                             summarize=lambda items, si=None: "摘要")
+    items = [_msg("a" * 400) for _ in range(3)]
+    _invoke(model, items)
+    _invoke(model, items)
+    assert model._k_samples == 2
+    assert abs(model._k - (0.7 * 5.0 + 0.3 * 1.0)) < 1e-9
+
+
+def test_usage_of_extracts_cached_and_legacy_fields():
+    """_usage_of：SDK 归一化字段 + cached_tokens 明细；旧字段名兜底；空 usage 返回 None。"""
+    u = sl._usage_of(_usage_ns(123, out=45, cached=77))
+    assert u == {"in": 123, "out": 45, "cached": 77}
+    legacy = types.SimpleNamespace(usage=types.SimpleNamespace(
+        prompt_tokens=11, completion_tokens=22))
+    assert sl._usage_of(legacy) == {"in": 11, "out": 22, "cached": 0}
+    assert sl._usage_of(types.SimpleNamespace(output=[])) is None
+    assert sl._usage_of(None) is None

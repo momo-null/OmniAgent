@@ -27,6 +27,8 @@ from omni_core.brain.sdk_loop import run_subtask_sdk
 RESULT_KEYS = {
     "success", "reason", "steps", "escalated", "escalate_reason", "provider_error",
     "llm_calls", "repeat_failures", "paused",
+    # 真实 token 用量（2026-11-05）：端点不回 usage 时为 0
+    "tokens_in", "tokens_out", "tokens_cached", "ctx_tokens",
 }
 
 USER_INPUT = "执行任务"
@@ -126,6 +128,7 @@ def test_snapshot_a_plain_text_finish_without_done_when(monkeypatch):
         "llm_calls": 0,
         "repeat_failures": 0,
         "paused": False,
+        "tokens_in": 0, "tokens_out": 0, "tokens_cached": 0, "ctx_tokens": 0,
     }
     # items 演化：首轮仅本轮 user_input（无历史、无技能目录）
     assert len(runner.calls) == 1
@@ -185,6 +188,7 @@ def test_snapshot_c_done_when_met_finishes_success(monkeypatch):
         "llm_calls": 0,
         "repeat_failures": 0,
         "paused": False,
+        "tokens_in": 0, "tokens_out": 0, "tokens_cached": 0, "ctx_tokens": 0,
     }
     assert len(runner.calls) == 1
     assert all(PUSH_BACK_MARK not in str(m.get("content", ""))
