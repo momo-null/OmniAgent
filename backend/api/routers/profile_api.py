@@ -87,3 +87,36 @@ async def put_character(request: Request):
         return JSONResponse({"ok": True, "chars": len(character)})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@router.get("/instructions")
+async def get_instructions():
+    """纪律文件（AGENTS.md）全文——system prompt 的用户可编辑层（M2.5 手机编辑器）。
+
+    与 character 卡同语义：改动自下一次运行起生效（run 内沿用起始快照）。
+    """
+    try:
+        from omni_core.local import runtime_paths as P
+        p = P.global_agents_file()
+        content = p.read_text(encoding="utf-8") if p.exists() else ""
+        return JSONResponse({"ok": True, "content": content, "exists": p.exists()})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@router.put("/instructions")
+async def put_instructions(request: Request):
+    """纪律文件人工写入口：覆盖全局 AGENTS.md（下次运行生效）。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    content = (body or {}).get("content")
+    if not isinstance(content, str):
+        return JSONResponse({"ok": False, "error": "content 必须是字符串"}, status_code=422)
+    try:
+        from omni_core.local import runtime_paths as P
+        _write_with_backup(P.global_agents_file(), content)
+        return JSONResponse({"ok": True, "chars": len(content)})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
