@@ -158,6 +158,13 @@ export const modelCatalogApi = {
   // 设置槽位默认模型；selection 为空串 = 跟随配置
   setDefault: (slot: string, selection: string) =>
     http.patch("/api/runtime/models/default", { slot, selection }),
+  // 从端点干跑拉取 /v1/models（不落盘；合并进前端草稿，点保存才写目录）。
+  // api_key 留空 = 沿用该 provider 已存密钥；base_url 用草稿当前值。
+  fetchRemote: (payload: { provider_id: string; base_url: string; api_key?: string; api_key_env?: string; proxy?: string }) =>
+    http.post<{ ok: boolean; models: { id: string; contextWindow: number }[]; error?: string }>(
+      "/api/runtime/models/fetch",
+      payload,
+    ),
 };
 
 // ── Plan C 运行时控制台（/api/runtime） ─────────────

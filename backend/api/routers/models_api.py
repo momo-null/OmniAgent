@@ -89,7 +89,7 @@ async def put_models(req: Request) -> JSONResponse:
 
 @router.patch("/models/default")
 async def set_model_default(req: Request) -> JSONResponse:
-    """设置某槽位默认模型；selection 为空 = 跟随配置（brain / runtime.agents）。"""
+    """设置某槽位的默认模型；selection 为空 = 跟随配置（brain / runtime.agents）。"""
     try:
         body = await req.json()
     except Exception:
@@ -105,3 +105,38 @@ async def set_model_default(req: Request) -> JSONResponse:
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"ok": False, "error": f"设置默认模型失败: {e}"}, status_code=500)
     return JSONResponse({"ok": True})
+
+
+@router.post("/models/fetch")
+async def fetch_models(req: Request) -> JSONResponse:
+    """从端点干跑拉取 /v1/models，返回 ``{id, contextWindow}`` 清单（**不落盘**）。
+
+    body: ``{"provider_id": "...", "base_url": "...", "api_key": "", "proxy": ""}``。
+    base_url 用前端草稿里的值（页面是编辑缓冲区语义，保存前的值也生效）；api_key
+    留空 = 沿用该 provider 已存密钥（与保存接口同一语义）。合并进草稿由前端完成。
+    """
+    try:
+        body = await req.json()
+    except Exception:
+        return _bad("请求体不是合法 JSON")
+    if not isinstance(body, dict):
+        return _bad("请求体必须是对象")
+    base_url = str(body.get("base_url") or "").strip()
+    if not base_url:
+        return _bad("base_url 不能为空")
+    try:
+        remote = model_router.list_remote_models(
+            base_url,
+            api_key=str(body.get("api_key") or ""),
+            api_key_env=str(body.get("api_key_env") or ""),
+            proxy=str(body.get("proxy") or ""),
+            provider_id=str(body.get("provider_id") or ""),
+        )
+    except ValueError as e:
+        return _bad(str(e))
+    except Exception as e:  # noqa: BLE001 —— 网络/超时/形状错误统一兜底
+        return JSONResponse({"ok": False, "error": f"拉取失败: {e}"}, status_code=502)
+    return JSONResponse({
+        "ok": True,
+        "models": [{"id": mid, "contextWindow": cw} for mid, cw in remote.items()],
+    })

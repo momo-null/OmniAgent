@@ -102,6 +102,9 @@ def _endpoint_of(pid: str, prov: Dict[str, Any], model_id: str) -> Dict[str, Any
         "api_key_env": env_key,
         "proxy": str(prov.get("proxy") or "").strip(),
         "capabilities": {"vision": bool(model.get("vision"))},
+        # 模型标称上下文窗口（模型条目配置；0 = 未配置）。通用 OpenAI 兼容协议不返回
+        # 该字段（vLLM/OpenRouter 等端点特性才有），只能配置声明，不做运行时探测。
+        "contextWindow": int(model.get("contextWindow") or 0),
         "request": dict(prov.get("request") or {}),
         "model_provider_id": pid,
     }
@@ -173,6 +176,8 @@ def list_models() -> Dict[str, Any]:
                     "id": str(m.get("id")),
                     "label": str(m.get("label") or m.get("id")),
                     "vision": bool(m.get("vision")),
+                    # 标称上下文窗口（token）；0 = 未配置（前端圆环退化为只显示绝对值）
+                    "contextWindow": int(m.get("contextWindow") or 0),
                 }
                 for m in _models_of(p)
             ],
@@ -188,6 +193,8 @@ def list_models() -> Dict[str, Any]:
             "model": str(ep.get("model") or ""),
             "base_url": str(ep.get("base_url") or ""),
             "provider_id": str(ep.get("model_provider_id") or ""),
+            # 当前生效模型的标称上下文窗口（前端上下文圆环的分母）
+            "context_window": int(ep.get("contextWindow") or 0),
             # source: catalog=目录真源；none=未配置
             "source": "catalog" if ep else "none",
         }
@@ -222,6 +229,8 @@ def _clean_provider(node: Dict[str, Any], existing: Dict[str, Any]) -> Dict[str,
             "id": mid,
             "label": str(m.get("label") or "").strip(),
             "vision": bool(m.get("vision")),
+            # 标称上下文窗口（token）；非法值归 0（= 未配置）
+            "contextWindow": _int_or_0(m.get("contextWindow")),
         })
     out["models"] = models
     return out
@@ -270,3 +279,102 @@ def set_default(slot: str, selection: Optional[str]) -> None:
     data["defaults"] = defaults
     config.save_models_config(data)
     config.reload_config()
+
+
+# --- 端点模型清单拉取（设置页「自动获取」） ----------------------------------
+def _int_or_0(v: Any) -> int:
+    """宽容转 int（配置/端点字段可能是 str/float/非法值）；非正数归 0。"""
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError):
+        return 0
+    return n if n > 0 else 0
+
+
+# 端点模型条目里常见的上下文窗口字段名（按序取第一个正值）：
+# - context_length: OpenRouter / 部分 vLLM
+# - max_model_len:  vLLM / llama.cpp
+# - context_window / max_context_length: 其他兼容实现
+_CTX_FIELDS = ("context_length", "max_model_len", "context_window", "max_context_length")
+
+
+def _entry_context_window(entry: Any) -> int:
+    """从 /v1/models 条目尽力解析上下文窗口；拿不到返回 0（DeepSeek 官方等不返回）。"""
+    if not isinstance(entry, dict):
+        return 0
+    for f in _CTX_FIELDS:
+        n = _int_or_0(entry.get(f))
+        if n > 0:
+            return n
+    return 0
+
+
+def list_remote_models(base_url: str, api_key: str = "", api_key_env: str = "",
+                       proxy: str = "", provider_id: str = "",
+                       timeout: float = 15.0) -> Dict[str, int]:
+    """干跑拉取 ``GET {base_url}/v1/models``，返回 ``{模型 id: 上下文窗口}``（**不落盘**）。
+
+    只做 HTTP + 解析，合并/保存由调用方负责（设置页是编辑缓冲区语义：拉回来的
+    清单先进前端草稿，用户点保存才写目录）。鉴权解析顺序：显式 api_key →
+    provider_id 对应的已存 key（api_key 留空 = 保持不变的同一语义）→ api_key_env
+    → 本机端点 dummy。
+
+    上下文窗口尽力解析常见字段（OpenRouter ``context_length`` / vLLM
+    ``max_model_len`` 等）；DeepSeek 官方等不返回的端点得 0，调用方按未配置处理。
+
+    Raises:
+        ValueError: base_url 为空或响应形状不兼容；ConnectionError: 网络失败。
+    """
+    import httpx
+
+    base_url = str(base_url or "").strip().rstrip("/")
+    if not base_url:
+        raise ValueError("base_url 不能为空")
+    api_key = str(api_key or "").strip()
+    if not api_key and provider_id:
+        saved = _providers().get(str(provider_id).strip())
+        if isinstance(saved, dict):
+            api_key = str(saved.get("api_key") or "").strip()
+    env_key = str(api_key_env or "").strip()
+    if not api_key and env_key:
+        api_key = os.environ.get(env_key, "")
+    if not api_key and _is_local_endpoint(base_url):
+        api_key = "dummy"
+
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    client_kw: Dict[str, Any] = {"timeout": timeout}
+    proxy = str(proxy or "").strip()
+    if proxy:
+        client_kw["proxy"] = proxy
+    # 目录里 base_url 两种惯例并存（…/v1 与不带 /v1，如 DeepSeek 官方）：
+    # 带 /v1 结尾直接拼 /models；否则先试 /v1/models 再退 /models（首个 200 即用）
+    if re.search(r"/v\d+$", base_url):
+        candidates = [f"{base_url}/models"]
+    else:
+        candidates = [f"{base_url}/v1/models", f"{base_url}/models"]
+    payload: Any = None
+    last_err: Optional[Exception] = None
+    with httpx.Client(**client_kw) as client:
+        for url in candidates:
+            try:
+                resp = client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    break
+                last_err = RuntimeError(f"HTTP {resp.status_code}: {url}")
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+    if payload is None:
+        raise ConnectionError(f"模型清单拉取失败: {last_err}")
+
+    entries = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        raise ValueError("端点响应不是 OpenAI 兼容的 {data: [...]} 形状")
+    remote: Dict[str, int] = {}
+    for e in entries:
+        mid = str(e.get("id") or "").strip() if isinstance(e, dict) else ""
+        if mid:
+            remote[mid] = _entry_context_window(e)
+    if not remote:
+        raise ValueError("端点返回的模型清单为空")
+    return remote

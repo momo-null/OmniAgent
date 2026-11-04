@@ -6,6 +6,7 @@ export interface ModelEntry {
   id: string; // 模型 id（请求体里的真实 model 字段）
   label: string; // 展示名（空则回退 id）
   vision: boolean;
+  contextWindow?: number; // 标称上下文窗口（token）；0/缺省 = 未配置
 }
 
 export interface ModelProvider {
@@ -33,6 +34,7 @@ export interface ModelSlotCurrent {
   model: string; // 实际生效的模型 id
   base_url: string;
   provider_id: string;
+  context_window?: number; // 当前生效模型的标称上下文窗口（token）；0/缺省 = 未配置
   // catalog=目录真源；none=未配置
   source: "catalog" | "none";
 }

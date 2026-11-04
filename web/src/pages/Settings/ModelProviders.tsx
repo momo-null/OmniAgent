@@ -99,6 +99,37 @@ export default function ModelProviders() {
     setNewModel("");
   };
 
+  // 自动获取：从端点 /v1/models 拉清单合并进**草稿**（点保存才落盘）。
+  // 已有条目原样保留（手改的 label/vision/窗口不被覆盖），只追加新 id；
+  // 新条目尽力预填 contextWindow（端点返回该字段时；DeepSeek 官方等不返回则为 0）。
+  const [fetching, setFetching] = useState(false);
+  const fetchModels = async (id: string) => {
+    const p = drafts[id];
+    if (!p?.base_url.trim() || fetching) return;
+    setErr(""); setMsg(""); setFetching(true);
+    try {
+      const r = await modelCatalogApi.fetchRemote({
+        provider_id: id,
+        base_url: p.base_url.trim(),
+        api_key: p.api_key ?? "",
+        api_key_env: p.api_key_env ?? "",
+        proxy: p.proxy ?? "",
+      });
+      const remote = r.data?.models || [];
+      const known = new Set(p.models.map((m) => m.id));
+      const added = remote.filter((m) => m.id && !known.has(m.id))
+        .map((m) => ({ id: m.id, label: m.id, vision: false, contextWindow: m.contextWindow || 0 }));
+      patch(id, { models: [...p.models, ...added] });
+      setMsg(added.length > 0
+        ? `拉取到 ${remote.length} 个模型，新增 ${added.length} 个（点「保存」生效）`
+        : `拉取到 ${remote.length} 个模型，目录已是最新`);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setFetching(false);
+    }
+  };
+
   const save = async () => {
     setErr(""); setMsg("");
     try {
@@ -208,6 +239,12 @@ export default function ModelProviders() {
                         onChange={(e) => patch(sel, { models: cur.models.map((x, j) => (j === i ? { ...x, id: e.target.value } : x)) })} />
                       <TextField label="显示名" size="small" value={m.label} sx={{ flex: 1 }}
                         onChange={(e) => patch(sel, { models: cur.models.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)) })} />
+                      <Tooltip title="标称上下文窗口（token）；Chat 页上下文圆环的分母。0/留空 = 未配置。「自动获取」会尽力预填">
+                        <TextField label="窗口" size="small" type="number" sx={{ width: 118 }}
+                          value={m.contextWindow || ""}
+                          placeholder="未配置"
+                          onChange={(e) => patch(sel, { models: cur.models.map((x, j) => (j === i ? { ...x, contextWindow: Math.max(0, Math.floor(Number(e.target.value) || 0)) } : x)) })} />
+                      </Tooltip>
                       <Tooltip title="视觉能力">
                         <Switch size="small" checked={m.vision}
                           onChange={(e) => patch(sel, { models: cur.models.map((x, j) => (j === i ? { ...x, vision: e.target.checked } : x)) })} />
@@ -228,6 +265,12 @@ export default function ModelProviders() {
                       onChange={(e) => setNewModel(e.target.value)} sx={{ flex: 1 }} />
                     <Button size="small" variant="outlined" startIcon={<PlusIcon />}
                       disabled={!newModel.trim()} onClick={() => addModel(sel)}>添加模型</Button>
+                    <Tooltip title="从端点 /v1/models 拉取模型清单合并进下方列表（用当前填写的 Base URL / Key；已有条目不会被覆盖，点「保存」生效）">
+                      <Button size="small" variant="outlined" disabled={!cur.base_url.trim() || fetching}
+                        onClick={() => fetchModels(sel)}>
+                        {fetching ? "拉取中…" : "自动获取"}
+                      </Button>
+                    </Tooltip>
                   </Stack>
                 </Stack>
 
