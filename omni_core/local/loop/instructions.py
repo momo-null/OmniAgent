@@ -223,10 +223,20 @@ class InstructionMixin:
         纯文本收尾判成功 → 任务静默假成功（doc/plans/implemented/memory-architecture.md §6）。
         判断**全 LLM**（是否在尝试发起但未派发调用）,零厂商格式字面量——与
         「语义判断全 LLM、脚本只做簿记」红线同构;仅 oneshot 无校验条件路径触发。
-        judge 异常/无 brain_cfg/配置关 → 返回 None（fail-open=现状）。
+
+        取向门（2026-11-04）：**对话取向（mode=chat）不付这道门**。它防的是「oneshot 任务
+        把没派发的畸形调用当结论、静默假成功」,而 chat 的纯文本收尾**就是交付物本身**——
+        没有「任务成功」这件事可被误判。judge 是一次不计入 brain_calls 的额外模型往返
+        （timeout 90s）,压在用户已经看完答案之后：本机同一句闲聊实测,口播完成 → run 结束
+        的门内尾巴 **34.29s**,关门后 **0.04s**（A/B 口径：runtime.long_task
+        .finish_intent_check=false）。task/auto 取向语义不变。
+
+        judge 异常/无 brain_cfg/配置关/对话取向 → 返回 None（fail-open=现状）。
         """
         brain_cfg = getattr(self, "brain_cfg", None)
         if not brain_cfg:
+            return None
+        if str(getattr(self, "mode", "auto") or "auto") == "chat":
             return None
         try:
             if not bool(config.get_config("runtime.long_task.finish_intent_check", True)):

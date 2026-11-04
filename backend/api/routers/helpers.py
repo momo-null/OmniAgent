@@ -84,6 +84,13 @@ def _ensure_outbox(task_id: str) -> Dict[str, "collections.deque"]:
 # 与前端"按 id upsert 覆盖"的幂等语义一致。
 _outbox_seq = itertools.count(1)
 _outbox_cursor: Dict[tuple, int] = {}
+# 本轮派发点（按 task）：旁路订阅者**首次连接/断线重连**时的游标地板。
+# 没有它，无游标的 drain 从 0 起算 → 把上一轮（乃至 deque 里 300 条窗口内所有轮次）
+# 的 message/chat 全量重放给新连接，表现为"发第二条消息时上一条回复又冒出来一次"
+# （2026-11-04 手机端实录；``_stream_gen`` 的 finally 注释承诺的是"从当前窗口续读、
+# 不重放整段历史"，这里把它真正兑现）。
+_outbox_turn_floor: Dict[str, int] = {}
+_last_seq = [0]
 _OUTBOX_CHANNELS = ("chat", "debug", "thinking", "toolcall", "message",
                     "approval", "approval_resolved", "tasks_changed")
 
@@ -91,7 +98,17 @@ _OUTBOX_CHANNELS = ("chat", "debug", "thinking", "toolcall", "message",
 def _stamp(entry: dict) -> dict:
     """给事件盖单调序号（多播游标的唯一依据）。"""
     entry["seq"] = next(_outbox_seq)
+    _last_seq[0] = entry["seq"]
     return entry
+
+
+def mark_turn_start(task_id: str) -> None:
+    """标记本轮派发点：此后新起的旁路订阅只拿本轮事件，不重放上一轮。
+
+    调用时机 = 本轮第一条事件落 outbox 之前（``api_chat``/``api_wake`` 的 push_chat
+    用户回显前）。已在读的订阅不受影响——它有自己的游标。
+    """
+    _outbox_turn_floor[task_id or "_global"] = _last_seq[0]
 
 
 def outbox_drain(tid: str, sub_id: str = "") -> Dict[str, list]:
@@ -99,7 +116,8 @@ def outbox_drain(tid: str, sub_id: str = "") -> Dict[str, list]:
 
     - ``sub_id`` 为空 → 主订阅者：消费即清空（前端单页面，原行为不变）；
     - ``sub_id`` 非空 → 旁路订阅者：不清空，按自己的游标只取新增（Web 与语音可
-      同时订阅同一 task 而不互抢）。游标以 seq 为准，落在 deque 之外即视为追不上
+      同时订阅同一 task 而不互抢）。**没有游标时（首连/重连）从本轮派发点起算**
+      （见 ``mark_turn_start``），不重放上一轮；游标落在 deque 之外即视为追不上
       （deque 有界 300），下次只从当前窗口续读——语音场景可接受。
     """
     box = _ensure_outbox(tid)
@@ -111,7 +129,7 @@ def outbox_drain(tid: str, sub_id: str = "") -> Dict[str, list]:
             out[ch] = items
         return out
     key = (tid, sub_id)
-    cur = int(_outbox_cursor.get(key, 0))
+    cur = int(_outbox_cursor.get(key, _outbox_turn_floor.get(tid, 0)))
     high = cur
     for ch in _OUTBOX_CHANNELS:
         items = [e for e in list(box[ch]) if int(e.get("seq") or 0) > cur]

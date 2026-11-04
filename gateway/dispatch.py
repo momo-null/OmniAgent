@@ -324,17 +324,22 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         def _on_llm_delta(role: str, kind: str, block_id: str, text: str, model: str) -> None:
             nonlocal _last_answer
             if kind == "reasoning" and role == "brain":
-                # 思考链持久化（2026-11-03）：emitter 把推理作为 reasoning 增量发出，
-                # 此前这里只认 message、思考全被丢弃——会话记录里 197 条 assistant
-                # 仅 3 条带 thinking step 的根因。按 block_id 累积成 thinking step
-                # 进 turn_steps，Web 端 ThinkBlock 由此渲染；partial 快照由 final
-                # 收口覆盖，历史组装不带思考要点（杠杆3），无上下文成本。
+                # 思考链持久化（2026-11-03）：此前这里只认 message、思考全被丢弃——
+                # 会话记录里 197 条 assistant 仅 3 条带 thinking step 的根因。
+                # 按 block_id 收成 thinking step 进 turn_steps，Web 端 ThinkBlock 由此渲染；
+                # partial 快照由 final 收口覆盖，历史组装不带思考要点（杠杆3），无上下文成本。
+                #
+                # 契约（emitter.py `_delta`/`_emit`）：同一 block_id 的回调携带的是
+                # 「截至当前的**完整快照**」，消费端按 id upsert（Web 侧
+                # `helpers._merge_thinking_step` 就是 `s["content"] = content`）。
+                # 2026-11-04 修复：此处曾写成 `+=` 把快照当增量，O(n²) 前缀爆炸
+                # （`回复回复命回复命苦…`，单条最长 3.2MB，qq 会话文件 93% 体积）。
                 st = _think_acc.get(block_id)
                 if st is None:
                     st = {"type": "thinking", "id": block_id, "model": model, "content": ""}
                     _think_acc[block_id] = st
                     turn_steps.append(st)
-                st["content"] += text
+                st["content"] = text
                 _flush_partial()
             elif kind == "message" and role == "brain":
                 _last_answer = text

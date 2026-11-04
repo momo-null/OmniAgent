@@ -40,6 +40,7 @@ from backend.api.routers.helpers import (
     json,
     live_snapshot,
     manager,
+    mark_turn_start,
     push_chat,
     push_message_stream,
     push_tasks_changed,
@@ -115,6 +116,12 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     # 阶段 1：运行体句柄存于 RuntimeManager 复合键 (task_id, agent_id)，不再用全局 _loop
     _last_answer = ""  # 累积大脑最后一段口播，作为结尾「结果框」内容
     loop = None  # ToolLoop 句柄（finally 收尾补投需要；构造失败时为 None）
+    # 防御：finally 要读它判 paused。**必须在 try 之前初始化**——run_task 之前的任何一步
+    # （模型目录缺该槽位、配置快照、TaskSpec 组装）抛了，finally 里的 `result` 就是
+    # UnboundLocalError，它会盖掉真正的失败面：本轮既没有终态记录推到前端，running 也已被
+    # _finish_task 置 False，表现为「对话区卡到超时/莫名失败」而不是那条真实异常
+    # （2026-11-04 本机实测：model="默认" 请求 → 线程 Thread-2 崩在 line 378）。
+    result = None
     _force = False  # force 打断标记（TAM 区读取即消费；finally 用于跳过补投）
     _pending_injections: List[Dict[str, Any]] = []  # 收尾补投：未消费注入
     turn_steps: List[Dict[str, Any]] = []  # 本轮 agent 的执行轨迹（思考 + 工具调用）
@@ -281,7 +288,6 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                                if (executor_cfg and executor_cfg.get("enabled")) else "回退主模型(brain)"),
             "max_steps": max_steps,
         })
-        result = None  # 防御：run_task 异常时 finally 仍能安全判 paused
         _turn_ts0 = time.time()  # 本轮起点：产物登记表按 ts 过滤出本轮新增产物
         result = loop.run_task(spec)
         _reason = result.get("reason") or ""
@@ -768,6 +774,7 @@ async def api_chat(request: Request):
     except Exception:
         pass
 
+    mark_turn_start(task_id)
     push_chat("user", last_user, task_id=task_id)
     threading.Thread(target=_rt._dispatch_chat,
                      args=(task_id, messages, max_steps, full_access, AGENT_MAIN, req.model,
@@ -839,6 +846,7 @@ async def api_wake(request: Request):
     except Exception:
         pass
 
+    mark_turn_start(task_id)
     push_chat("user", wake_text, task_id=task_id)
     max_steps = int(config.get_config("runtime.default_max_steps", 40))
     threading.Thread(target=_rt._dispatch_chat,

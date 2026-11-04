@@ -90,6 +90,27 @@ def test_outbox_stream_chunks_get_new_seq():
     assert [e["content"] for e in second] == ["你好"], "同一 block 的更新也要再投一次"
 
 
+def test_outbox_side_subscriber_reconnect_starts_at_turn_floor():
+    """断线重连的旁路订阅从**本轮派发点**起算：不重放上一轮，也不丢本轮。
+
+    回归：手机端每轮新开一条 SSE（sub 同名），旧实现无游标即从 0 取，把上一轮的
+    message/chat 全量重放 → 发第二条消息时上一条回复重复出现。
+    """
+    tid = "t_multicast_reconnect"
+    hp.outbox_reset_cursor(tid, "phone")
+    hp.push_chat("user", "上一轮问", task_id=tid)
+    hp.push_chat("agent", "上一轮答", task_id=tid)
+    hp.outbox_reset_cursor(tid, "phone")          # 上一轮的订阅断开
+
+    hp.mark_turn_start(tid)                        # 新一轮派发点
+    hp.push_chat("user", "这一轮问", task_id=tid)
+    hp.push_message_stream("brain", "m", f"b-{tid}", "这一轮口播", task_id=tid)
+
+    got = hp.outbox_drain(tid, "phone")
+    assert [e["text"] for e in got["chat"]] == ["这一轮问"], "上一轮不重放"
+    assert [e["content"] for e in got["message"]] == ["这一轮口播"], "本轮事件不丢"
+
+
 # ------------------------------------------- 注意力预算：任务卡 + 按需拉取
 
 def test_task_card_line_is_bounded():
@@ -209,6 +230,38 @@ def test_mode_brain_cfg_removed():
     显式 model 选择与主槽路径由 _make_brain_cfg 承担。"""
     assert not hasattr(hp, "_mode_brain_cfg")
     assert hasattr(hp, "_make_brain_cfg")
+
+
+# ---------------------------------- 收尾意图门按取向收口（2026-11-04 手机 chat 尾巴）
+
+def test_chat_mode_skips_finish_intent_gate(monkeypatch):
+    """对话取向**不装**收尾意图门。
+
+    门防的是「oneshot 任务把没派发的畸形调用当结论、静默假成功」；chat 的纯文本收尾就是
+    交付物本身，没有可被误判的「任务成功」。而门自身是一次不计入 brain_calls 的模型往返
+    （timeout 90s），压在用户已经看完答案之后——本机同一句闲聊实测：口播完成 → run 结束
+    门内 34.29s、关门 0.04s。task / auto 取向语义不变，仍然装门。
+    """
+    from omni_core.local.loop import core as tl
+    from tests._env import install_fake_env
+
+    class _FakeExec:
+        kind = "host"
+
+        def text_of(self, percept):
+            return ""
+
+        def verify_done(self, condition, percept):
+            return (False, "noop")
+
+    install_fake_env(monkeypatch, _FakeExec)
+    monkeypatch.setattr(tl.config, "load_config", lambda: {})
+    cfg = {"model": "m", "base_url": "http://localhost:9", "api_key": "test"}
+    assert tl.ToolLoop(brain_cfg=cfg, mode="chat")._plain_finish_judge(None) is None, \
+        "对话取向不付收尾意图门"
+    assert callable(tl.ToolLoop(brain_cfg=cfg, mode="task")._plain_finish_judge(None)), \
+        "task 取向仍装门（oneshot 假成功守门人不动）"
+    assert callable(tl.ToolLoop(brain_cfg=cfg, mode="auto")._plain_finish_judge(None))
 
 
 # --------------------------------------------- mode 持久化（2026-10-31 与通道解绑）

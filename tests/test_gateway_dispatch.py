@@ -709,13 +709,17 @@ class _CapturingLoop:
 
 
 class _ReasoningLoop(_CapturingLoop):
-    """模拟 emitter：reasoning 增量（同 block_id 两段）+ message 增量。"""
+    """模拟 emitter：同 block_id 两次回调携带的是「完整快照」（非增量），最后 message 快照。
+
+    契约来源 `omni_core/local/loop/emitter.py:_delta`——text 是「截至当前的完整文本」。
+    消费端必须按 id 覆盖：写成 `+=` 会得到 "这是这是思考链"（O(n²) 前缀膨胀）。
+    """
 
     def run_task(self, spec):
         cb = self.kwargs.get("on_llm_delta")
         if cb:
             cb("brain", "reasoning", "brain-R0-x", "这是", "m")
-            cb("brain", "reasoning", "brain-R0-x", "思考链", "m")
+            cb("brain", "reasoning", "brain-R0-x", "这是思考链", "m")
             cb("brain", "message", "brain-M0-x", "回话", "m")
         return super().run_task(spec)
 
@@ -775,7 +779,11 @@ def test_silent_run_marked_and_skipped_from_history(monkeypatch):
 
 
 def test_reasoning_delta_persisted_as_thinking_step(monkeypatch):
-    """思考链修复：reasoning 增量按 block_id 累积成 thinking step 落库。"""
+    """思考链落库：同 block_id 的快照按 id 覆盖（不是拼接）。
+
+    回归闸门：`st["content"] = text` 改成 `+=` 时本用例立刻失败
+    （会得到 "这是这是思考链"）——那正是 2026-11-04 修掉的 O(n²) 前缀膨胀。
+    """
     _fake_brain(monkeypatch)
     import omni_core.local.loop as loop_mod
     monkeypatch.setattr(loop_mod, "ToolLoop", _ReasoningLoop)
@@ -787,5 +795,5 @@ def test_reasoning_delta_persisted_as_thinking_step(monkeypatch):
               and not (m.get("extra") or {}).get("partial")]
     thinks = [s for s in finals[0]["extra"]["steps"] if s.get("type") == "thinking"]
     assert len(thinks) == 1
-    assert thinks[0]["content"] == "这是思考链"          # 同 block_id 两段累积
+    assert thinks[0]["content"] == "这是思考链"          # 快照覆盖：等于最后一次回调的快照
     assert thinks[0]["id"] == "brain-R0-x"

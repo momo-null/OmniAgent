@@ -131,8 +131,8 @@ class ToolLoop(
         # tool_call。内核只接一个布尔，**不感知消息来源**；谁该关由调用方（网关/通道）决定。
         self.tools_enabled = bool(tools_enabled)
         self.tool_allowlist = {str(x) for x in (tool_allowlist or []) if str(x)}
-        # 模式（plan §3.1）：只决定参数（工具粗集 / system / 模型槽 / 写链取舍），
-        # 不新增链路——所有模式跑同一个 run_task。
+        # 模式（plan §3.1）：只决定参数（工具粗集 / system / 模型槽 / 写链取舍 /
+        # 收尾意图门），不新增链路——所有模式跑同一个 run_task。
         _mode = str(mode or "auto").strip().lower()
         self.mode = _mode if _mode in ("auto", "chat", "task") else "auto"
         self.persona = str(persona or "")

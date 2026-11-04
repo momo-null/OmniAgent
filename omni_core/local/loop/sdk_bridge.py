@@ -510,6 +510,8 @@ class SdkBridgeMixin:
             except Exception:
                 _mt = None
         # 收尾意图门（仅主链;子任务有 verify 门控,不走信任大脑路径）
+        # 对话取向（mode=chat）由 _plain_finish_judge 内部自行退出——纯文本收尾就是交付物,
+        # 不该为它再付一次不计入 brain_calls 的模型往返（那段时间对话框只剩"运行中"）。
         _plain_judge = None if is_sub else self._plain_finish_judge(traj)
         # 基础架构打点：LLM 计时（请求发出 / 首事件 / 首增量 / 完成）落轨迹。
         # 仅主链有 traj；子任务 traj=None 自动不打点。role/model 命名与 emitter 对齐。
