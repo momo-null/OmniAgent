@@ -102,6 +102,23 @@ def _external_note(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @function_tool(
+    description="明确本轮不向任何会话发出内容（保持沉默），把「发不发」的判断收口成一个"
+                "显式动作。调用后对方收不到任何消息；只写最终回答既不算发送，也不算"
+                "明确的沉默决定。不需要判断场合、不需要参数，决定了不发就调用它。",
+    unit="messaging",
+)
+def msg_stay_silent(reason: str = "") -> Dict[str, Any]:
+    """显式沉默：不投递、不改通道状态，只留下一条可被轨迹记录的结果。
+
+    Args:
+        reason: 可选的沉默理由（只进本轮轨迹，不外发）。
+    """
+    return {"ok": True, "stayed_silent": True,
+            "note": "本轮保持沉默：未向任何会话发出内容。",
+            "reason": str(reason or "").strip()}
+
+
+@function_tool(
     description="发送纯文本消息到消息通道。channel=通道名（如 napcat/feishu）；"
                 "target=会话标识，按通道自身的格式：napcat 为 private:<QQ号> 或 group:<群号>，"
                 "feishu 为 chat_id。不填则发回本任务的来源会话。发送失败会返回明确错误。",

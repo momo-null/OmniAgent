@@ -140,6 +140,8 @@ def _on_message(msg) -> None:
                     display_text=str(getattr(msg, "display_text", "") or "") or msg.text,
                     # 回发模式由通道自声明（QQ=explicit 显式发送；飞书/企微=auto 直连）
                     reply_mode=str(getattr(msg, "reply_mode", "auto") or "auto"),
+                    # 触发来源（named / wave）：named 轮才启用「该发没发」兜底代发
+                    origin=str(getattr(msg, "origin", "named") or "named"),
                     tools_enabled=bool(getattr(msg, "allow_tools", False)),
                     # 多模态附件只作用于当轮（会话记录仍写文本投影，不落 base64）
                     attachments=list(getattr(msg, "attachments", None) or []),

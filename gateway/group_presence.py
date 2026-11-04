@@ -97,7 +97,7 @@ class PresenceConfig:
     batch_cap_sec: float = 8.0        # 单批总时长上限
     buffer_max_msgs: int = 12
     buffer_max_sec: float = 600.0
-    thread_hot_min: float = 15.0      # 线程热窗口（自己发过言后的跟进期）
+    thread_hot_min: float = 5.0       # 线程热窗口（自己发过言后的跟进期，分钟）
     hourly_cap: int = 3               # 每群每小时新开对话线程硬闸（接话续聊不计）
     quiet_hours: str = ""             # "01-08" 本地时间，安静时段不主动
     aliases: Tuple[str, ...] = ()     # 文本点名/mention 特征用的别名表
@@ -118,7 +118,7 @@ class PresenceConfig:
             batch_cap_sec=max(1.0, float(cfg.get("batch_cap_sec", 8.0))),
             buffer_max_msgs=max(6, int(cfg.get("buffer_max_msgs", 12))),
             buffer_max_sec=float(cfg.get("buffer_max_sec", 600.0)),
-            thread_hot_min=float(cfg.get("thread_hot_min", 15.0)),
+            thread_hot_min=float(cfg.get("thread_hot_min", 5.0)),
             hourly_cap=int(cfg.get("hourly_cap", 3)),
             quiet_hours=str(cfg.get("quiet_hours") or ""),
             aliases=tuple(str(a).strip() for a in (cfg.get("aliases") or []) if str(a).strip()),

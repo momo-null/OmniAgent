@@ -141,7 +141,11 @@ def _assistant_records(session_id):
 
 
 def test_explicit_mode_does_not_auto_send(monkeypatch):
-    """explicit：模型没调发送工具 → 一个字符都不发出去，历史标记未发送。"""
+    """explicit：模型没调发送工具 → 一个字符都不发出去，历史标记未发送。
+
+    发送与否是模型自己的决定（含「不发」）；最终回答按通道规则只给主人看，
+    网关不代发、也不拿它兜底（2026-11-04 设计决议）。
+    """
     _use_loop(monkeypatch, _LoopNoSend)
     reply = _Reply()
     dispatch.dispatch_sync("（这是你的 QQ）在吗", session_id="s_qq_explicit_1",
@@ -289,7 +293,7 @@ def test_msg_send_target_resolved_across_threads():
 
 
 def test_explicit_mode_grants_send_tool_only(monkeypatch):
-    """explicit 通道纯对话也要放行「说话」工具 + 只读自取工具；auto 通道不放行（工具仍全关）。"""
+    """explicit 通道纯对话也要放行「说话/显式沉默」工具 + 只读自取工具；auto 通道不放行。"""
     captured = {}
 
     class _Cap(_LoopNoSend):
@@ -308,7 +312,7 @@ def test_explicit_mode_grants_send_tool_only(monkeypatch):
     # 说话（三种方式）+ 群上下文只读 + 记忆/场景自取（P1 方案 C：检索结果永不自动注入，
     # 被点名 run 也得自己能查）——全是只读或回来源会话的动作，无写操作。
     assert set(allow) >= {"msg_send_text", "msg_send_voice", "msg_send_card",
-                          "msg_group_history", "msg_group_image",
+                          "msg_stay_silent", "msg_group_history", "msg_group_image",
                           "memory_recall", "read_scene"}
     assert not any(x.startswith(("memory_remember", "memory_update", "tool_", "shell"))
                    for x in allow), "外部通道不得放行写记忆或通用执行工具"
@@ -357,6 +361,24 @@ def _load_msg_plugin(tag: str):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def test_msg_stay_silent_never_sends():
+    """显式沉默工具：不解析通道、不碰回发句柄，只返回结构化的「本轮不发」结果。"""
+    plugin = _load_msg_plugin("_msg_plugin_silent_test")
+    r = plugin.msg_stay_silent("这轮不接话")
+    assert r["ok"] is True and r["stayed_silent"] is True
+    assert r["reason"] == "这轮不接话"
+    assert "未向任何会话" in r["note"]
+
+
+def test_send_rule_names_both_actions():
+    """通道规则必须同时点名「发送」与「显式沉默」两个动作，不能只说一半。"""
+    from gateway.channels import napcat
+
+    assert "msg_send_text" in napcat._SEND_RULE
+    assert "msg_stay_silent" in napcat._SEND_RULE
+    assert "只给主人看" in napcat._SEND_RULE  # 最终回答仍是非发送通道
 
 
 class _VoiceAdapter:
@@ -734,7 +756,11 @@ def _rec(role, content, ts, steps=None, silent=False):
 
 
 def test_history_builder_filters_silent_time_and_thought():
-    """杠杆1/2/3：静默叙述跳过、出窗（>90min）旧话跳过、[上轮执行] 只留工具名。"""
+    """杠杆1/2/3：静默叙述跳过、出窗（>90min）旧话跳过、工具名后缀不再拼进历史。
+
+    2026-11-04：``[上轮执行] 工具: ...`` 会让模型把「假执行标记」当说话格式模仿，
+    写出正文+标记却不派发 tool_call（实测 8 条未发送），已整段移除。
+    """
     import time as _time
     from datetime import datetime, timezone
 
@@ -752,9 +778,9 @@ def test_history_builder_filters_silent_time_and_thought():
         _rec("system", "系统行", fmt(20)),
     ]
     items = dispatch._build_history_items(recs, explicit=False, now_ts=now)
-    assert [i["content"] for i in items] == [
-        "回话\n[上轮执行] 工具: msg_send_text, read_scene", "新消息"]
+    assert [i["content"] for i in items] == ["回话", "新消息"]
     assert "很长" not in items[0]["content"]              # 思考要点不进历史
+    assert "[上轮执行]" not in items[0]["content"]        # 工具名后缀也不进历史
     many = [_rec("user", f"m{i}", fmt(i)) for i in range(30)]
     assert len(dispatch._build_history_items(many, explicit=True, now_ts=now)) == 12
 

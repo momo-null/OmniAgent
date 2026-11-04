@@ -199,10 +199,13 @@ def test_gateway_on_message_passes_channel_policy(monkeypatch):
     gw._on_message(InboundMessage(channel="napcat", chat_id="private:2", user_id="2",
                                   text="hi", reply=None))
     assert seen["tools_enabled"] is False
+    assert seen["origin"] == "named"           # 缺省被点名 → 启用兜底代发
 
     gw._on_message(InboundMessage(channel="napcat", chat_id="private:2", user_id="2",
-                                  text="hi", reply=None, allow_tools=True))
+                                  text="hi", reply=None, allow_tools=True,
+                                  origin="wave"))
     assert seen["tools_enabled"] is True
+    assert seen["origin"] == "wave"            # 旁听升格 → 保留沉默权，不代发
 
 
 # === 3. 通道层 fail-closed ===

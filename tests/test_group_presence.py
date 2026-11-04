@@ -270,6 +270,7 @@ def test_wave_promotion_dispatches_explicit(adapter):
     assert msg.chat_id == "group:333" and msg.origin == "wave"
     assert msg.reply_mode == "explicit"
     assert "没有人 @ 你" in msg.text and "msg_send_text" in msg.text
+    assert "msg_stay_silent" in msg.text   # 旁听轮也要能显式收口「不发」
     assert "保持沉默" in msg.text          # 模型保留最终沉默权
     assert "有人聊聊吗" in msg.display_text  # 会话历史记波次原文
     assert msg.title == "「研发群」(333) 群里的对话"
@@ -573,7 +574,7 @@ def test_thread_continuation_free_of_charge(tmp_path):
     state["now"] += 60.0
     p.note_own_speech("g1", "点名回复", proactive=False)             # 被叫醒的发言：免费
     assert sent() == 1
-    state["now"] += 1000.0                                          # 超过热窗（15min）
+    state["now"] += 1000.0                                          # 超过热窗（5min）
     p.note_own_speech("g1", "另起话头")                              # 再开话头：计费
     assert sent() == 2
 

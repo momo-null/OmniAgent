@@ -93,8 +93,10 @@ def _build_history_items(records: List[Dict[str, Any]], explicit: bool,
       「这轮没人点我」的零信息叙述此前灌满 40 条窗，还被后续每个 run 复读一遍；
     - 杠杆2：时间上限 ``_im_history_minutes`` 分钟——条数 ∩ 时间双约束，
       「指代」是分钟级的事，跨窗旧话走 conversation_search 现查；
-    - 杠杆3：``[上轮执行]`` 只留工具名——思考全文已持久化进会话记录（Web 端展示用），
-      再摘 200 字要点进历史是纯死重（与思考链持久化联动，否则左手省右手花）；
+    - 杠杆3：思考全文与工具名都**不进历史**——思考全文已持久化进会话记录（Web 端
+      展示用）；工具名后缀 ``[上轮执行] 工具: ...`` 已于 2026-11-04 移除：模型会把这行
+      当成"说话格式"模仿，写出正文+假执行标记却不派发工具（实测 8 条），是「未发送」
+      的诱因之一。历史只留真正发出过的文本；
     - 条数上限维持 12（explicit）/ 40（ambient），压缩归大脑（超 150k 才触发，
       群 run 恒不触发——本函数是群 run 上下文的唯一塑形处）。
     """
@@ -116,11 +118,6 @@ def _build_history_items(records: List[Dict[str, Any]], explicit: bool,
             except ValueError:
                 pass                                    # 异常时间戳按在窗内处理（fail-open）
         content = str(r.get("content") or "")
-        steps = (r.get("extra") or {}).get("steps") or []
-        if role == "assistant" and steps:
-            tool_names = [s.get("name") for s in steps if s.get("type") == "tool_call"]
-            seg = f"[上轮执行] 工具: {', '.join(filter(None, tool_names)) or '无'}"
-            content = f"{content}\n{seg}".strip()       # 杠杆3：不带思考要点
         if content:
             items.append({"role": role, "content": content})
     return items[-(12 if explicit else 40):]
@@ -389,13 +386,16 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
                         # 外部消息（他人可达的通道）默认纯对话：见 submit 的 tools_enabled
                         tools_enabled=bool(item.get("tools_enabled", True)),
                         # 显式发送通道：纯对话也不给工具，但必须放行「说话」这几个动作
-                        # （文字/语音/卡片——用什么方式说是模型自己的选择）+ 群历史查询
-                        # （被 @ 接不上话时自己能看上下文，只读、不改任何状态）+ 群图片
-                        # 按需取看（[图片] 占位的消息按 message_id 拉附件，S9 注入）
+                        # （文字/语音/卡片——用什么方式说是模型自己的选择）
+                        # + msg_stay_silent（把「不发」也做成一等结构化动作，
+                        #   发/不发都由模型显式决定；缺了它，沉默与漏调用无法区分）
+                        # + 群历史查询（被 @ 接不上话时自己能看上下文，只读、不改任何状态）
+                        # + 群图片按需取看（[图片] 占位按 message_id 拉附件，S9 注入）
                         # + 记忆自取（P1 方案 C：检索结果永不自动注入，被点名 run 也要
                         # 能自己查——memory_recall/read_scene/conversation_search 皆纯读，
                         # conversation_search 的 scope 对来源外部强制锁死在当前会话/群）
                         tool_allowlist=(["msg_send_text", "msg_send_voice", "msg_send_card",
+                                         "msg_stay_silent",
                                          "msg_group_history", "msg_group_image", "msg_sing",
                                          "memory_recall", "read_scene", "conversation_search"]
                                         if explicit else None))
@@ -426,6 +426,9 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
 
         summary = _extract_summary(result)
         # 最终口播（真实回答）；内部判定文案只进任务详情/日志，绝不外发
+        # 注意：`_last_answer` 在 explicit 通道里按 _SEND_RULE 是「只给主人看」的
+        # 独白，**不是**发送意图的载体。发不发由模型调 msg_send_* 决定——
+        # 不代发、不拿这段文本兜底（2026-11-04 设计决议）。
         answer = (_last_answer or "").strip() or summary
         # 显式模式：会话里记「实际发出去的内容」；没发出就记内部说明（前端标未发送）。
         # 首选工具侧的记账（唯一事实来源），步骤解析仅作兜底（结果字符串可能是 repr）。
@@ -544,6 +547,7 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
            title: str = "",
            display_text: str = "",
            reply_mode: str = "auto",
+           origin: str = "named",
            tools_enabled: bool = True,
            attachments: Optional[List[Dict[str, Any]]] = None,
            voice_reply: bool = False) -> str:
@@ -562,6 +566,9 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
     reply_mode：通道自声明的回发模式。``"auto"``（缺省）= 最终回答自动回发；
     ``"explicit"`` = 不代发，只有模型显式调 ``msg_send_text`` 才发出（QQ 等 IM）。
     explicit 模式下纯对话通道仍会放行发送工具（tool_allowlist），否则模型无法说话。
+
+    origin：触发来源（通道自声明，见 ``InboundMessage.origin``）。``"named"``（缺省）
+    = 被点名；``"wave"`` = 群旁听升格。只有 named 轮启用「该发没发」兜底代发。
 
     tools_enabled：能力门。False = 纯对话（无任何工具，模型物理上无法产生 tool_call）。
     外部可达的通道（他人能给账号发消息）必须传 False——否则任何给账号发消息的人
@@ -582,6 +589,7 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
                 "session_id": session_id or "", "title": title or "",
                 "display_text": display_text or "",
                 "reply_mode": str(reply_mode or "auto").strip().lower(),
+                "origin": str(origin or "named").strip().lower(),
                 "tools_enabled": bool(tools_enabled),
                 "attachments": list(attachments or []),
                 "voice_reply": bool(voice_reply)})
@@ -594,7 +602,7 @@ def dispatch_sync(objective: str, done_when: str = "", max_steps: int = 40, *,
                   notify_channel: Optional[str] = None, job_id: Optional[str] = None,
                   session_id: Optional[str] = None,
                   title: str = "", display_text: str = "", reply_mode: str = "auto",
-                  tools_enabled: bool = True,
+                  origin: str = "named", tools_enabled: bool = True,
                   attachments: Optional[List[Dict[str, Any]]] = None) -> DispatchResult:
     """同步执行（CLI/测试/「立即运行」用）。"""
     return _run_task_once({"task_id": uuid.uuid4().hex[:16], "objective": objective,
@@ -604,6 +612,7 @@ def dispatch_sync(objective: str, done_when: str = "", max_steps: int = 40, *,
                            "title": title or "",
                            "display_text": display_text or "",
                            "reply_mode": str(reply_mode or "auto").strip().lower(),
+                           "origin": str(origin or "named").strip().lower(),
                            "tools_enabled": bool(tools_enabled),
                            "attachments": list(attachments or [])})
 

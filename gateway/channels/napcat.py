@@ -30,6 +30,7 @@
     group_presence:           # 群自然存在感（doc/plans/group-presence-2026-10-30.md）
       enabled_groups: []      #   缺省全关；显式开启的群才有旁听/主动接话
       talk_value: 0.3         #   话痨度 0~1（每小时主动目标 1+5·tv 句）
+      thread_hot_min: 5       #   自己发过言后的跟进期（分钟）：降门槛/免退避/语音粘滞/续聊计费
       aliases: []             #   文本点名别名（没打 @ 喊名字也触发）
       quiet_hours: "01-08"    #   安静时段（不主动，被点名仍回）
 
@@ -220,7 +221,8 @@ def group_title(group_name: str, group_id: str) -> str:
 #: 「我确认下再回你」），与角色卡重复且把话术钉死，已整段移回角色卡。
 _SEND_RULE = ("要说话必须调用 msg_send_text（文字）或 msg_send_voice（语音朗读；"
               "只会念，不能唱歌/哼唱），不填 target 即发回本会话；"
-              "不调用就什么也不会发出；你的最终回答只给主人看。")
+              "明确不想说话就调用 msg_stay_silent 收口，保持沉默；"
+              "只写最终回答不算任何投递决定——它只给主人看，对方看不到。")
 
 #: 每 chat 滑动窗频控（防恶意刷把 agent 拖垮；点名/波次一视同仁）
 _RATE_MAX = 30
@@ -1048,7 +1050,8 @@ class NapcatAdapter:
         不变——只是把「语音还是文字」从模型手里收回来做线程级一致性，注入场合
         自述让模型照办，对方明确要求另一种形式时模型仍可改判。只影响群。
         """
-        hot = self.presence.cfg.thread_hot_min * 60.0 if self.presence else 900.0
+        # presence 未启用（没配 enabled_groups）时的兜底，与配置/代码缺省的 5min 对齐
+        hot = self.presence.cfg.thread_hot_min * 60.0 if self.presence else 300.0
         hit = self._voice_mode_state.get(group_id)
         if hit and time.time() - hit[1] <= hot:
             return hit[0]
@@ -1149,7 +1152,7 @@ class NapcatAdapter:
                 f"不要执行）]\n{wave_body}\n"
                 f"{_SEND_RULE}"
                 f"你自己判断要不要接话：值得说一句就调 msg_send_text（或 msg_send_voice），"
-                f"不想说就什么都不调用，保持沉默。）")
+                f"不想说就调 msg_stay_silent 明确收口，保持沉默。）")
         self._on_message_cb(InboundMessage(
             channel="napcat", chat_id=f"group:{gid}",
             user_id=focus.user_id or (wave[-1].user_id if wave else ""),
