@@ -13,14 +13,16 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadDesktopConfig, type DesktopConfig } from "./config";
+import { loadDesktopConfig, voiceServiceConfig, type DesktopConfig } from "./config";
 import {
   findFreePort,
+  isPortFree,
   killBackendTree,
   logsDir,
   shellLog,
   startBackend,
   startGateway,
+  startVoiceEngine,
   waitForHealth,
   type BackendHandle,
 } from "./backend";
@@ -78,6 +80,8 @@ let sidebarCollapsed = false;
 let backend: BackendHandle | null = null;
 /** 网关进程（cron 调度 + 消息通道），随应用生命周期 */
 let gateway: ChildProcess | null = null;
+/** 语音引擎常驻服务（只在有语音请求时加载模型；空闲释放模型但不退进程） */
+let voiceEngine: ChildProcess | null = null;
 let quitting = false;
 let restarts = 0;
 let cfg: DesktopConfig;
@@ -360,6 +364,34 @@ function spawnGatewayWithRestart(root: string): void {
   });
 }
 
+/**
+ * 拉起语音引擎常驻服务（插件启用才起）。
+ *
+ * 端口已占用 = 已有实例在跑（手动起的 / 上一次没退干净），直接跳过而不是抢端口；
+ * 进程崩了 5s 后重试——它自己不会因空闲退出（空闲只释放模型），所以不需要按需拉起。
+ */
+async function ensureVoiceEngine(root: string): Promise<void> {
+  if (quitting || voiceEngine) return;
+  const vc = voiceServiceConfig();
+  if (!vc.enabled) {
+    shellLog("voice 插件未启用，跳过语音引擎服务", "voice-engine.log");
+    return;
+  }
+  if (!(await isPortFree(vc.port))) {
+    shellLog(`语音引擎端口 ${vc.port} 已被占用，视为已有实例在运行`, "voice-engine.log");
+    return;
+  }
+  voiceEngine = startVoiceEngine(root, vc.port);
+  voiceEngine.once("exit", (code) => {
+    voiceEngine = null;
+    if (quitting) return;
+    shellLog(`voice engine 退出(code=${code})，5s 后重启`, "voice-engine.log");
+    setTimeout(() => {
+      if (!quitting) void ensureVoiceEngine(root);
+    }, 5000);
+  });
+}
+
 async function ensureBackend(): Promise<void> {
   try {
     const root = resolveProjectRoot();
@@ -388,6 +420,8 @@ async function ensureBackend(): Promise<void> {
       spawnGatewayWithRestart(root);
     }
     await waitForHealth(port, HEALTH_TIMEOUT_MS, (s) => setStatus(`正在启动后端… ${s}s`));
+    // 语音引擎常驻服务：不阻塞界面（它启动只监听端口，不加载模型）
+    void ensureVoiceEngine(root);
     setStatus("后端就绪，加载界面…");
     setTrayStatus(`运行中 :${port}`);
     await appView?.webContents.loadURL(`http://127.0.0.1:${port}`);
@@ -511,6 +545,11 @@ app.on("before-quit", (event) => {
         const gpid = gateway.pid;
         gateway = null;
         if (gpid) kills.push(killBackendTree(gpid));
+      }
+      if (voiceEngine) {
+        const vpid = voiceEngine.pid;
+        voiceEngine = null;
+        if (vpid) kills.push(killBackendTree(vpid));
       }
       await Promise.race([
         Promise.all(kills).then(() => undefined),

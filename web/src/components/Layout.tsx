@@ -36,6 +36,7 @@ import {
 } from "./icons";
 import CronJobs from "../pages/CronJobs";
 import { taskApi, projectApi } from "../api/client";
+import { notifyModelsChanged } from "../api/modelEvents";
 import { useTaskStore, type MainView } from "../store/taskStore.tsx";
 import Chat from "../pages/Chat";
 import SkillsAndTools from "../pages/SkillsAndTools";
@@ -614,7 +615,10 @@ ${assets}`)) {
         {renderMain()}
       </Box>
 
-      {settingsOpen && <Settings onClose={() => setSettingsOpen(false)} />}
+      {/* 关设置时再发一次目录变更信号：兜住「改了但没走保存路径」的入口（如导入/手工编辑） */}
+      {settingsOpen && (
+        <Settings onClose={() => { setSettingsOpen(false); notifyModelsChanged(); }} />
+      )}
       {skillsOpen && <SkillsAndTools onClose={() => setSkillsOpen(false)} />}
     </Box>
   );

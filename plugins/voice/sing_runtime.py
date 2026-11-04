@@ -30,15 +30,15 @@ logger = get_logger("plugins.voice")
 
 
 def voice_cfg() -> dict:
-    """voice 插件自有配置（``~/.omniagent/plugins/voice.yaml``）；读不到 = 空 dict。
+    """引擎侧配置（``~/.omniagent/voice_service.yaml``）；读不到 = 空 dict。
 
-    全项目唯一实现：``plugin.py`` 的 ``_cfg`` 只是转发到这里（STT/TTS 也走这把）。
-    配置属于跨模块共享状态，所以住这里而不是 plugin.py——原因见模块 docstring。
+    历史名字保留（唱歌模块与测试都按 ``voice_cfg`` 取用），实现已跟随服务化
+    迁到 ``service_config.service_cfg``——引擎配置属于语音服务，不再属于插件。
     """
     try:
-        from omni_core.tools.loader import plugin_config
+        from plugins.voice.service_config import service_cfg
 
-        return plugin_config("voice") or {}
+        return service_cfg()
     except Exception:
         return {}
 

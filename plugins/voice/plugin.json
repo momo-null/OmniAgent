@@ -1,8 +1,185 @@
 {
   "name": "voice",
-  "version": "1.2.0",
-  "title": "语音（本地 STT/TTS）",
-  "description": "本地语音转文字（SenseVoice）与文字转语音（GPT-SoVITS v2 微调引擎，懒加载，模型与权重另放 ~/.omniagent/models/gptsovits，推理用 external/GPT-SoVITS 独立 venv）。启用后 /api/audio/transcribe 与 /api/audio/tts 可用，Web 会话输入框出现按住说话按钮；QQ 通道获得 msg_send_voice 工具。",
+  "version": "1.4.0",
+  "title": "语音（STT/TTS 调用端）",
+  "description": "语音转文字与文字转语音的**调用端**：把请求发给 OpenAI 音频兼容端点（本机常驻语音服务或在线厂商）。引擎本身是独立服务（engine_service.py，配置在 ~/.omniagent/voice_service.yaml），插件只管端点、密钥与模型名。启用后 /api/audio/transcribe 与 /api/audio/tts 可用，Web 会话输入框出现按住说话按钮；QQ 通道获得 msg_send_voice 工具。",
   "enabled": false,
-  "permissions": []
+  "permissions": [],
+  "config": [
+    {
+      "key": "base_url",
+      "label": "端点 Base URL",
+      "type": "text",
+      "default": "http://127.0.0.1:18742/v1",
+      "group": "端点",
+      "desc": "OpenAI 音频兼容根路径。本机服务 = http://127.0.0.1:<服务端口>/v1（端口在下方「语音服务」里配）；换在线厂商只改这里 + API Key。"
+    },
+    {
+      "key": "api_key",
+      "label": "API Key",
+      "type": "password",
+      "secret": true,
+      "default": "",
+      "group": "端点",
+      "desc": "本地服务不校验可留空；在线厂商填密钥。留空保存 = 保持不变。"
+    },
+    {
+      "key": "stt_model",
+      "label": "STT 模型名",
+      "type": "text",
+      "default": "sense-voice",
+      "group": "端点",
+      "desc": "透传给 /v1/audio/transcriptions 的 model 字段（本机服务忽略它，按自己的引擎跑）。"
+    },
+    {
+      "key": "tts_model",
+      "label": "TTS 模型名",
+      "type": "text",
+      "default": "gpt-sovits",
+      "group": "端点",
+      "desc": "透传给 /v1/audio/speech 的 model 字段（本机服务忽略它）。"
+    },
+    {
+      "key": "voice",
+      "label": "音色",
+      "type": "text",
+      "default": "",
+      "group": "端点",
+      "desc": "在线端点填其 voice 名（如 alloy）；本机服务填 voices/ 下的音色名，留空 = 用服务端默认音色。"
+    }
+  ],
+  "service_config": {
+    "path": "~/.omniagent/voice_service.yaml",
+    "fields": [
+      {
+        "key": "tts_voice",
+        "label": "默认音色",
+        "type": "text",
+        "default": "",
+        "group": "引擎",
+        "desc": "voices/ 下的音色名（wav + 同名 txt）。设置页会列出服务当前可用音色；名字失效时退回第一个。"
+      },
+      {
+        "key": "tts_eq",
+        "label": "输出频响补偿",
+        "type": "bool",
+        "default": false,
+        "group": "引擎",
+        "desc": "GS 微调输出已贴参考频谱，一般不需要；只在换回旧引擎/音源时开。"
+      },
+      {
+        "key": "service_port",
+        "label": "服务端口",
+        "type": "number",
+        "default": 18742,
+        "min": 1024,
+        "max": 65535,
+        "group": "服务",
+        "desc": "engine_service 监听端口；插件侧 base_url 必须与它一致。desktop 启动时按此端口拉起服务。"
+      },
+      {
+        "key": "service_host",
+        "label": "监听地址",
+        "type": "text",
+        "default": "127.0.0.1",
+        "group": "服务",
+        "desc": "默认只听回环。给局域网别的机器用时改 0.0.0.0，并务必设置访问令牌。"
+      },
+      {
+        "key": "service_token",
+        "label": "访问令牌",
+        "type": "password",
+        "secret": true,
+        "default": "",
+        "group": "服务",
+        "desc": "非空则校验 Authorization: Bearer（对外暴露时必填）。"
+      },
+      {
+        "key": "service_idle_sec",
+        "label": "空闲释放（模型）",
+        "type": "number",
+        "default": 600,
+        "min": 0,
+        "max": 86400,
+        "group": "服务",
+        "desc": "服务连续无请求多少秒后释放全部模型（进程不退、监听常在；0=不释放）。"
+      },
+      {
+        "key": "stt_idle_sec",
+        "label": "STT 空闲卸载",
+        "type": "number",
+        "default": 900,
+        "min": 0,
+        "max": 86400,
+        "group": "服务",
+        "desc": "识别器空闲多少秒后卸载（0=常驻）。卸载后下次请求重新加载，只是第一条慢一点。"
+      },
+      {
+        "key": "tts_idle_sec",
+        "label": "TTS 空闲回收",
+        "type": "number",
+        "default": 600,
+        "min": 0,
+        "max": 86400,
+        "group": "服务",
+        "desc": "合成子进程空闲多少秒后杀掉归还内存/显存（0=常驻）。"
+      },
+      {
+        "key": "stt_model_dir",
+        "label": "STT 模型目录",
+        "type": "path",
+        "default": "",
+        "group": "路径（高级）",
+        "desc": "留空=~/.omniagent/models/sense-voice（需 model.int8.onnx + tokens.txt）。"
+      },
+      {
+        "key": "gptsovits_dir",
+        "label": "TTS 模型目录",
+        "type": "path",
+        "default": "",
+        "group": "路径（高级）",
+        "desc": "留空=~/.omniagent/models/gptsovits（weights/ + voices/ + pretrained_models/）。"
+      },
+      {
+        "key": "voices_dir",
+        "label": "音色目录",
+        "type": "path",
+        "default": "",
+        "group": "路径（高级）",
+        "desc": "留空=<gptsovits_dir>/voices。每个音色 = 一个 wav + 同名 txt。"
+      },
+      {
+        "key": "gptsovits_repo",
+        "label": "GS 仓库目录",
+        "type": "path",
+        "default": "",
+        "group": "路径（高级）",
+        "desc": "留空=<仓库>/external/GPT-SoVITS（上游 clone，含独立 venv）。"
+      },
+      {
+        "key": "tts_python",
+        "label": "TTS 解释器",
+        "type": "path",
+        "default": "",
+        "group": "路径（高级）",
+        "desc": "GS 独立 venv 的 python；留空=自动探测 <gptsovits_repo>/.venv。"
+      },
+      {
+        "key": "tts_vits",
+        "label": "TTS vits 权重",
+        "type": "path",
+        "default": "",
+        "group": "路径（高级）",
+        "desc": "留空=weights/doro_e12_s288.pth（相对路径按 gptsovits_dir 解析）。"
+      },
+      {
+        "key": "tts_t2s",
+        "label": "TTS t2s 权重",
+        "type": "path",
+        "default": "",
+        "group": "路径（高级）",
+        "desc": "留空=weights/doro-e30.ckpt（相对路径按 gptsovits_dir 解析）。"
+      }
+    ]
+  }
 }

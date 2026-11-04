@@ -164,7 +164,8 @@ class TestTtsDispatch:
 
         monkeypatch.setattr(voice_plugin._WORKER, "synthesize", fake_synth)
         monkeypatch.setattr(voice_plugin, "_cfg", lambda: {"tts_voice": "duorou"})
-        assert voice_plugin.tts("你好") == b"WAV"
+        # 插件侧 tts 只发 HTTP；本机引擎入口是 tts_local（engine_service 调它）
+        assert voice_plugin.tts_local("你好") == b"WAV"
         assert sent["args"] == ("你好", "", False, "duorou")
 
     def test_tts_rejects_empty_and_long(self, monkeypatch):

@@ -21,6 +21,7 @@ import {
 } from "@mui/material";
 import { InfoIcon, PlusIcon, TrashIcon } from "../../components/icons";
 import { modelCatalogApi } from "../../api/client";
+import { notifyModelsChanged } from "../../api/modelEvents";
 import type { ModelProviderDraft, ModelsIndex } from "../../types";
 
 /**
@@ -103,6 +104,7 @@ export default function ModelProviders() {
     try {
       await modelCatalogApi.save(drafts);
       setMsg("已保存");
+      notifyModelsChanged(); // Chat 的选择器在遮罩底下没重新挂载，需要显式信号
       load();
     } catch (e) { setErr((e as Error).message); }
   };
@@ -111,6 +113,7 @@ export default function ModelProviders() {
     try {
       await modelCatalogApi.setDefault(slot, selection);
       setMsg(`已设为 ${SLOTS.find((s) => s.key === slot)?.label ?? slot}：${selection}`);
+      notifyModelsChanged();
       load();
     } catch (e) { setErr((e as Error).message); }
   };

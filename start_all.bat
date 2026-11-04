@@ -29,6 +29,8 @@ if not exist "%PROJECT_DIR%web\node_modules" (
 if /i "%MODE%"=="backend" (
     echo starting backend window ...
     start "OmniAgent Backend" cmd /k "set NO_PROXY=127.0.0.1,localhost && "%PY%" -m uvicorn backend.server:app --host 127.0.0.1 --port 8000"
+    echo starting voice engine window ...
+    start "OmniAgent Voice" cmd /k "set NO_PROXY=127.0.0.1,localhost && "%PY%" -m plugins.voice.engine_service"
     goto :done
 )
 if /i "%MODE%"=="web" (
@@ -39,8 +41,9 @@ if /i "%MODE%"=="web" (
 
 echo starting backend + frontend ...
 start "OmniAgent Backend" cmd /k "set NO_PROXY=127.0.0.1,localhost && "%PY%" -m uvicorn backend.server:app --host 127.0.0.1 --port 8000"
+start "OmniAgent Voice" cmd /k "set NO_PROXY=127.0.0.1,localhost && "%PY%" -m plugins.voice.engine_service"
 start "OmniAgent Web" cmd /k "set HTTP_PROXY= && set HTTPS_PROXY= && set ALL_PROXY= && set NO_PROXY=127.0.0.1,localhost && cd /d web && npm run dev"
-echo two windows opened: [OmniAgent Backend] [OmniAgent Web]
+echo three windows opened: [OmniAgent Backend] [OmniAgent Voice] [OmniAgent Web]
 echo stop: start_all.bat stop
 
 :done
@@ -48,8 +51,9 @@ pause
 goto :eof
 
 :stop
-echo stopping :8000 / :5173 ...
+echo stopping :8000 / :18742 / :5173 ...
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8000" ^| findstr LISTENING') do taskkill /PID %%P /F
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":18742" ^| findstr LISTENING') do taskkill /PID %%P /F
 for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":5173" ^| findstr LISTENING') do taskkill /PID %%P /F
 echo done.
 pause

@@ -6,6 +6,7 @@ import type {
   GitDiffResp,
   GitStatusResp,
   TerminalResp,
+  VoiceStatus,
 } from "../types";
 
 // 使用相对 baseURL，依赖 vite dev 代理将 /api 与 /v1 转发到后端 8000
@@ -197,6 +198,13 @@ export const runtimeApi = {
   // 插件开关（写 ~/.omniagent/plugins/<name>.yaml；重启后生效）
   setPluginEnabled: (name: string, enabled: boolean) =>
     http.patch("/api/runtime/tools/plugins", { name, enabled }),
+  // 插件配置（schema 由插件 plugin.json 自报，前端按 type 通用渲染）
+  // scope=service：插件声明的独立服务配置文件（引擎侧，不混进插件目录）
+  pluginConfig: (name: string, scope: "plugin" | "service" = "plugin") =>
+    http.get(`/api/runtime/tools/plugins/${encodeURIComponent(name)}/config`, { params: { scope } }),
+  savePluginConfig: (name: string, values: Record<string, unknown>, scope: "plugin" | "service" = "plugin") =>
+    http.put(`/api/runtime/tools/plugins/${encodeURIComponent(name)}/config`,
+      { values }, { params: { scope } }),
   // SSE 流地址（EventSource 用，无需 axios）；支持 task_id 订阅特定 task 事件。
   // sub 非空 = 旁路订阅者（按游标读、不清空 outbox）——用于常驻收听跨进程的
   // tasks_changed（网关跑 QQ 等外部会话时，后端把「变了」推到全局 outbox）。
@@ -241,6 +249,15 @@ export const cronApi = {
 
 // ── 语音（/api/audio/*；voice 插件未启用时后端 404） ──────────────
 export const audioApi = {
+  // 引擎来源 / 运行态 / 模型就绪快照（voice 插件未启用时 404）
+  status: async (): Promise<VoiceStatus> => {
+    const res = await fetch("/api/audio/status", {
+      headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) throw new Error(data.error || `状态读取失败 (${res.status})`);
+    return data as VoiceStatus;
+  },
   // 录音 WAV → 文本（对讲式按住说话）
   transcribe: async (blob: Blob): Promise<string> => {
     const res = await fetch("/api/audio/transcribe", {

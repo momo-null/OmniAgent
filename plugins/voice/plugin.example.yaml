@@ -1,0 +1,33 @@
+# 语音插件配置示例（**调用端**，不是引擎配置）。
+#
+# 用法：复制到 ~/.omniagent/plugins/voice.yaml——
+#   Windows: copy plugins\voice\plugin.example.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
+#   *nix:    cp plugins/voice/plugin.example.yaml ~/.omniagent/plugins/voice.yaml
+# 也可以不建这份文件：manifest 里 enabled 默认 false（插件停用）。
+#
+# 插件只做接口调用：这里的每个键都在描述「把请求发到哪」。
+# 引擎（模型路径 / 音色 / 空闲回收 / 端口）属于独立服务，配置见
+# ~/.omniagent/voice_service.yaml（示例：voice_service.example.yaml）。
+# 生效时机：全部在调用时读取，保存即生效。
+
+# 用户级开关（覆盖 plugin.json 的 enabled）
+enabled: true
+
+# OpenAI 音频兼容端点根路径。
+#   本机常驻服务：http://127.0.0.1:<voice_service.yaml 的 service_port>/v1
+#   在线厂商：填其 /v1 地址（如 https://api.example.com/v1）
+# 换引擎 = 只改 base_url + api_key，代码与前端都不用动。
+base_url: http://127.0.0.1:18742/v1
+
+# 在线厂商的密钥；本地服务不校验（除非服务启动时给了 --token / service_token）。
+# 留空保存 = 保持不变（设置页不回传明文）。
+api_key: ""
+
+# 透传给 /v1/audio/transcriptions 和 /v1/audio/speech 的 model 字段。
+# 本机服务忽略它们（按自己的引擎跑），在线厂商按模型名路由。
+stt_model: sense-voice
+tts_model: gpt-sovits
+
+# 音色：在线端点填其 voice 名（如 alloy）；
+# 本机服务填 voices/ 下的音色名（留空 = 用服务端 tts_voice 默认音色）。
+voice: ""

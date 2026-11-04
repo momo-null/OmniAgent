@@ -84,6 +84,31 @@ export function loadDesktopConfig(projectRoot: string | null): DesktopConfig {
   };
 }
 
+export interface VoiceServiceConfig {
+  /** 插件是否启用（voice.yaml 缺失 = manifest 默认关闭，不起服务） */
+  enabled: boolean;
+  /** 常驻语音服务端口（与后端 base_url 里的端口必须一致） */
+  port: number;
+}
+
+/**
+ * 语音引擎常驻服务的开关与端口。
+ *
+ * 开关在插件配置（`plugins/voice.yaml` 的 enabled——插件停用就不该占端口），
+ * 端口在服务配置（`voice_service.yaml` 的 service_port——引擎属于服务，不属于插件）。
+ */
+export function voiceServiceConfig(): VoiceServiceConfig {
+  const pluginPath = join(homedir(), ".omniagent", "plugins", "voice.yaml");
+  if (!existsSync(pluginPath)) return { enabled: false, port: 18742 };
+  const pluginDoc = readYaml(pluginPath) ?? {};
+  const serviceDoc = readYaml(join(homedir(), ".omniagent", "voice_service.yaml")) ?? {};
+  const port = Number(serviceDoc.service_port);
+  return {
+    enabled: pluginDoc.enabled !== false,
+    port: Number.isFinite(port) && port > 0 && port < 65536 ? port : 18742,
+  };
+}
+
 /** 后端绑定地址（server.host，PC-0 绑定贯通）：与后端 server.py 同源读配置，缺省回环。 */
 export function serverHost(projectRoot: string | null): string {
   let merged: Record<string, unknown> = {};

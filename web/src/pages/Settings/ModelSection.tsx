@@ -23,6 +23,7 @@ import { LabelWithTip, StatusLine } from "../../components/SettingsKit";
 import { modelApi, llmApi, systemApi, settingsApi } from "../../api/client";
 import type { ModelInfo, GpuInfo, LaunchParams, ModelValidationResult } from "../../types";
 import ModelProviders from "./ModelProviders";
+import VoiceEngineCard from "./VoiceEngineCard";
 
 // ── 透传参数（extra_args）与投影路径的「UI ↔ 侧注」映射 ──────────────────────
 // extra_args：多行文本，**每行一个 argv token** ⇒ 与后端 argv 数组一一对应，
@@ -273,6 +274,9 @@ export default function ModelSection() {
         </Stack>
         <StatusLine saved={saveMsg} />
       </Paper>
+
+      {/* 语音引擎与本地模型同页：同样是「本机跑、可切在线」的一类引擎 */}
+      <VoiceEngineCard />
 
       <Box sx={{ display: "flex", gap: 2, alignItems: "flex-start" }}>
         <Paper variant="outlined" sx={{ width: 300, flexShrink: 0, maxHeight: "70vh", overflow: "auto" }}>

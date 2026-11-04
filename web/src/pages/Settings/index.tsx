@@ -42,7 +42,8 @@ const CATEGORIES: NavCategory[] = [
   {
     id: "model", label: "模型", icon: <CpuIcon />, keywords:
       ["在线提供方", "api key", "base_url", "本地模型", "gguf", "llama.cpp", "显存", "gpu",
-        "端口", "线程", "上下文", "投影", "mmproj", "启动参数", "校验"],
+        "端口", "线程", "上下文", "投影", "mmproj", "启动参数", "校验",
+        "语音引擎", "语音", "音色", "tts", "stt", "转写", "合成", "空闲回收"],
     Section: ModelSection,
   },
   {

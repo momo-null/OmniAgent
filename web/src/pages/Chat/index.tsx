@@ -49,6 +49,7 @@ import RightDock from "../../components/RightDock.tsx";
 import { fmtBytes } from "../../components/dock/FilesTab.tsx";
 import type { ArtifactInfo, ChatMsg, ProcessItem, ApprovalCardInfo, ModelsIndex } from "../../types";
 import { audioApi, characterApi, modelCatalogApi, settingsApi } from "../../api/client";
+import { onModelsChanged } from "../../api/modelEvents";
 import { HandsFree, startRecording } from "./voiceRecorder";
 
 // 选中模型的本地兜底：后端目录为准，本地只用于首屏即时显示（切换后由后端 defaults 持久化）
@@ -666,6 +667,11 @@ export default function Chat() {
     }).catch(() => {});
   }, [modelSel]);
   useEffect(() => { refreshCatalog(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // 设置页是遮罩：改完在线模型目录本页不会重新挂载 → 收到信号再拉一次
+  // （用 ref 兜住最新回调，避免每次选中项变化都重订阅）
+  const refreshCatalogRef = useRef(refreshCatalog);
+  useEffect(() => { refreshCatalogRef.current = refreshCatalog; }, [refreshCatalog]);
+  useEffect(() => onModelsChanged(() => refreshCatalogRef.current()), []);
   const pickModel = (sel: string) => {
     setModelSel(sel);
     localStorage.setItem(MODEL_SEL_KEY, sel);

@@ -23,6 +23,16 @@ def client():
         yield c
 
 
+@pytest.fixture(autouse=True)
+def _isolate_config(monkeypatch):
+    """测试不读用户配置：引擎侧配置一律空（走默认路径），调用端不联网。
+
+    插件侧只发 HTTP，所以客户端用例必须自己 patch `_openai_*`——这里只把
+    「读配置」这件事与真实机器解耦。
+    """
+    monkeypatch.setattr(voice_plugin, "_cfg", lambda: {})
+
+
 def _wav_bytes(samples, sr=16000) -> bytes:
     """标准库生成单声道 16 位 PCM WAV（不经 soundfile，保证测试独立性）。"""
     buf = io.BytesIO()
@@ -98,6 +108,24 @@ class TestAudioEndpoints:
         assert client.post("/api/audio/tts", json={"text": "  "}).status_code == 400
         assert client.post("/api/audio/tts", json={"text": "长" * 501}).status_code == 400
 
+    def test_status_404_when_plugin_disabled(self, client, monkeypatch):
+        monkeypatch.setattr(audio_api, "get_capability", lambda name: None)
+        r = client.get("/api/audio/status")
+        assert r.status_code == 404
+        assert "未启用" in r.json()["error"]
+
+    def test_status_passthrough(self, client, monkeypatch):
+        """状态体由能力自报，薄壳原样拼上 ok=True。"""
+        payload = {"endpoint": {"base_url": "http://x/v1"},
+                   "service": {"reachable": True, "detail": {"voices": ["a"]}}}
+        monkeypatch.setattr(audio_api, "get_capability",
+                            lambda name: (lambda: payload) if name == "voice_status" else None)
+        r = client.get("/api/audio/status")
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        assert r.json()["endpoint"]["base_url"] == "http://x/v1"
+        assert r.json()["service"]["detail"]["voices"] == ["a"]
+
 
 # ------------------------------------------------ 插件引擎（懒加载 / 解码 / 上限）
 
@@ -143,7 +171,7 @@ class TestVoicePluginEngine:
         monkeypatch.setattr(voice_plugin, "_get_stt", lambda: FakeRec())
         # 480 样本 @48kHz = 10ms → 平均抽取为 160 样本 @16kHz
         wav = _wav_bytes(np.sin(np.linspace(0.0, 100.0, 480)), sr=48000)
-        assert voice_plugin.transcribe(wav) == "识别结果"
+        assert voice_plugin.transcribe_local(wav) == "识别结果"
         assert captured["called"] is True
         assert captured["sr"] == 16000
         assert captured["samples"].shape == (160,), "48k 必须被抽取成 16k"
@@ -164,15 +192,50 @@ class TestVoicePluginEngine:
 
         monkeypatch.setattr(voice_plugin, "_get_stt", lambda: FakeRec())
         wav = _wav_bytes(np.zeros(16000 * 61, dtype="float32"), sr=16000)
-        assert voice_plugin.transcribe(wav) == ""
+        assert voice_plugin.transcribe_local(wav) == ""
         assert len(FakeStream.got) == 16000 * 60, "61s 音频必须截断到 60s"
 
     def test_tts_produces_wav_and_enforces_caps(self, monkeypatch):
         monkeypatch.setattr(voice_plugin, "_tts_dispatch",
                             lambda text, voice: b"RIFF" + b"\0" * 4)
-        out = voice_plugin.tts("你好")
+        out = voice_plugin.tts_local("你好")
         assert out[:4] == b"RIFF"
         with pytest.raises(ValueError):
             voice_plugin.tts("x" * 501)
         with pytest.raises(ValueError):
             voice_plugin.tts("   ")
+
+
+# ------------------------------------------------ 插件 = 调用端（只发 HTTP）
+
+class TestVoiceClient:
+    def test_transcribe_goes_to_endpoint(self, monkeypatch):
+        """插件侧转写只走端点，不在本地加载引擎。"""
+        seen = {}
+
+        def fake_http(wav):
+            seen["len"] = len(wav)
+            return "端点结果"
+
+        monkeypatch.setattr(voice_plugin, "_openai_transcribe", fake_http)
+        monkeypatch.setattr(
+            voice_plugin, "_get_stt",
+            lambda: (_ for _ in ()).throw(AssertionError("插件侧不许加载本机引擎")))
+        assert voice_plugin.transcribe(b"RIFFxxxx") == "端点结果"
+        assert seen["len"] == 8
+
+    def test_tts_forwards_voice_and_text(self, monkeypatch):
+        seen = {}
+
+        def fake_http(text, voice=""):
+            seen.update(text=text, voice=voice)
+            return b"RIFFdata"
+
+        monkeypatch.setattr(voice_plugin, "_openai_tts", fake_http)
+        assert voice_plugin.tts("你好", "duorou") == b"RIFFdata"
+        assert seen == {"text": "你好", "voice": "duorou"}
+
+    def test_missing_base_url_is_actionable(self, monkeypatch):
+        monkeypatch.setattr(voice_plugin, "_client_cfg", lambda: {})
+        with pytest.raises(RuntimeError, match="base_url"):
+            voice_plugin.tts("你好")

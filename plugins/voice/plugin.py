@@ -5,6 +5,14 @@ HTTP 端点触达（``/api/audio/transcribe`` / ``/api/audio/tts``，由
 ``backend/api/routers/audio_api.py`` 薄壳转发），本插件不注册任何 agent
 工具，内核（omni_core）对它零 import——语音对大脑不可见（单链路红线）。
 
+**职责边界（M2.5a 服务化）**：本插件是**调用端**——``transcribe``/``tts`` 只把
+请求发到 OpenAI 音频兼容端点（本机常驻服务或在线厂商），端点地址/密钥在插件配置
+``~/.omniagent/plugins/voice.yaml``。引擎本身（模型路径/音色/空闲回收/端口）住在
+``engine_service.py`` 常驻进程 + 服务配置 ``~/.omniagent/voice_service.yaml``；
+``transcribe_local``/``tts_local`` 是引擎实现，只有服务进程会调（否则会把请求
+按端点配置再转发回自己）。
+
+
 能力（capability 注册制，插件未启用 = 能力不存在 = 端点 404）：
 - ``voice_transcribe(wav_bytes) -> str``：16kHz 单声道 WAV → 中/英文文本；
 - ``voice_tts(text, voice="") -> bytes``：文本 → 16 位 PCM WAV（32kHz），
@@ -19,7 +27,7 @@ TTS = GPT-SoVITS v2 微调引擎（CosyVoice2 zero-shot 已退役，原因与验
 懒加载：sherpa-onnx / torch / 模型权重只在**首次调用**时构造（import 本包
 零开销）；``enabled=false``（默认）时进程内无 ONNXRuntime/torch。
 
-模型（放 ``~/.omniagent/models/``，路径可用 plugins/voice.yaml 覆盖）：
+模型（放 ``~/.omniagent/models/``，路径可用 voice_service.yaml 覆盖）：
 - SenseVoice：``models/sense-voice/{model.int8.onnx, tokens.txt}``
   （sherpa-onnx releases 的 sense-voice int8 包，中英日韩粤）
 - GPT-SoVITS：``models/gptsovits/``——``pretrained_models/``（v2 底模：
@@ -37,9 +45,10 @@ import os
 import queue
 import subprocess
 import sys
+import urllib.request
 import threading
 import time
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from utils import get_logger
 
@@ -96,6 +105,12 @@ def _get_stt():
     return _STT
 
 
+# 转写串行锁（2026-11-04）：懒加载窗口期/流构造并非并发安全——手机免提的陈旧请求
+# 与 Web 按住说话同时到达会把首次加载打挂（实测 503 三连）。单进程内排队即可，
+# 转写本身亚秒级，不构成吞吐瓶颈。
+_STT_LOCK = threading.Lock()
+
+
 def _decode_wav_16k_mono(wav_bytes: bytes):
     """WAV bytes → 16kHz float32 单声道。浏览器一般已给 16k；采样率不符时兜底重采样
     （整倍数走平均抽取，否则线性插值——语音识别对它不敏感）。"""
@@ -117,23 +132,175 @@ def _decode_wav_16k_mono(wav_bytes: bytes):
     return mono[:cap] if len(mono) > cap else mono
 
 
-def transcribe(wav_bytes: bytes) -> str:
-    """WAV（16k 单声道为宜）→ 文本。空音频返回空串；模型/依赖缺失抛 RuntimeError。"""
-    if not wav_bytes:
-        return ""
+# ── 调用端点（M2.5a 服务化：插件只做接口调用）─────────────────────────────
+# 配置（~/.omniagent/plugins/voice.yaml，纯客户端配置）：
+#   base_url: http://127.0.0.1:18742/v1     # 本机常驻服务，或任意在线厂商
+#   api_key / stt_model / tts_model / voice
+# 引擎配置（模型路径/音色/空闲回收/端口）在 ~/.omniagent/voice_service.yaml，
+# 由 engine_service 与本文件的本机引擎段读取（见 service_config.py）。
+
+
+def _client_cfg() -> Dict[str, Any]:
+    """调用端配置（插件目录里的那份）。"""
+    try:
+        from omni_core.tools.loader import plugin_config
+
+        return plugin_config("voice") or {}
+    except Exception:  # noqa: BLE001 —— 配置读不到 = 未配置端点
+        return {}
+
+
+def _openai_audio_cfg() -> tuple:
+    cfg = _client_cfg()
+    base = str(cfg.get("base_url") or "").rstrip("/")
+    if not base:
+        raise RuntimeError(
+            "语音端点未配置（plugins/voice.yaml 的 base_url）——"
+            "本机服务填 http://127.0.0.1:<service_port>/v1，或填在线厂商地址")
+    return cfg, base
+
+
+def _service_root(base: str) -> str:
+    """端点 → 服务根（``.../v1`` 去掉）——/healthz 挂在根上。"""
+    return base[:-3] if base.endswith("/v1") else base
+
+
+def _openai_request(req, base: str, tail: str) -> bytes:
+    """发 HTTP 并把「端点没起来」翻译成可执行的提示（不是裸 URLError）。"""
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return resp.read()
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(
+            f"语音端点不可用（{base}{tail}）: {e}。"
+            "本地服务请确认 engine_service 已启动（desktop 自动拉起；"
+            "手动：python -m plugins.voice.engine_service）") from e
+
+
+def _openai_transcribe(wav_bytes: bytes) -> str:
+    """OpenAI 音频兼容 STT：multipart POST /audio/transcriptions → {"text": ...}。"""
+    import uuid
+    import urllib.request
+    cfg, base = _openai_audio_cfg()
+    boundary = "----hachifivoice" + uuid.uuid4().hex
+    model = str(cfg.get("stt_model") or "whisper-1")
+    crlf = "\r\n"
+    parts = [
+        (f'--{boundary}{crlf}Content-Disposition: form-data; name="model"'
+         f'{crlf}{crlf}{model}{crlf}').encode(),
+        (f'--{boundary}{crlf}Content-Disposition: form-data; name="file"; '
+         f'filename="audio.wav"{crlf}Content-Type: audio/wav{crlf}{crlf}').encode()
+        + wav_bytes + crlf.encode(),
+        f"--{boundary}--{crlf}".encode(),
+    ]
+    req = urllib.request.Request(
+        base + "/audio/transcriptions", data=b"".join(parts), method="POST",
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}",
+                 "Authorization": "Bearer " + str(cfg.get("api_key") or "")})
+    data = json.loads(_openai_request(req, base, "/audio/transcriptions").decode("utf-8"))
+    return str(data.get("text") or "").strip()
+
+
+def _openai_tts(text: str, voice: str = "") -> bytes:
+    """OpenAI 音频兼容 TTS：POST /audio/speech {model,input,voice} → 音频 bytes。
+
+    ``voice`` 显式给就优先，否则用插件配置的 voice（本机服务会把它当音色名，
+    不认识时自动回退默认音色）。
+    """
+    import urllib.request
+    cfg, base = _openai_audio_cfg()
+    body = json.dumps({
+        "model": str(cfg.get("tts_model") or "tts-1"),
+        "input": text,
+        "voice": str(voice or cfg.get("voice") or "alloy"),
+        "response_format": "wav",
+    }).encode()
+    req = urllib.request.Request(
+        base + "/audio/speech", data=body, method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": "Bearer " + str(cfg.get("api_key") or "")})
+    return _openai_request(req, base, "/audio/speech")
+
+
+def _stt_idle_sec() -> float:
+    """进程内 STT 空闲卸载阈值（配置 ``stt_idle_sec``；0 = 常驻不卸）。"""
+    try:
+        return max(0.0, float(_cfg().get("stt_idle_sec", 900)))
+    except (TypeError, ValueError):
+        return 900.0
+
+
+_STT_LAST_USED = 0.0
+_STT_MONITOR: Optional[threading.Thread] = None
+_STT_MONITOR_LOCK = threading.Lock()
+
+
+def _start_stt_monitor() -> None:
+    global _STT_MONITOR
+    if _stt_idle_sec() <= 0:
+        return
+    with _STT_MONITOR_LOCK:
+        if _STT_MONITOR is not None and _STT_MONITOR.is_alive():
+            return
+        _STT_MONITOR = threading.Thread(target=_stt_monitor_loop,
+                                        name="stt-idle-monitor", daemon=True)
+        _STT_MONITOR.start()
+
+
+def _stt_monitor_loop() -> None:
+    """空闲超过 ``stt_idle_sec`` 丢掉识别器（ONNX 会话几百 MB，不用就别留着）。
+
+    与 TTS 子进程回收同构：只是回收力度不同——STT 没有子进程可杀，只能丢引用
+    （onnxruntime arena 未必立刻还给系统，但下一次懒加载会重建）。
+    """
+    global _STT
+    while True:
+        time.sleep(_TTS_MONITOR_SEC)
+        idle = _stt_idle_sec()
+        if idle <= 0 or _STT is None:
+            continue
+        if time.time() - _STT_LAST_USED < idle:
+            continue
+        if not _STT_LOCK.acquire(blocking=False):  # 正在转写，跳过这一轮
+            continue
+        try:
+            if _STT is not None and time.time() - _STT_LAST_USED >= idle:
+                _STT = None
+                logger.info("STT 空闲 %.0fs，卸载识别器", time.time() - _STT_LAST_USED)
+        finally:
+            _STT_LOCK.release()
+
+
+def transcribe_local(wav_bytes: bytes) -> str:
+    """本机引擎转写（进程内）。**只有 engine_service 调它**——插件侧只发 HTTP，
+    服务端调这个入口才不会把请求按端点配置转发回自己。"""
+    global _STT_LAST_USED
     samples = _decode_wav_16k_mono(wav_bytes)
     if samples.size == 0:
         return ""
     recognizer = _get_stt()
-    stream = recognizer.create_stream()
-    stream.accept_waveform(16000, samples)
-    recognizer.decode_stream(stream)
-    text = str(getattr(stream.result, "text", "") or "").strip()
+    with _STT_LOCK:
+        stream = recognizer.create_stream()
+        stream.accept_waveform(16000, samples)
+        recognizer.decode_stream(stream)
+        text = str(getattr(stream.result, "text", "") or "").strip()
+    _STT_LAST_USED = time.time()
+    _start_stt_monitor()
     if text:
         # 收到语音 = 模型大概率也会用语音回（msg_send_voice）。趁它在想回复内容的
         # 十几秒里把 GS 引擎子进程拉起来，用户感知不到冷启动。
         _WORKER.prewarm()
     return text
+
+
+def transcribe(wav_bytes: bytes) -> str:
+    """WAV（16k 单声道为宜）→ 文本。空音频返回空串；端点不可用抛 RuntimeError。
+
+    插件侧唯一实现：把请求发给配置的 OpenAI 音频兼容端点（本机服务/在线厂商）。
+    """
+    if not wav_bytes:
+        return ""
+    return _openai_transcribe(wav_bytes)
 
 
 def _gptsovits_dir() -> str:
@@ -350,6 +517,32 @@ class _TtsWorker:
             finally:
                 self._lock.release()
 
+    def release(self) -> bool:
+        """杀掉引擎子进程归还内存/显存，**保留本对象与监视线程**（空闲回收用）。
+
+        与 ``shutdown`` 的区别：再调用 ``synthesize`` 会自动重新懒启动，
+        所以常驻服务可以在空闲时把权重全部还掉而不退出进程。
+        """
+        with self._lock:
+            had = self._proc is not None
+            self._kill_locked()
+            return had
+
+    def snapshot(self) -> Dict[str, Any]:
+        """运行态快照（不触发任何加载，供状态接口用）。"""
+        proc = self._proc
+        alive = proc is not None and proc.poll() is None
+        return {
+            "running": alive,
+            "pid": proc.pid if (alive and proc is not None) else None,
+            "voices": list(self._voices) if alive else [],
+            "idle_sec": (round(time.time() - self._last_used, 1)
+                         if alive and self._last_used else None),
+        }
+
+    def is_running(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
     def shutdown(self) -> None:
         self._monitor_stop.set()
         with self._lock:
@@ -368,18 +561,124 @@ def _tts_dispatch(text: str, voice: str) -> bytes:
     return wav
 
 
+def tts_local(text: str, voice: str = "") -> bytes:
+    """本机引擎合成（进程内）。只有 engine_service 调它（理由同 transcribe_local）。"""
+    return _tts_dispatch(text, voice)
+
+
 def tts(text: str, voice: str = "") -> bytes:
     """文本 → 16 位 PCM WAV bytes（32kHz）。空文本抛 ValueError；上限 500 字。
 
     失败即抛（调用方降级纯文本）——绝不返回"能播但听不懂"的怪音。
-    ``voice`` = ``voices/`` 下的音色名；空取 ``tts_voice`` 配置，再空取第一个。
+    插件侧唯一实现：发给配置的 OpenAI 音频兼容端点（本机服务/在线厂商）。
+    ``voice`` 透传给端点（本机服务认 voices/ 下的音色名，不认识就用默认音色）。
     """
     text = (text or "").strip()
     if not text:
         raise ValueError("text 为空")
     if len(text) > _TTS_MAX_CHARS:
         raise ValueError(f"文本过长（上限 {_TTS_MAX_CHARS} 字）")
-    return _tts_dispatch(text, voice)
+    return _openai_tts(text, voice)
+
+
+# ── 空闲回收 / 状态快照（常驻服务与设置页共用；不加载任何模型）──────────────
+
+def release_engines() -> Dict[str, Any]:
+    """释放重型引擎但保留进程与能力（空闲回收入口；下次调用自动懒加载）。"""
+    global _STT
+    with _STT_LOCK:
+        had_stt = _STT is not None
+        _STT = None
+    had_tts = _WORKER.release()
+    if had_stt or had_tts:
+        logger.info("语音引擎已释放（STT=%s, TTS=%s）", had_stt, had_tts)
+    return {"stt_released": had_stt, "tts_released": had_tts}
+
+
+def engines_loaded() -> bool:
+    """是否还有引擎驻留（服务看门狗据此决定要不要释放）。"""
+    with _STT_LOCK:
+        loaded = _STT is not None
+    return loaded or _WORKER.is_running()
+
+
+def _voice_names() -> List[str]:
+    """``voices/`` 下的音色名（*.wav 文件名，不含扩展名；目录缺失 = 空）。"""
+    try:
+        return sorted(os.path.splitext(f)[0] for f in os.listdir(_voices_dir())
+                      if f.lower().endswith(".wav"))
+    except OSError:
+        return []
+
+
+def status() -> Dict[str, Any]:
+    """**引擎侧**快照（只读、零加载）——只有 engine_service 进程里才有意义。
+
+    它在服务进程内读 ``voice_service.yaml`` 与本进程的 STT/TTS 状态；后端进程
+    用它没有意义（模型不在那个进程里），后端只调下面的 ``client_status``。
+    """
+    cfg = _cfg()
+    stt_dir = str(cfg.get("stt_model_dir") or _default_model("sense-voice"))
+    stt_files = [os.path.join(stt_dir, n) for n in ("model.int8.onnx", "tokens.txt")]
+    vits, t2s = _tts_weights()
+    tts = _WORKER.snapshot()
+    if not tts["voices"]:
+        tts["voices"] = _voice_names()  # 引擎未起时退化读目录，仍然是真实可用音色
+    return {
+        "stt": {
+            "loaded": _STT is not None,
+            "model_dir": stt_dir,
+            "ready": all(os.path.isfile(p) for p in stt_files),
+            "missing": [p for p in stt_files if not os.path.isfile(p)],
+            "idle_sec": _stt_idle_sec(),
+        },
+        "tts": {
+            **tts,
+            "voice_default": str(cfg.get("tts_voice") or ""),
+            "eq": bool(cfg.get("tts_eq", False)),
+            "idle_sec": _idle_sec(),
+            "weights": [vits, t2s],
+            "weights_ready": all(os.path.isfile(p) for p in (vits, t2s)),
+            "voices_dir": _voices_dir(),
+            "repo": _gs_repo_dir(),
+        },
+        "service": {
+            "port": int(cfg.get("service_port") or 18742),
+            "idle_sec": float(cfg.get("service_idle_sec") or 600),
+        },
+    }
+
+
+def client_status() -> Dict[str, Any]:
+    """**调用侧**快照：端点配置 + 服务探活（设置页/外部客户端看的就是这份）。
+
+    探测用服务根的 ``/healthz``（``.../v1`` 去掉）。在线厂商没有这个端点时
+    ``reachable=False`` 只是「探不到」，不代表端点不可用——UI 需区分措辞。
+    """
+    cfg = _client_cfg()
+    base = str(cfg.get("base_url") or "").rstrip("/")
+    out: Dict[str, Any] = {
+        "endpoint": {
+            "base_url": base,
+            "api_key_set": bool(str(cfg.get("api_key") or "")),
+            "stt_model": str(cfg.get("stt_model") or ""),
+            "tts_model": str(cfg.get("tts_model") or ""),
+            "voice": str(cfg.get("voice") or ""),
+        },
+        "service": {"reachable": False, "url": "", "detail": None, "error": ""},
+    }
+    if not base:
+        out["service"]["error"] = "端点未配置"
+        return out
+    url = _service_root(base) + "/healthz"
+    out["service"]["url"] = url
+    try:
+        with urllib.request.urlopen(url, timeout=3) as resp:
+            out["service"]["detail"] = json.loads(resp.read().decode("utf-8"))
+        out["service"]["reachable"] = True
+    except Exception as e:  # noqa: BLE001 —— 探活失败只是"没起来/不是本机服务"
+        out["service"]["error"] = f"{type(e).__name__}: {e}"
+    return out
 
 
 # ── 唱歌（SVC）：实现整体在 sing_runtime（worker 单例 / sing / sing_cut_chorus /
@@ -394,6 +693,7 @@ def startup(ctx) -> None:
     register_capability("voice_transcribe", transcribe)
     register_capability("voice_tts", tts)
     register_capability("voice_sing", sing)
+    register_capability("voice_status", client_status)
     logger.info("语音插件已启用（STT/TTS 将在首次调用时懒加载；SVC 声库缺失时报明确错误）")
 
 
@@ -404,6 +704,7 @@ def shutdown() -> None:
     unregister_capability("voice_transcribe")
     unregister_capability("voice_tts")
     unregister_capability("voice_sing")
+    unregister_capability("voice_status")
     global _STT
     _STT = None
     _WORKER.shutdown()

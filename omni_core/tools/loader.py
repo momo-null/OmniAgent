@@ -32,6 +32,7 @@ __all__ = [
     "last_report",
     "plugin_module",
     "plugin_config",
+    "plugin_manifest",
     "list_plugins",
 ]
 
@@ -169,6 +170,22 @@ def load_plugins(cfg: Optional[Dict[str, Any]] = None, ctx: Optional[PluginConte
 
     _last_report = report
     return report
+
+
+def plugin_manifest(name: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """读取插件 manifest（``plugin.json``）；找不到/非法返回空 dict（不抛）。
+
+    配置面板用：manifest 里的 ``config`` 字段是插件自报的配置 schema，
+    宿主只按 type 做校验与渲染，不认识任何具体键名。
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    for root in _plugin_dirs(cfg):
+        directory = root / str(name)
+        if not directory.is_dir():
+            continue
+        manifest = _read_manifest(directory, str(name))
+        return manifest if isinstance(manifest, dict) else {}
+    return {}
 
 
 def plugin_config(name: str) -> Dict[str, Any]:

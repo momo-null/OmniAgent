@@ -1,0 +1,67 @@
+# 语音引擎服务配置示例（**独立服务**，不是插件配置）。
+#
+# 用法：复制到 ~/.omniagent/voice_service.yaml 后按需修改——
+#   Windows: copy plugins\voice\voice_service.example.yaml %USERPROFILE%\.omniagent\voice_service.yaml
+#   *nix:    cp plugins/voice/voice_service.example.yaml ~/.omniagent/voice_service.yaml
+# 也可以完全不用它：服务对每个键都有默认值，desktop 启动时按默认端口拉起。
+#
+# 读取方：plugins/voice/engine_service.py（监听 / 空闲释放）、本机引擎段
+#         （模型路径 / 音色 / 权重）、唱歌 SVC（sing_* 与曲库闸门）。
+# 调用端只配端点：~/.omniagent/plugins/voice.yaml（见 plugin.example.yaml）。
+#
+# 生效时机：service_host / service_port / service_token / service_idle_sec 在服务
+# 启动时读取（改完重启服务）；tts_voice / tts_eq / 各 idle / 路径在调用时读取。
+
+# ── 监听与空闲释放 ──
+# 默认只听回环。给局域网别的机器用改 0.0.0.0，**并务必设置 service_token**
+# （服务本身没有用户体系，开放到网络就是让任何人白嫖你的显卡）。
+service_host: 127.0.0.1
+service_port: 18742
+# 非空则校验 Authorization: Bearer <token>（默认空 = 不校验，仅回环场景够用）
+service_token: ""
+# 连续无请求多少秒释放全部模型：进程不退、监听常在，下次请求重新懒加载；
+# 0 = 永不释放（常驻显存/内存）
+service_idle_sec: 600
+
+# ── 引擎：音色 ──
+# 一个音色 = voices/<名字>.wav（参考音频）+ 同名 .txt（韵律参考文本）；
+# 音色本体在微调权重里，wav 只提供音色与韵律参考。
+# 目录默认 ~/.omniagent/models/gptsovits/voices/
+tts_voice: duorou
+# 输出频响补偿：GS 微调输出已贴参考频谱，一般关闭；换回旧引擎/旧音源时才开
+tts_eq: false
+
+# ── 引擎：空闲回收 ──
+# TTS 跑在子进程里，杀进程是唯一能把 torch 内存还给系统的手段（0 = 常驻）
+tts_idle_sec: 600
+# STT（SenseVoice ONNX）识别器空闲卸载秒数（0 = 常驻）
+stt_idle_sec: 900
+
+# ── 路径（全部留空 = 自动探测，绝大多数情况不用填）──
+# SenseVoice 目录，需 model.int8.onnx + tokens.txt；默认 ~/.omniagent/models/sense-voice
+stt_model_dir: ""
+# GPT-SoVITS 模型目录（weights/ + voices/ + pretrained_models/）；
+# 默认 ~/.omniagent/models/gptsovits
+gptsovits_dir: ""
+# 音色目录；默认 <gptsovits_dir>/voices
+voices_dir: ""
+# 上游 GPT-SoVITS clone（含独立 venv）；默认 <仓库>/external/GPT-SoVITS
+gptsovits_repo: ""
+# worker 解释器（GS 独立 venv 的 python）；默认 <gptsovits_repo>/.venv/Scripts/python.exe
+tts_python: ""
+# 微调权重（相对路径按 gptsovits_dir 解析）；
+# 默认 weights/doro_e12_s288.pth + weights/doro-e30.ckpt
+tts_vits: ""
+tts_t2s: ""
+
+# ── 唱歌（SVC，引擎侧；设置页不暴露）──
+# 在线曲库总闸：开 = 曲库外点歌先应下、后台搜歌→分离→副歌→定 key→入库→唱
+# （约 1-2 分钟，失败也会回话）；关 = 维持"这首我还不会唱"。
+# 站点源插件在 ~/.omniagent/song_sources/（不入公开仓）。
+sing_online: false
+# SVC 声库 / 解释器（留空 = 自动探测 ~/.omniagent/models/sing 与 external/RVC-WebUI）
+# sing_repo: ""
+# sing_python: ""
+# sing_model: ""
+# sing_index: ""
+# sing_idle_sec: 300

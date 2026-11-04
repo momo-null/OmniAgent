@@ -347,6 +347,69 @@ export interface ToolsResponse {
   };
 }
 
+// ── 插件配置（GET/PUT /api/runtime/tools/plugins/<name>/config） ─────────
+// schema 由插件 plugin.json 的 config 字段自报；前端只按 type 通用渲染，
+// 不认识任何具体键名（语音/OCR/视觉共用同一套）。
+export type PluginConfigFieldType = "text" | "password" | "path" | "number" | "bool" | "select";
+
+export interface PluginConfigField {
+  key: string; // 支持点分路径（openai.base_url = YAML 嵌套键）
+  label: string;
+  type: PluginConfigFieldType;
+  default?: unknown;
+  desc?: string;
+  group?: string;
+  secret?: boolean;
+  min?: number;
+  max?: number;
+  options?: { value: string; label: string }[];
+}
+
+export interface PluginConfigResponse {
+  ok: boolean;
+  name: string;
+  /** plugin = 插件目录那份；service = manifest 声明的独立服务配置 */
+  scope?: "plugin" | "service";
+  path?: string;
+  schema: PluginConfigField[];
+  values: Record<string, unknown>;
+  secrets_set?: Record<string, boolean>;
+  error?: string;
+}
+
+// ── 语音引擎状态（GET /api/audio/status） ─────────────
+// 调用端配置 + 服务探活：引擎在独立进程里，后端只看得到端点与 /healthz。
+export interface VoiceStatus {
+  ok: boolean;
+  endpoint: {
+    base_url: string;
+    api_key_set: boolean;
+    stt_model: string;
+    tts_model: string;
+    voice: string;
+  };
+  service: {
+    reachable: boolean;
+    url: string;
+    error: string;
+    detail: {
+      ok: boolean;
+      loaded: boolean;
+      stt_loaded: boolean;
+      stt_ready: boolean;
+      tts_running: boolean;
+      tts_pid: number | null;
+      voices: string[];
+      voice_default: string;
+      stt_idle_sec: number;
+      tts_idle_sec: number;
+      models_ready: boolean;
+      idle_sec: number;
+      idle_release_sec: number;
+    } | null;
+  };
+}
+
 export interface RuntimeSnapshot {
   skills: SkillInfo[];
   world: WorldInfo;

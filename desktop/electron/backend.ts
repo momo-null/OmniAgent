@@ -29,7 +29,7 @@ export interface BackendHandle {
 
 // ── 端口 ──────────────────────────────────────────────────
 
-function isPortFree(port: number): Promise<boolean> {
+export function isPortFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const srv = createServer();
     srv.once("error", () => resolve(false));
@@ -141,6 +141,31 @@ export function startGateway(root: string, backendUrl = ""): ChildProcess {
   });
   appendLog(`\n[shell] ${new Date().toISOString()} spawn gateway pid=${child.pid}\n`, "gateway.log");
   const pump = (chunk: Buffer) => appendLog(chunk.toString("utf8"), "gateway.log");
+  child.stdout?.on("data", pump);
+  child.stderr?.on("data", pump);
+  return child;
+}
+
+/**
+ * 语音引擎常驻服务（plugins/voice/engine_service.py）：OpenAI 音频兼容形状。
+ *
+ * 与 gateway 的区别：它**不加载模型也能活着**——启动只监听端口，首个请求才懒加载；
+ * 空闲只释放模型（进程不退），所以壳只需要拉起一次 + 崩溃自愈，不用做按需拉起。
+ * 端口/开关从 ~/.omniagent/plugins/voice.yaml 读（与后端 base_url 同源）。
+ */
+export function startVoiceEngine(root: string, port: number): ChildProcess {
+  const args = ["-m", "plugins.voice.engine_service", "--port", String(port)];
+  const child = spawn(projectPython(root), args, {
+    cwd: root,
+    env: cleanEnv(),
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  appendLog(
+    `\n[shell] ${new Date().toISOString()} spawn voice-engine port=${port} pid=${child.pid}\n`,
+    "voice-engine.log",
+  );
+  const pump = (chunk: Buffer) => appendLog(chunk.toString("utf8"), "voice-engine.log");
   child.stdout?.on("data", pump);
   child.stderr?.on("data", pump);
   return child;

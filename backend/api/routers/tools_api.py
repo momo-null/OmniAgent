@@ -10,6 +10,10 @@
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+import yaml
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -153,3 +157,206 @@ async def set_plugin_enabled(request: Request):
             {"ok": False, "error": f"写入插件配置失败: {type(e).__name__}: {e}"}, status_code=500
         )
     return JSONResponse({"ok": True, "name": name, "enabled": enabled})
+
+
+# ── 插件配置（schema 由插件自报，宿主不认识任何具体键名）────────────────────
+# plugin.json 的 "config" 是字段数组：{key, label, type, default?, desc?, options?,
+# secret?, min?, max?, group?}。type ∈ text|password|path|number|bool|select。
+# 本接口只做「按键写 YAML / 按 type 校验」，因此对任何插件通用（语音、OCR、视觉…）。
+#
+# scope=service：插件可以把**另一份独立文件的 schema** 放在 manifest 的
+# "service_config": {"path": "~/.omniagent/xxx.yaml", "fields": [...]}。
+# 用途是「插件只是调用端，引擎是独立服务」——服务自己的配置不该混进插件目录。
+# 宿主仍然只按声明读写，不认识任何具体键名或服务名。
+
+def _dig(data, key, default=None):
+    """按点分路径取值（``openai.base_url`` 表示嵌套键）。"""
+    cur = data
+    for part in str(key).split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
+
+
+def _put_dig(data: dict, key: str, value) -> None:
+    parts = str(key).split(".")
+    cur = data
+    for part in parts[:-1]:
+        nxt = cur.get(part)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[part] = nxt
+        cur = nxt
+    cur[parts[-1]] = value
+
+
+def _fields(raw) -> list:
+    """从字段数组里剔除无效项（无 key / 无 label）。"""
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for f in raw:
+        if not isinstance(f, dict):
+            continue
+        key = str(f.get("key") or "").strip()
+        if not key or not str(f.get("label") or "").strip():
+            continue
+        out.append(f)
+    return out
+
+
+def _schema_fields(manifest: dict) -> list:
+    """manifest 顶层 ``config``（插件自己目录里的那份配置）。"""
+    return _fields(manifest.get("config"))
+
+
+def _read_yaml(path) -> dict:
+    """读一份 YAML 配置；缺失/非法一律空 dict（配置坏了不该让整页读不出来）。"""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception:  # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _scope_target(manifest: dict, name: str, scope: str):
+    """（路径, 字段数组）：
+
+    - ``plugin``：``~/.omniagent/plugins/<name>.yaml``（插件自己的配置）
+    - ``service``：manifest 的 ``service_config.path`` 指向的独立文件（独立服务配置）
+    """
+    if scope == "service":
+        node = manifest.get("service_config")
+        if not isinstance(node, dict) or not str(node.get("path") or "").strip():
+            return None, []
+        return Path(os.path.expanduser(str(node["path"]).strip())), _fields(node.get("fields"))
+    from omni_core.local.runtime_paths import plugin_config_file
+
+    return plugin_config_file(name), _fields(manifest.get("config"))
+
+
+def _coerce(field: dict, value):
+    """按 schema 校验/规范化单个值；不合法抛 ValueError。"""
+    key = field.get("key")
+    typ = str(field.get("type") or "text")
+    if typ == "bool":
+        if not isinstance(value, bool):
+            raise ValueError(f"{key} 必须是布尔值")
+        return value
+    if typ == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{key} 必须是数字")
+        if "min" in field and value < field["min"]:
+            raise ValueError(f"{key} 不能小于 {field['min']}")
+        if "max" in field and value > field["max"]:
+            raise ValueError(f"{key} 不能大于 {field['max']}")
+        return int(value) if float(value).is_integer() else float(value)
+    if typ == "select":
+        allowed = [str(o.get("value")) for o in (field.get("options") or [])
+                   if isinstance(o, dict)]
+        if str(value) not in allowed:
+            raise ValueError(f"{key} 必须是 {allowed} 之一")
+        return str(value)
+    if not isinstance(value, str):
+        raise ValueError(f"{key} 必须是字符串")
+    return value
+
+
+@router.get("/tools/plugins/{name}/config")
+async def get_plugin_config(name: str, scope: str = "plugin"):
+    """配置 schema + 当前值（secret 只回「是否已设置」，明文永不出站）。
+
+    ``scope=plugin``（默认）读插件目录那份；``scope=service`` 读 manifest 声明的
+    独立服务配置。两者 schema 都来自 manifest，宿主不认键名。
+    """
+    try:
+        import config as app_config
+        from omni_core.tools.loader import plugin_manifest
+
+        cfg = app_config.load_config() or {}
+        manifest = plugin_manifest(name, cfg)
+        if not manifest:
+            return JSONResponse({"ok": False, "error": f"未知插件: {name}"}, status_code=404)
+        if scope not in ("plugin", "service"):
+            return JSONResponse({"ok": False, "error": f"未知 scope: {scope}"}, status_code=400)
+        path, fields = _scope_target(manifest, name, scope)
+        if path is None:
+            return JSONResponse(
+                {"ok": False, "error": f"插件 {name} 未声明 {scope} 配置"}, status_code=400)
+        raw = _read_yaml(path)
+        values, secrets_set = {}, {}
+        for f in fields:
+            key = f["key"]
+            val = _dig(raw, key, f.get("default"))
+            if f.get("secret"):
+                secrets_set[key] = bool(val)
+                values[key] = ""
+            else:
+                values[key] = val
+        return JSONResponse({"ok": True, "name": name, "scope": scope, "path": str(path),
+                             "schema": fields, "values": values, "secrets_set": secrets_set})
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(
+            {"ok": False, "error": f"读取配置失败: {type(e).__name__}: {e}"},
+            status_code=500)
+
+
+@router.put("/tools/plugins/{name}/config")
+async def put_plugin_config(name: str, request: Request, scope: str = "plugin"):
+    """按 schema 写回目标 YAML（同 GET 的 scope 语义）。
+
+    - body: ``{"values": {key: value}}``；secret 字段传空串 = 保持不变
+      （GET 不回传明文，避免一次保存把密钥清空）。
+    - 写回用 PyYAML 整份重写，YAML 注释会丢——需要注释时改文件本身。
+    """
+    import config as app_config
+    from omni_core.tools.loader import plugin_manifest
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    values = (body or {}).get("values") if isinstance(body, dict) else None
+    if not isinstance(values, dict):
+        return JSONResponse({"ok": False, "error": "需要 {values: {...}}"}, status_code=400)
+
+    cfg = app_config.load_config() or {}
+    manifest = plugin_manifest(name, cfg)
+    if not manifest:
+        return JSONResponse({"ok": False, "error": f"未知插件: {name}"}, status_code=404)
+    if scope not in ("plugin", "service"):
+        return JSONResponse({"ok": False, "error": f"未知 scope: {scope}"}, status_code=400)
+    path, field_list = _scope_target(manifest, name, scope)
+    if path is None:
+        return JSONResponse(
+            {"ok": False, "error": f"插件 {name} 未声明 {scope} 配置"}, status_code=400)
+    fields = {f["key"]: f for f in field_list}
+    if not fields:
+        return JSONResponse({"ok": False, "error": f"插件 {name} 未声明可配置项"},
+                            status_code=400)
+    unknown = sorted(k for k in values if k not in fields)
+    if unknown:
+        return JSONResponse({"ok": False, "error": f"未知配置项: {', '.join(unknown)}"},
+                            status_code=400)
+
+    current = _read_yaml(path)
+    for key, val in values.items():
+        field = fields[key]
+        if field.get("secret") and val == "":
+            continue  # 空串 = 保持不变
+        try:
+            _put_dig(current, key, _coerce(field, val))
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(current, allow_unicode=True, sort_keys=False),
+                        encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse(
+            {"ok": False, "error": f"写入配置失败: {type(e).__name__}: {e}"},
+            status_code=500)
+    return JSONResponse({"ok": True, "name": name, "scope": scope, "path": str(path)})
