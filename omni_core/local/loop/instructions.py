@@ -239,6 +239,8 @@ class InstructionMixin:
         if str(getattr(self, "mode", "auto") or "auto") == "chat":
             return None
         try:
+            # 总闸（设置页「通用」→ 收尾意图门）：只对 task/auto 有效——上面那行 chat
+            # 退出在读键之前，所以 chat 不受本开关影响，不存在"开关开着 + chat 被关掉"的组合。
             if not bool(config.get_config("runtime.long_task.finish_intent_check", True)):
                 return None
         except Exception:

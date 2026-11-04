@@ -200,6 +200,42 @@ class TestMemoryGate:
         assert g3.json()["runtime"]["knowledge"]["memory"]["enabled"] is False
 
 
+# === 收尾意图门开关（设置页「通用」数据源，memory-architecture §6） ===
+class TestFinishIntentGateSetting:
+    def test_finish_intent_gate_roundtrip(self, client, monkeypatch, tmp_path):
+        """runtime.long_task.finish_intent_check：GET 出代码缺省 True（不是裸 0/缺项）；
+        PUT 关闭后持久化并回读 False；再打开 = 与缺省相同 → 差集剪掉，生效值回退 True。
+        开关只管 task/auto：chat 取向在更早的分支就退出，读本键之前已经不装了。"""
+        from omni_core.local import runtime_paths as P
+        monkeypatch.setattr(P, "_GLOBAL", tmp_path / ".omniagent")
+        P.ensure_global_dirs()
+
+        import config
+        config._config_cache = {}
+        config._settings_cache = {}
+
+        g = client.get("/api/settings")
+        assert g.status_code == 200
+        assert g.json()["runtime"]["long_task"]["finish_intent_check"] is True
+
+        r = client.put("/api/settings",
+                       json={"runtime": {"long_task": {"finish_intent_check": False}}})
+        assert r.status_code == 200
+        config._config_cache = {}
+        config._settings_cache = {}
+        g2 = client.get("/api/settings")
+        assert g2.json()["runtime"]["long_task"]["finish_intent_check"] is False
+        assert config.load_settings()["runtime"]["long_task"]["finish_intent_check"] is False
+
+        r2 = client.put("/api/settings",
+                        json={"runtime": {"long_task": {"finish_intent_check": True}}})
+        assert r2.status_code == 200
+        config._config_cache = {}
+        config._settings_cache = {}
+        g3 = client.get("/api/settings")
+        assert g3.json()["runtime"]["long_task"]["finish_intent_check"] is True
+
+
 # === M3 工具插件层枚举（前端 Skills&Tools 面板数据源） ===
 class TestToolsEndpoint:
     def test_tools_lists_plugins_and_tools(self, client):

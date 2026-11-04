@@ -372,7 +372,10 @@ agent(大脑)──通过──→ memory_remember/recall/update/forget 工具 �
   静默假成功」,而 chat 的纯文本收尾**就是交付物本身**,没有可被误判的「任务成功」;
   而门自身是一次不计入 `brain_calls` 的模型往返(timeout 90s),压在用户已经看完答案
   之后。本机(MuMu / 环回内核 / gitclaw2-grok-4.7)同一句闲聊实测:口播完成 → run 结束
-  门内 **34.29s**、关门 **0.04s**(A/B:`runtime.long_task.finish_intent_check=false`)。
+  门内 **34.29s**、关门 **0.04s**(A/B:`runtime.long_task.finish_intent_check=false`,
+  该键自 2026-11-04 起同时进 `config.CONTEXT_DEFAULTS` 与设置页「通用 → 收尾意图门」,
+  不用再手改配置文件;它的**作用域只有 `task`/`auto`**——chat 在读本键之前就已返回 None,
+  不存在"总闸开着但 chat 被单独关掉"的组合,因此也不为 chat 另设开关,见 §10)。
   这段尾巴在手机侧表现为「结果都出来了,■ 还占着发送位很久」。`task` / `auto` 语义不变。
 - **判断方式**:`sdk_bridge._plain_finish_judge` 闭包,`llm_judge.chat_json`
   **片段提取式**问法——让模型从输出中找出所有「本应作为工具调用发出」的片段
@@ -408,7 +411,7 @@ skill 不再与记忆混写,**全部内容见 `doc/plans/implemented/skill-archi
 | `knowledge.scene.max_blocks` | 15 | L2 容量上限(三级预警) |
 | `knowledge.scene.prompt_mode` | personal | L2 提炼 prompt 家族 |
 | `knowledge.diary.enabled` | True | 社交日记步(巩固期写昨日第一人称日记,§2.7) |
-| `runtime.long_task.finish_intent_check` | True | 收尾意图门(`mode=chat` 一律不装,§6) |
+| `runtime.long_task.finish_intent_check` | True | 收尾意图门(设置页「通用」;`mode=chat` 一律不装,§6) |
 
 > L0 逐字索引(§2.1)没有独立开关——跟着 `memory.enabled` 走;表建在 `brain.db` 内
 > (`l0_messages` + `l0_fts`,与 L1 同库同分词器),无可调阈值,时间窗由工具入参
@@ -458,6 +461,12 @@ skill 不再与记忆混写,**全部内容见 `doc/plans/implemented/skill-archi
 - **DSML 类文本解析兜底**:绑定厂商格式,不做;意图门的纠正重试是唯一恢复通道。
 - 每步尾部重发记忆的任何变体。
 - **旧实现兼容/双方案分支**:架构升级即整段删除旧代码,不保留配置门控的 if/else 双路径。
+- **为对话取向另设收尾意图门开关**(2026-11-04):同一根语义轴上只留一把总闸
+  `runtime.long_task.finish_intent_check`(作用域 task/auto,设置页「通用」可改)。
+  chat 不装门是**取向定义**而非偏好,写死在 `_plain_finish_judge` 的守卫里;再加
+  `..._chat` 变体会造出「总闸开 + 子闸关 = 白付 34s 尾巴换零收益」的组合,即上一条禁止的
+  双路径开关。若将来某条链在 chat 里真出现畸形调用漏纠,改法是**把那条链挪到 task/auto**
+  (交付物不是纯文本就该按工作取向跑),不是给取向打补丁。
 - rowfs/对象存储双路、存量迁移、heat 工程侧自增(L2 治理机制天然不需要)。
 - **按通道给检索结果开自动注入特例**(2026-11-02 方案 C):私聊/群聊/API 同一规则,
   检索结果只经工具自取——见 §5 不变量 4。

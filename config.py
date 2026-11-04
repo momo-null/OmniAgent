@@ -266,6 +266,13 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
             "inject_instructions": True,
             # 注入块字符上限（纪律块与记忆块共用），超限截断并标注
             "instructions_limit": 8192,
+            # 收尾意图门（现行架构见 doc/plans/implemented/memory-architecture.md §6）：
+            # 纯文本收尾判「信任大脑」成功前，用一次模型复核「是不是把没派发的调用当结论了」。
+            # 作用域只有 task/auto——对话取向（mode=chat）恒不装门，那是取向语义不是偏好
+            # （见 instructions._plain_finish_judge 的取向门），本键对 chat 无任何影响。
+            # 关 = 长任务少一次不计入 brain_calls 的往返（本机实测尾巴 34.29s → 0.04s），
+            # 代价是畸形调用不再被 nudge 重发。设置页「通用」暴露本键。
+            "finish_intent_check": True,
         },
         # 知识层 gate（TAM 移植，现行架构见 doc/plans/implemented/memory-architecture.md）：
         # memory.enabled = 记忆轴总开关（注入 + L1 提炼 + L2 场景维护全链路；设置页「伙伴 → 记忆」）
