@@ -1,13 +1,13 @@
 # 语音插件配置示例（**调用端**，不是引擎配置）。
 #
-# 用法：复制到 ~/.omniagent/plugins/voice.yaml——
-#   Windows: copy plugins\voice\plugin.example.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
-#   *nix:    cp plugins/voice/plugin.example.yaml ~/.omniagent/plugins/voice.yaml
+# 用法：按同名路径复制到 ~/.omniagent/plugins/voice.yaml——
+#   Windows: copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
+#   *nix:    cp examples/plugins/voice.yaml ~/.omniagent/plugins/voice.yaml
 # 也可以不建这份文件：manifest 里 enabled 默认 false（插件停用）。
 #
 # 插件只做接口调用：这里的每个键都在描述「把请求发到哪」。
 # 引擎（模型路径 / 音色 / 空闲回收 / 端口）属于独立服务，配置见
-# ~/.omniagent/voice_service.yaml（示例：voice_service.example.yaml）。
+# ~/.omniagent/voice_service.yaml（示例：examples/voice_service.yaml）。
 # 生效时机：全部在调用时读取，保存即生效。
 
 # 用户级开关（覆盖 plugin.json 的 enabled）

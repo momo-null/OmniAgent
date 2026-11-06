@@ -521,6 +521,11 @@ class ProjectStore:
             rec = {"role": role, "content": content, "ts": _now_iso()}
             if task_id:
                 rec["task_id"] = P.validate_identifier(task_id, "task_id")
+            # chat_id（plan §13.4，N-8）：IM 来源的真实聊天窗口键，随消息落盘——
+            # 日记蒸馏据此把经历记到正确场合头上、叙事索引场合标注由此而来；
+            # 老记录缺该字段按空处理（读者一律 .get("chat_id", "")）。
+            if chat_id:
+                rec["chat_id"] = str(chat_id)
             # extra：结构化 agent turn（执行步骤 steps + 机器状态 meta），
             # 既供前端刷新后恢复完整过程流，也供下一轮模型上下文回填（根治跨轮失忆）。
             if extra:
@@ -533,7 +538,7 @@ class ProjectStore:
         # 查它）。chat_id 由调用方（网关）给出，缺省留空则按 session_id 定位会话。
         try:
             from omni_core import memory_brain
-            memory_brain.capture(project_id, role, content)
+            memory_brain.capture(project_id, role, content, chat_id=str(chat_id or ""))
             memory_brain.index_l0_message(session_id, role, content,
                                           chat_id=chat_id, kind=l0_kind,
                                           recorded_at=rec["ts"])

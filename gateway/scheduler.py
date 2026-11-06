@@ -1,6 +1,7 @@
 """定时任务调度器（宿主，接入设计 v1.1 §5）。
 
-- jobs 存 ``~/.omniagent/cron/jobs.json``（热加载：每 tick 重读，改文件即生效，前端 CRUD 零重启）
+- jobs 存 ``~/.omniagent/cron/jobs.json``（热加载：每 tick 重读，改文件即生效，前端 CRUD 零重启；
+  手改可以带 ``//`` 注释，同 models.json/mcp.json 一套读取语义）
 - **project 关联**：job.project_id → dispatch → TaskSpec.project_id →
   三层 AGENTS.md 自动取 projects/<pid>/AGENTS.md，trajectory 按项目落盘
 - **防化石铁律**：objective 只许一句话；jobs.json 禁止路径/脚本名/数据源
@@ -16,6 +17,8 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import config
 
 _JOBS_FILE = Path.home() / ".omniagent" / "cron" / "jobs.json"
 _STATE_FILE = Path.home() / ".omniagent" / "cron" / "state.json"
@@ -73,7 +76,9 @@ def load_jobs() -> List[Dict[str, Any]]:
         _JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
         _JOBS_FILE.write_text(json.dumps({"jobs": DEFAULT_JOBS}, ensure_ascii=False, indent=1), encoding="utf-8")
     try:
-        data = json.loads(_JOBS_FILE.read_text(encoding="utf-8"))
+        # // 注释容忍（与 models.json / mcp.json 同一套读取语义）：手改的 jobs.json
+        # 可以带说明；定时任务页保存会重写为无注释版本。
+        data = config.loads_jsonc(_JOBS_FILE.read_text(encoding="utf-8"))
         return data.get("jobs", [])
     except Exception:
         return []

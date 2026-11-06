@@ -1,13 +1,13 @@
 # 语音引擎服务配置示例（**独立服务**，不是插件配置）。
 #
-# 用法：复制到 ~/.omniagent/voice_service.yaml 后按需修改——
-#   Windows: copy plugins\voice\voice_service.example.yaml %USERPROFILE%\.omniagent\voice_service.yaml
-#   *nix:    cp plugins/voice/voice_service.example.yaml ~/.omniagent/voice_service.yaml
+# 用法：按同名路径复制到 ~/.omniagent/voice_service.yaml 后按需修改——
+#   Windows: copy examples\voice_service.yaml %USERPROFILE%\.omniagent\voice_service.yaml
+#   *nix:    cp examples/voice_service.yaml ~/.omniagent/voice_service.yaml
 # 也可以完全不用它：服务对每个键都有默认值，desktop 启动时按默认端口拉起。
 #
 # 读取方：plugins/voice/engine_service.py（监听 / 空闲释放）、本机引擎段
 #         （模型路径 / 音色 / 权重）、唱歌 SVC（sing_* 与曲库闸门）。
-# 调用端只配端点：~/.omniagent/plugins/voice.yaml（见 plugin.example.yaml）。
+# 调用端只配端点：~/.omniagent/plugins/voice.yaml（见 examples/plugins/voice.yaml）。
 #
 # 生效时机：service_host / service_port / service_token / service_idle_sec 在服务
 # 启动时读取（改完重启服务）；tts_voice / tts_eq / 各 idle / 路径在调用时读取。

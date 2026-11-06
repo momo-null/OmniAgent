@@ -73,6 +73,24 @@ def get_source_external() -> bool:
         return _SOURCE_EXTERNAL
 
 
+# ── 本轮进料道（plan personal-agent-memory F-4：channel 只给结构） ──────────────
+# ``chat``=通道消息 / ``task``=cron·手动派发 / ``observation``=主动观察 run。
+# context_signal 据此决定本轮原料走哪条进料道与观测行的 source_kind；
+# Web 直连 run 由 chat_runtime 设 "chat"。
+_SOURCE_KIND: str = ""
+
+
+def set_source_kind(kind: str) -> None:
+    global _SOURCE_KIND
+    with _LOCK:
+        _SOURCE_KIND = str(kind or "").strip().lower()
+
+
+def get_source_kind() -> str:
+    with _LOCK:
+        return _SOURCE_KIND
+
+
 # ── 本轮「实际发出」的文本 ─────────────────────────────────────────────────
 # 发送成功的唯一事实来源：由 msg_send_* 工具在拿到 ok 返回时记账。
 # 为什么不让 dispatch 事后去解析工具结果字符串：工具结果经 SDK 序列化后可能是
@@ -103,3 +121,9 @@ def take_sent() -> List[str]:
         out = list(_SENT)
         _SENT = []
         return out
+
+
+def sent_count() -> int:
+    """本轮已发出条数（**只读**，不清空——观测面用；take_sent 才是消费）。"""
+    with _LOCK:
+        return len(_SENT)

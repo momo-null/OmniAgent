@@ -46,8 +46,10 @@ dist-electron/
 desktop/dist-*/
 
 # 本机配置（含明文 api key，勿提交）
-# 项目根 config.yaml 只保留「Web 无入口」的少量项，需与 config.example.yaml 同步；
+# 项目根 config.yaml 只保留「Web 无入口」的少量项，需与 examples/config.yaml 同步；
 # 可调项一律由 Web 设置面板写入 ~/.omniagent/config.yaml，不要往项目根堆配置。
 config.yaml
 config.local.yaml
+# examples/ 下是按同名路径抄进 ~/.omniagent/ 的模板（不含明文密钥），豁免上面的规则
+!examples/config.yaml
 *.prev

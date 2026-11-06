@@ -31,7 +31,11 @@ _UNTRUSTED_BANNER = (
 
 
 def configure(cfg: Optional[dict]) -> None:
-    """按 config.runtime.web 注入限流参数。"""
+    """按本插件自有配置注入限流参数（``~/.omniagent/plugins/web.yaml``）。
+
+    loader 传入的是插件自己的配置 dict，不是 ``config.runtime.web``——后者历史上
+    在项目根 config.yaml 里躺着，代码已经不读了。
+    """
     cfg = cfg or {}
     try:
         _LIMITS["timeout_sec"] = float(cfg.get("timeout_sec", _LIMITS["timeout_sec"]))

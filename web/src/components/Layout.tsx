@@ -63,7 +63,7 @@ export default function Layout() {
   const {
     view, setView, tasks, currentTaskId, selectTask,
     refreshTasks, connectStream, disconnectStream, taskTitles, taskObjectives,
-    taskProjects, deleteTask, renameTask,
+    taskProjects, deleteTask, renameTask, runningByTask,
   } = useTaskStore();
 
   const [tasksOpen, setTasksOpen] = useState(true);
@@ -334,6 +334,9 @@ ${assets}`)) {
                                 onClick={() => { selectTask(t); setView("chat"); }}
                                 sx={{ ...ROW_DENSE_SX, flexGrow: 1, minWidth: 0 }}
                               >
+                                {runningByTask[t] && (
+                                  <Box title="运行中" sx={{ width: 6, height: 6, borderRadius: "50%", bgcolor: "success.main", flexShrink: 0, mr: 0.75 }} />
+                                )}
                                 <ListItemText
                                   primary={taskLabel(t)}
                                   primaryTypographyProps={{ noWrap: true, sx: LABEL_CHILD }}
@@ -393,6 +396,9 @@ ${assets}`)) {
                     onClick={() => { selectTask(t); setView("chat"); }}
                     sx={{ ...ROW_DENSE_SX, flexGrow: 1, minWidth: 0 }}
                   >
+                    {runningByTask[t] && (
+                      <Box title="运行中" sx={{ width: 6, height: 6, borderRadius: "50%", bgcolor: "success.main", flexShrink: 0, mr: 0.75 }} />
+                    )}
                     <ListItemText
                       primary={taskLabel(t)}
                       primaryTypographyProps={{ noWrap: true, sx: LABEL_ROW }}

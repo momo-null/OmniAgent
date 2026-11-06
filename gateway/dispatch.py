@@ -397,7 +397,8 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
                         tool_allowlist=(["msg_send_text", "msg_send_voice", "msg_send_card",
                                          "msg_stay_silent",
                                          "msg_group_history", "msg_group_image", "msg_sing",
-                                         "memory_recall", "read_scene", "conversation_search"]
+                                         "memory_recall", "read_scene", "conversation_search",
+                                         "narrative_search", "narrative_read"]
                                         if explicit else None))
         spec = TaskSpec(
             objective=item["objective"],
@@ -407,6 +408,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             project_id=meta.get("project_id"),
             history=history_items,
             attachments=list(item.get("attachments") or []),
+            run_key=run_key,
         )
         # 当前任务回发句柄（线程绑定）→ msg_send_* 工具缺省发回来源会话。
         # 语音不再走隐式改写：发不发语音由模型调 msg_send_voice 决定。
@@ -417,12 +419,15 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         # 不该被锁掉它主动发消息的能力。
         context.set_source_external(
             reply is not None and not bool(item.get("tools_enabled", True)))
+        # 进料道结构标注（F-4）：context_signal 与观测行的 source_kind 同源
+        context.set_source_kind(_l0_kind)
         context.reset_sent()  # 清空上一轮的「已发出」记账
         try:
             result = loop.run_task(spec)
         finally:
             context.set_current_reply(None)
             context.set_source_external(False)
+            context.set_source_kind("")
 
         summary = _extract_summary(result)
         # 最终口播（真实回答）；内部判定文案只进任务详情/日志，绝不外发

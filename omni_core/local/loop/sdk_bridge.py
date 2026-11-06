@@ -72,6 +72,40 @@ def _args_payload_to_dict(raw: Any) -> Dict[str, Any]:
     return {}
 
 
+def context_signal_run_id() -> str:
+    """本 run 的观测主键（§8.3：``task_id:run_key``）；未构造/异常返回空串。"""
+    try:
+        from omni_core.local.loop import context_signal as _cs
+        return _cs.run_id()
+    except Exception:
+        return ""
+
+
+def _peek_reply():
+    """当前回发句柄（观测面只读；异常 → None）。"""
+    try:
+        from gateway.channels import context as _ch
+        return _ch.get_current_reply()
+    except Exception:
+        return None
+
+
+def _peek_source_kind() -> str:
+    try:
+        from gateway.channels import context as _ch
+        return str(_ch.get_source_kind() or "")
+    except Exception:
+        return ""
+
+
+def _peek_source_external() -> bool:
+    try:
+        from gateway.channels import context as _ch
+        return bool(_ch.get_source_external())
+    except Exception:
+        return False
+
+
 def build_user_content(text: str, attachments: Optional[List[Dict[str, Any]]] = None) -> Any:
     """本轮 user 输入的 content：无附件 → 纯文本（原样，零回归）；有附件 → 内容块数组。
 
@@ -288,7 +322,10 @@ class SdkBridgeMixin:
             system_prompt = (system_prompt or "") + "\n\n" + _mem_block
             self._log_knowledge_injection(traj, {
                 "kind": "memory_injected", "chars": len(_mem_block),
-                "layers": _mem_layers, "placement": "system"})
+                "layers": _mem_layers, "placement": "system",
+                # §8.3：观测主键同写——「注入了什么 vs 查了什么」由此与
+                # memory_recall-YYYY-MM.jsonl 按 run_id 关联
+                "run_id": (context_signal_run_id() or "")})
         if getattr(_instr_snapshot, "injected", False):
             self._log_knowledge_injection(traj, {
                 "kind": "instructions_injected",
@@ -506,6 +543,18 @@ class SdkBridgeMixin:
                 except Exception:
                     pass
 
+        # M1（plan personal-agent-memory §4.1）：run 起始单点构造场合信号——
+        # ``<current-context>`` 由 _memory_stable_block 渲染进 system；子任务不构造。
+        # 仅主链——子 agent 在同进程嵌套跑，不得覆盖主链信号。
+        if not is_sub:
+            try:
+                from omni_core.local.loop import context_signal as _cs
+                _cs.build_run(
+                    task_id=str(getattr(spec, "task_id", "") or ""),
+                    objective=str(getattr(spec, "objective", "") or ""),
+                    run_key=str(getattr(spec, "run_key", "") or ""))
+            except Exception:
+                pass
         # P1 观测（2026-11-02）：本 run 的记忆自取行为从零记起，收尾落 memory_recall.jsonl
         # （lead-in 自动注入已全局下线，检索结果只经 memory_recall 工具进上下文）。
         # 仅主链——子 agent 在同一进程里嵌套跑，reset/take 都会踩父亲的账本。
@@ -611,11 +660,26 @@ class SdkBridgeMixin:
         )
         # M7：主 agent 的派发计划（由 dispatch 元工具写到 gate 上）
         res["dispatch_plan"] = list(getattr(gate, "dispatch_plan", None) or [])
-        # P1 观测：本 run 的 memory_recall 自取行为落 memory_recall.jsonl 一行
-        # （零查标记由此对出；lead-in 已下线，"注入了什么"看 memory_injected 轨迹）
+        # P1 观测：本 run 的 memory_recall 自取行为落观测记录一行
+        # （零查标记由此对出；lead-in 已下线，"注入了什么"看 memory_injected 轨迹）。
+        # §8.3：主键 run_id / 进料道 / 是否外部 / 注入字符 / 发话与 LLM 调用一并落行。
         if _mt is not None:
-            _mt.log_recall_run(project=TaskStore.project_of(
-                str(getattr(spec, "task_id", "") or "")))
+            _sent_n = 0
+            try:
+                from gateway.channels import context as _ch
+                _sent_n = int(_ch.sent_count() or 0)
+            except Exception:
+                _sent_n = 0
+            _reply = _peek_reply()
+            _mt.log_recall_run(
+                project=TaskStore.project_of(str(getattr(spec, "task_id", "") or "")),
+                context_key=str(getattr(_reply, "chat_id", "") or "") if _reply else "",
+                source_kind=_peek_source_kind(),
+                source_external=_peek_source_external(),
+                injected_context=bool(_mem_block),
+                context_chars=len(_mem_block) if _mem_block else 0,
+                sent=_sent_n > 0,
+                llm_calls_delta=int(res.get("llm_calls", 0) or 0))
 
         # --- L2 统计与终态（不介入框架循环） ---
         # F1.2：指标回填——每次模型调用 +1（on_llm_end 钩子记账，跨块累计）；

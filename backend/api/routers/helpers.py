@@ -222,8 +222,14 @@ def _is_task_running(task_id: str, agent_id: str = AGENT_MAIN) -> bool:
     return manager.is_running(task_id, agent_id)
 
 def _running_task_id() -> Optional[str]:
-    """返回当前运行中的 task_id（单任务互斥，至多一个）。"""
+    """返回运行中的 task_id。**并发下多个运行时返回任意一个**——仅作兼容回退
+    （提示文案 / 老客户端兜底），互斥与路由判断一律用 `_is_task_running` /
+    `_running_task_ids`。"""
     return manager.running_task_id()
+
+def _running_task_ids(lane: Optional[str] = None) -> List[str]:
+    """全部运行中 task_id（并发化：SSE 跟随「恰有一个」判定 / 诊断面用）。"""
+    return manager.running_task_ids(lane)
 
 def _config_hash(cfg: dict) -> str:
     """配置快照的稳定哈希（阶段 1：每个 run 可完整导出运行配置）。"""

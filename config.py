@@ -11,7 +11,7 @@ import os
 import json
 import logging
 import yaml
-from typing import Dict, Any
+from typing import Any, Dict, List
 from pathlib import Path
 
 _logger = logging.getLogger("config")
@@ -33,6 +33,39 @@ _mcp_cache: Dict[str, Any] = {}
 _models_cache: Dict[str, Any] = {}
 _path_logged = False
 _base_warned = False  # 项目级 config.yaml 废弃告警只打一次
+
+
+# --- 带注释的 JSON（只为「给人抄的模板」服务） --------------------------------
+# models.json / mcp.json / cron/jobs.json 这三份 JSON 由 Web 面板整体重写：机器写出来
+# 的文件不可能带注释，而仓库 examples/ 里给人抄的模板必须逐键讲清含义。读取端接受 //
+# 注释，用户把模板拷进 ~/.omniagent 改完就能跑，不必先手工剥注释。
+# 只识别**字符串之外**的 //，所以 "http://…" 这类值里的双斜杠一个字节都不会被吃掉；
+# 不支持 /* */；面板保存后注释会消失——注释的长期归宿是 examples/ 本身。
+def strip_json_comments(text: str) -> str:
+    """去掉整行与行尾的 // 注释；字符串内部的 // 原样保留。"""
+    out: List[str] = []
+    for line in text.splitlines(True):
+        in_str = False
+        escaped = False
+        cut = -1
+        for i, ch in enumerate(line):
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\":
+                escaped = in_str
+            elif ch == '"':
+                in_str = not in_str
+            elif not in_str and ch == "/" and line[i:i + 2] == "//":
+                cut = i
+                break
+        out.append(line[:cut] if cut >= 0 else line)
+    return "".join(out)
+
+
+def loads_jsonc(text: str) -> Any:
+    """带 // 注释的 JSON 文本 → Python 对象（其余按标准 JSON 规则，不做任何宽松）。"""
+    return json.loads(strip_json_comments(text))
 
 
 def _log_path_once() -> None:
@@ -84,7 +117,7 @@ def load_mcp_config() -> Dict[str, Any]:
     try:
         if os.path.exists(MCP_CONFIG_PATH):
             with open(MCP_CONFIG_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                data = loads_jsonc(f.read())
                 if isinstance(data, dict):
                     _mcp_cache = data
                     return _mcp_cache
@@ -116,7 +149,7 @@ def load_models_config() -> Dict[str, Any]:
     try:
         if os.path.exists(MODELS_CONFIG_PATH):
             with open(MODELS_CONFIG_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                data = loads_jsonc(f.read())
                 if isinstance(data, dict):
                     _models_cache = data
                     return _models_cache

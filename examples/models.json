@@ -1,0 +1,101 @@
+// ============================================================================
+// OmniAgent 模型目录模板 → 拷到 ~/.omniagent/models.json
+//
+// 这份文件是**模型端点的唯一真源**：base_url / api_key / 模型 id 只在这里配。
+// config.yaml 里的旧端点键（顶层 brain.base_url、runtime.executor、llm.local_as_tool）
+// 已经不再被读取，写了也不报错——只是无效。
+//
+// 谁来读：大脑主链路（main 槽）、子 agent 派发（worker 等槽）、记忆链路
+//         （L1 提炼 / L2 场景块 / L3 画像走 main）、网关派发（cron 与 IM 消息）。
+// 怎么改：首选 Web「设置 → 模型」，面板写的就是这份文件；手改本文件也认，
+//         改完**重启后端**生效（目录读进内存有缓存）。
+// 关于注释：`//` 只有读取端认（config.loads_jsonc）。设置页保存会把整份文件
+//         重写成无注释的紧凑版本——所以长期说明留在这个模板里，本机那份随便改。
+// 关于密钥：本模板不含任何真实密钥。优先只填 api_key_env，让密钥留在环境变量里。
+// ============================================================================
+{
+  // providers 的键名就是 selection 的前缀：<provider_id>/<model_id>。
+  // provider_id 不许含 "/" 或空白（解析正则 ^([^/\s]+)/(.+)$）。
+  "providers": {
+    "cloud": {
+      // label 只影响 Web 显示，不参与解析
+      "label": "云端 OpenAI 兼容端点",
+      // OpenAI 兼容根路径。结尾的 /v1 写不写都行（读取时 rstrip "/"）
+      "base_url": "https://api.example.com/v1",
+      // 明文密钥，模板留空。取密钥的顺序：api_key 非空 → api_key_env 指向的环境变量
+      // → 本机端点（base_url 含 127.0.0.1/localhost）自动补 "dummy"。
+      // ⚠ 设置页保存时「api_key 传空串」的语义是**保持目录里已有的值不变**（前端拿到的是
+      //   脱敏视图，回传时不能把密钥清空）；要真删掉密钥请在页面上点清除，不要靠改这里。
+      "api_key": "",
+      // 推荐写法：只填环境变量名
+      "api_key_env": "OMNI_CLOUD_API_KEY",
+      // 这个 provider 的出站代理（http:// 或 socks5://）；留空 = 用系统代理设置
+      "proxy": "",
+      // 请求参数。目前只有下面两个键有消费方，其它键会被设置页保存原样带过去但无人读；
+      // 反过来，未知**顶层**字段（provider 层的）在保存时会被丢弃。
+      "request": {
+        "temperature": 0.3,
+        // 输出上限（token）。>0 才会连同 temperature 一起下发；0/缺省 = 沿用服务端默认。
+        // 触顶不报错，只产出半截 JSON / 半截工具参数 → 表现为「工具调用莫名失败」。
+        "max_tokens": 8192
+      },
+      // 模型清单同时是 selection 的**白名单**：请求里带的 provider/model 只要不在这里出现就
+      // 解析失败（回退槽位默认，不报错）。也就是说外部输入没法把这一轮流量导向一个目录里
+      // 没声明的端点——这是防「请求体塞任意 base_url / SSRF」的一道线，不是笔误。
+      // 另：面板保存时每条 model 只留 id/label/vision/contextWindow 四个字段，多余的键会被丢。
+      "models": [
+        {
+          "id": "chat-flagship",
+          "label": "主力（对话 + 工具调用）",
+          // 视觉能力声明：true 才有「截图 / QQ 图片作为当轮图片输入直传模型」；
+          // false 时图片降级成 [图片] 文本占位。模型本身不支持视觉却填 true = 请求被端点拒。
+          "vision": true,
+          // 标称上下文窗口（token）。OpenAI 兼容协议**不回传**这个字段（vLLM 的
+          // max_model_len、OpenRouter 的 context_length 这类端点私有字段才有），
+          // 所以只能配置声明，不做运行时探测。聊天页的上下文圆环用它当分母：
+          // 0 = 只显示绝对 token 数，不画百分比。
+          // 设置页「自动获取」会把端点愿意给的窗口值顺手填进来（给不到就留 0）。
+          "contextWindow": 65536
+        },
+        {
+          "id": "chat-fast",
+          "label": "便宜快（适合子 agent）",
+          "vision": false,
+          "contextWindow": 32768
+        }
+      ]
+    },
+
+    // 第二个 provider：本机 llama.cpp / LM Studio 之类的 OpenAI 兼容 server。
+    // 本地端点不用编假 key，两个 key 字段留空即可（见上面 api_key 的取值顺序）。
+    "local": {
+      "label": "本地 GGUF",
+      "base_url": "http://127.0.0.1:8080/v1",
+      "api_key": "",
+      "api_key_env": "",
+      "proxy": "",
+      "models": [
+        {
+          "id": "qwen3-8b-instruct",
+          "label": "本地 8B",
+          "vision": false,
+          // llama.cpp 起服务时的 -c 上下文大小，这里要填同一个数，否则圆环虚高/虚低
+          "contextWindow": 32768
+        }
+      ]
+    }
+  },
+
+  // 槽位 = 用途，不是模型。填了 = 启用该用途；没填 = 不启用（worker 由主模型兼任）。
+  // 设置页只管下面这两个槽；解析函数按名字取 defaults，所以其它槽名也合法（见下）。
+  "defaults": {
+    // main：大脑主链路、记忆链路、网关派发（cron / IM）都走它
+    "main": "cloud/chat-flagship",
+    // worker：子 agent 与派发扇出的缺省执行模型
+    "worker": "local/qwen3-8b-instruct"
+    // 自定义槽（比如派发用的 researcher）：先在 ~/.omniagent/config.yaml 里
+    // runtime.dispatch.agents 声明槽名，再在这里给它选模型。写在这里但没在
+    // dispatch.agents 里声明 = 不会被主动使用；反过来也一样。
+    // "researcher": "cloud/chat-fast"
+  }
+}

@@ -54,6 +54,17 @@ def global_relations() -> Path:
     return _GLOBAL / "memory" / "relations"
 
 
+def global_diary() -> Path:
+    """全局「她的一天」目录 ``memory/diary/``（日记 / 月记，一天一篇）。
+
+    与关系卡同理：**她的一天是跨项目的**——同一天里群聊、工作任务、私聊都发生在
+    同一个人身上，按 project 各写一篇会把单一人格切成几个互不知情的分身。
+    所以叙事按**日期**存全局一份（plan §3.3 空间键统一表），场合只作内容标注。
+    与 project 级 ``scene_blocks/`` 物理分离，L2 主题块仍按工作项目分目录。
+    """
+    return _GLOBAL / "memory" / "diary"
+
+
 def user_profile() -> Path:
     """全局用户画像 ``memory/user_profile.md``（跨 task 共享，P0 一等实体）。"""
     return _GLOBAL / "memory" / "user_profile.md"

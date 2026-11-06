@@ -86,7 +86,7 @@ def test_flush_writes_novel_atom_with_value_fields(brain):
     conn.close()
     assert "先聊后动" in row[0]
     assert row[1] == "preference" and abs(row[2] - 0.8) < 1e-6
-    assert row[3] == "tangtang" and row[4] == "p_test" and row[5] == "active"
+    assert row[3] == "" and row[4] == "p_test" and row[5] == "active"   # P2：persona 冻结恒空
 
 
 def test_blank_extraction_still_counts_flush(brain):
@@ -175,10 +175,17 @@ def test_overlong_merge_is_rejected_not_truncated(brain):
     assert n_fts == len(rows)                               # 拒并路径同样一条一行
 
 
-def test_search_persona_filter_and_reinforce(brain):
+def test_search_persona_dead_dim_removed_and_reinforce(brain):
+    """P2（plan personal-agent-memory §4.3）：persona 死维度清理——写入冻结（恒空）、
+    过滤路径移除（单库单人格，INV-1）；召回即强化语义不变。"""
     rid = memory_brain.remember("糖糖的新闻简报来自四个来源", kind="fact",
                                 importance=0.8, persona="tangtang")
     memory_brain.remember("中性记忆：项目在 D 盘", kind="fact", importance=0.6, persona="")
+    conn = memory_brain.open_brain()
+    contents = dict(conn.execute("SELECT record_id, persona FROM atoms"))
+    conn.close()
+    assert all(v == "" for v in contents.values())   # persona 冻结恒空（含存量清空）
+    # 过滤路径已移除：带 persona 查询与不带完全同结果（不再是 WHERE 条件）
     hits = memory_brain.search_brain("新闻简报来源", persona="tangtang")
     assert len(hits) == 1 and hits[0]["record_id"] == rid
     conn = memory_brain.open_brain()
@@ -186,6 +193,8 @@ def test_search_persona_filter_and_reinforce(brain):
                        (rid,)).fetchone()[0]
     conn.close()
     assert acc == 1  # 召回即强化
+    hits_none = memory_brain.search_brain("新闻简报来源")
+    assert [h["record_id"] for h in hits_none] == [rid]
 
 
 def test_update_and_forget_tombstone(brain):
@@ -220,7 +229,8 @@ def test_consolidation_due_reads_atom_count(brain):
 
 
 def test_trigram_two_char_query_falls_back_to_like(brain, monkeypatch):
-    """trigram 下纯 2 字 query 无 MATCH 也必须走 LIKE 兜底，且不越过 persona 隔离。"""
+    """trigram 下纯 2 字 query 无 MATCH 也必须走 LIKE 兜底。
+    P2：persona 隔离已随死维度清理移除（单库单人格，INV-1）——两条都召回。"""
     monkeypatch.setattr(memory_brain, "_fts_tokenizer", lambda: "trigram")
     rid = memory_brain.remember("用户偏好把待办写在便签上", kind="fact", importance=0.8,
                                 persona="tangtang")
@@ -228,7 +238,7 @@ def test_trigram_two_char_query_falls_back_to_like(brain, monkeypatch):
                                   persona="other")
     ids = [h["record_id"] for h in
            memory_brain.search_brain("便签", persona="tangtang", reinforce=False)]
-    assert rid in ids and other not in ids
+    assert rid in ids and other in ids
 
 
 def test_consolidation_worker_runs_and_rescores(brain):
@@ -383,15 +393,25 @@ def _seed_sessions(sessions):
                      encoding="utf-8")
 
 
-def _diary_day_iso():
-    """maintain_diary 写昨日（D+1 语义）：素材与断言都用昨天的日期。"""
-    from datetime import timedelta
-    return (datetime.now(timezone.utc) - timedelta(days=1))
+def _diary_day():
+    """maintain_diary 写昨日（D+1 语义，D-1 后为**本地日**）：返回目标本地日字符串。"""
+    from omni_core.local import localtime
+    return localtime.local_days_ago(1)
+
+
+def _local_iso_for(day: str, hour: int = 12) -> str:
+    """某本地日指定小时（本地时区）→ UTC ISO——保证 local_date(ts)==day 恒成立。"""
+    from omni_core.local import localtime
+    dt = datetime.strptime(f"{day}T{hour:02d}:00:00", "%Y-%m-%dT%H:%M:%S").replace(
+        tzinfo=localtime.local_tz())
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 def test_maintain_diary_writes_and_idempotent(brain):
-    day = _diary_day_iso().strftime("%Y-%m-%d")
-    day_iso = _diary_day_iso().isoformat()
+    from omni_core.local import scene_executor
+
+    day = _diary_day()
+    day_iso = _local_iso_for(day)
     _seed_sessions({"qq": [
         {"ts": day_iso, "role": "user",
          "content": "「成员甲」(999999): 你这话根本站不住脚，还是先管好你自己吧"},
@@ -402,12 +422,15 @@ def test_maintain_diary_writes_and_idempotent(brain):
         {"ts": day_iso, "role": "assistant",
          "content": "叫错了就改呗，喊对就行，别动不动就摆脸色给人看"},
     ]})
-    brain.script = [{"diary": "今天成员甲(999999)挑我毛病，我怼了回去。"}]
+    brain.script = [{"diary": "今天成员甲(999999)挑我毛病，我怼了回去。",
+                     "topics": ["成员甲", "抬杠"]}]
     assert memory_brain.maintain_diary({"base_url": "http://x"}) == 1
-    from omni_core.local import scene_executor
-
     raw = scene_executor.read_scene_block("qq", f"diary-{day}.md")
     assert "挑我毛病" in raw          # 日记正文来自本轮 LLM 产出（不是素材原文）
+    # D-3：topics 进 META 可选键（parse 只认四键，新键自动忽略）；叙事索引可检索
+    assert "topics: " in raw
+    row = memory_brain.get_narrative_row(f"diary-{day}.md", "diary")
+    assert row and row["topics"] == ["成员甲", "抬杠"] and row["date_from"] == day
     brain.script = [{"diary": "不该被写"}]
     assert memory_brain.maintain_diary({"base_url": "http://x"}) == 0   # 幂等
 
@@ -440,6 +463,8 @@ def test_peer_lines_group_by_uid_across_projects(monkeypatch, tmp_path):
 def test_maintain_relations_writes_global_card(monkeypatch, tmp_path):
     """关系卡步：按 uid 写全局卡（一份），正文三行；信息不足不写。"""
     monkeypatch.setattr(memory_brain, "enabled", lambda: True)
+    # 隔离 brain.db：关系卡写块后的 upsert_narrative_index 会开库——不隔离就写真实数据
+    monkeypatch.setattr(memory_brain, "_BRAIN_PATH", str(tmp_path / "brain.db"))
     rel = tmp_path / "relations"
     monkeypatch.setattr(memory_brain.rp, "global_relations", lambda: rel)
     monkeypatch.setattr(memory_brain, "_peer_lines", lambda limit_days=7: {
@@ -462,7 +487,7 @@ def test_maintain_relations_writes_global_card(monkeypatch, tmp_path):
 
 
 def test_maintain_diary_blank_roll(brain):
-    _seed_sessions({"qq": [{"ts": _diary_day_iso().isoformat(), "role": "user",
+    _seed_sessions({"qq": [{"ts": _local_iso_for(_diary_day()), "role": "user",
                             "content": "「张三」(7): 在吗"}]})
     brain.script = [{"diary": ""}]                            # 白卷是正确答案
     assert memory_brain.maintain_diary({"base_url": "http://x"}) == 0
@@ -473,10 +498,13 @@ def test_maintain_diary_merges_session_files(brain):
     机械层只保证「被看见」，写不写仍由意义判决定）。"""
     from omni_core.local import runtime_paths as P
     from omni_core.local.task_store import ProjectStore
-    from datetime import timedelta
+    from datetime import timedelta, datetime as _dt
 
     ProjectStore.ensure("qq")
-    base = _diary_day_iso().replace(hour=0, minute=0, second=0, microsecond=0)
+    # 素材时间戳取「目标本地日正午」两侧的 UTC ISO（D-1：按本地日归日）
+    from omni_core.local import localtime as _lt
+    noon = datetime.strptime(f"{_diary_day()}T12:00:00", "%Y-%m-%dT%H:%M:%S")
+    base = noon.replace(tzinfo=_lt.local_tz()).astimezone(timezone.utc)
     # s_a：200 条大会话（占满全局尾窗）
     rows_a = []
     for i in range(200):
@@ -504,7 +532,7 @@ def test_diary_self_names_anchor(brain):
     换账号/换渠道随登记自愈。"""
     from omni_core.local import scene_executor
 
-    day_iso = _diary_day_iso().isoformat()
+    day_iso = _local_iso_for(_diary_day())
     _seed_sessions({"qq": [
         {"ts": day_iso, "role": "user",
          "content": "「成员甲」(999999): [引用] 测试名片A: 随便说说而已你又不会当真 "
@@ -521,7 +549,7 @@ def test_diary_self_names_anchor(brain):
         brain.script = [{"diary": "有人引用我的话来着。"}]
         assert memory_brain.maintain_diary({"base_url": "http://x"}) == 1
         assert "测试名片A" in brain.calls[-1] and "100000001" in brain.calls[-1]
-        assert scene_executor.read_scene_block("qq", f"diary-{_diary_day_iso():%Y-%m-%d}.md")
+        assert scene_executor.read_scene_block("qq", f"diary-{_diary_day()}.md")
     finally:
         memory_brain._SELF_NAMES.clear()
 

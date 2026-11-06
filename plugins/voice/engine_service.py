@@ -114,6 +114,7 @@ class Handler(BaseHTTPRequestHandler):
                 "object": "list",
                 "data": [
                     {"id": "sense-voice", "object": "model", "owned_by": "local"},
+                    {"id": "paraformer", "object": "model", "owned_by": "local"},
                     {"id": "gpt-sovits", "object": "model", "owned_by": "local"},
                 ],
             })
@@ -134,6 +135,15 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("multipart boundary 缺失")
                 wav = _transcribe_multipart(body, boundary)
                 self._reply_json({"text": plugin.transcribe_local(wav)})
+            elif path.endswith("/audio/turn-check"):
+                # 语义收口（2026-11-06）：Smart Turn v3 判「这轮说完没有」——
+                # 手机免提在 VAD 静音后先问这一道，没说完就继续听，不抢话。
+                # 模型缺失/推理失败抛异常 → 500 → 壳侧 fail-open（按说完处理）。
+                boundary = _multipart_boundary(self.headers.get("Content-Type") or "")
+                if not boundary:
+                    raise ValueError("multipart boundary 缺失")
+                wav = _transcribe_multipart(body, boundary)
+                self._reply_json(plugin.turn_check_local(wav))
             elif path.endswith("/audio/speech"):
                 req = json.loads(body.decode("utf-8"))
                 text = str(req.get("input") or "").strip()

@@ -40,25 +40,61 @@ def _persona() -> str:
 #: P1 观测（2026-11-02）：本 run 的记忆自取行为簿记。dispatch 是单 worker 串行
 #: 执行、网关回发句柄同款进程级单值——run 开始由 sdk_bridge 清零，run 收尾取走
 #: 并落 memory_recall.jsonl（「该查而没查」由此对出）。
-_run_stats: Dict[str, Any] = {"calls": 0, "hits": 0, "top1_id": ""}
+#: §8.3（2026-11-06）：扩 by_tool（七工具分工具计数）/ context_hits / narrative_cross；
+#: 配额（N-5）只在 run 作用域内强制（``active`` 由 reset_recall_stats 置位——
+#: 直调工具的测试/脚本不受配额影响，真实 run 恒受限）。
+_FETCH_QUOTA = 3        # 七工具合计 ≤3 次 / run
+_NARRATIVE_QUOTA = 2    # narrative_* ≤2 次 / run
+_run_stats: Dict[str, Any] = {"calls": 0, "hits": 0, "top1_id": "", "by_tool": {},
+                              "context_hits": 0, "narrative_cross": 0, "active": False}
 
 
 def reset_recall_stats() -> None:
-    _run_stats.update({"calls": 0, "hits": 0, "top1_id": ""})
+    _run_stats.update({"calls": 0, "hits": 0, "top1_id": "", "by_tool": {},
+                       "context_hits": 0, "narrative_cross": 0, "active": True})
 
 
 def take_recall_stats() -> Dict[str, Any]:
-    return dict(_run_stats)
+    st = dict(_run_stats)
+    st["by_tool"] = dict(_run_stats.get("by_tool") or {})
+    return st
 
 
-def note_self_fetch(hits: int = 0, top1_id: str = "") -> None:
+def quota_left() -> Dict[str, int]:
+    """剩余配额（工具侧统一记账；run 作用域外恒视为满额）。"""
+    if not _run_stats.get("active"):
+        return {"total": _FETCH_QUOTA, "narrative": _NARRATIVE_QUOTA}
+    return {"total": max(0, _FETCH_QUOTA - int(_run_stats.get("calls") or 0)),
+            "narrative": max(0, _NARRATIVE_QUOTA
+                             - sum(int(v) for k, v in (_run_stats.get("by_tool") or {}).items()
+                                   if str(k).startswith("narrative_")))}
+
+
+def _quota_block(tool: str) -> Dict[str, Any]:
+    """超配额的统一拒绝文案（N-5；规则文本与稳定段同口径）。"""
+    left = quota_left()
+    if left["narrative"] <= 0 and str(tool).startswith("narrative_"):
+        return {"ok": False,
+                "error": f"本轮叙事检索配额已用完（narrative_* ≤{_NARRATIVE_QUOTA} 次/run）"}
+    if left["total"] <= 0:
+        return {"ok": False,
+                "error": f"本轮自取过往的配额已用完（七工具合计 ≤{_FETCH_QUOTA} 次/run）——"
+                         "先消化已拿到的内容，不要反复换关键词硬查"}
+    return {}
+
+
+def note_self_fetch(hits: int = 0, top1_id: str = "", tool: str = "") -> None:
     """把一次「自取过往」的工具调用并入本 run 账本。
 
     P2 起《记忆使用规则》的 ≤3 次合计口径覆盖 memory_recall / conversation_search /
     msg_group_history(keyword)——观测口径与规则口径必须同一个数，否则「检索使用率」
-    指标只统计其中一条通道，读起来像模型不查。
+    指标只统计其中一条通道，读起来像模型不查。§8.3：``tool`` 分工具计数（by_tool），
+    覆盖全部七个自取工具。
     """
     _run_stats["calls"] += 1
+    tool = str(tool or "").strip() or "unknown"
+    by_tool = _run_stats.setdefault("by_tool", {})
+    by_tool[tool] = int(by_tool.get(tool) or 0) + 1
     if int(hits or 0) > 0:
         _run_stats["hits"] += int(hits)
         if not _run_stats["top1_id"] and top1_id:
@@ -84,14 +120,35 @@ def _run_source() -> str:
     return str(getattr(reply, "channel_name", "") or "channel")
 
 
-def log_recall_run(project: str = "") -> None:
-    """run 收尾：把本 run 的自取行为落一行 memory_recall.jsonl（fail-soft）。"""
+def log_recall_run(project: str = "", context_key: str = "", source_kind: str = "",
+                   source_external: bool = False, injected_context: bool = False,
+                   context_chars: int = 0, sent: bool = False,
+                   llm_calls_delta: int = 0) -> None:
+    """run 收尾：把本 run 的自取行为落一行观测记录（fail-soft）。
+
+    §8.3 schema：主键 ``run_id = task_id:run_key``（context_signal 构造）；``context_key``
+    真实值只落本机；按月分片 ``memory_recall-YYYY-MM.jsonl``。
+    """
     try:
         from omni_core import memory_brain
+        from omni_core.local.loop import context_signal as _cs
+
         st = take_recall_stats()
+        sig = _cs.current() or {}
         memory_brain.log_recall_observability(
-            project=project, source=_run_source(), calls=st["calls"],
-            hits=st["hits"], top1_id=st["top1_id"])
+            project=project, source=_run_source(),
+            run_id=str(sig.get("run_id") or ""),
+            context_key=str(context_key or sig.get("chat_id") or ""),
+            source_kind=str(source_kind or sig.get("source_kind") or ""),
+            source_external=bool(source_external),
+            injected_context=bool(injected_context),
+            context_chars=int(context_chars or 0),
+            by_tool=st.get("by_tool") or {},
+            calls=int(st.get("calls") or 0), hits=int(st.get("hits") or 0),
+            top1_id=str(st.get("top1_id") or ""),
+            context_hits=int(st.get("context_hits") or 0),
+            narrative_cross=int(st.get("narrative_cross") or 0),
+            sent=bool(sent), llm_calls_delta=int(llm_calls_delta or 0))
     except Exception:
         pass
 
@@ -140,10 +197,27 @@ def memory_recall(query: str = "", k: int = 5) -> Dict[str, Any]:
     b = _brain()
     if not b.enabled():
         return {"ok": False, "error": "长期记忆未启用（ltm.enabled）"}
+    blocked = _quota_block("memory_recall")
+    if blocked:
+        return blocked
+    # M2（plan §6.2）：场合与对象线索接通——peer 取本 run 的 context_signal（缺省
+    # 从 query 解析），chat_id 取当前聊天窗口；两者都只**加权不过滤**（INV-3）。
+    chat, _sid = _current_conversation()
+    peer = ""
+    try:
+        from omni_core.local.loop import context_signal as _cs
+        peer = str((_cs.current() or {}).get("peer") or "")
+    except Exception:
+        peer = ""
+    if not peer:
+        peer = b.extract_peer(query or "")
     hits = b.search_brain((query or "").strip(), persona=_persona(),
                           k=max(1, min(5, int(k or 5))),
-                          reinforce=True)
-    note_self_fetch(len(hits), str(hits[0]["record_id"]) if hits else "")
+                          reinforce=True, peer=peer, chat_id=chat)
+    note_self_fetch(len(hits), str(hits[0]["record_id"]) if hits else "",
+                    tool="memory_recall")
+    _run_stats["context_hits"] = int(_run_stats.get("context_hits") or 0) + \
+        sum(1 for h in hits if h.get("ctx_hit"))
     return {"ok": True, "hits": [{"record_id": h["record_id"], "content": h["content"],
                                   "kind": h.get("kind", "")} for h in hits]}
 
@@ -205,6 +279,9 @@ def conversation_search(keyword: str = "", scope: str = "current",
     b = _brain()
     if not b.enabled():
         return {"ok": False, "error": "记忆层未启用（runtime.knowledge.memory.enabled）"}
+    blocked = _quota_block("conversation_search")
+    if blocked:
+        return blocked
     kw = (keyword or "").strip()
     if not kw:
         return {"ok": False, "error": "keyword 不能为空"}
@@ -219,7 +296,7 @@ def conversation_search(keyword: str = "", scope: str = "current",
         n = 8
     rows = b.search_l0(kw, chat_id=chat if scoped else "", session_id=sid if scoped else "",
                        days=days, limit=n)
-    note_self_fetch(len(rows), str(rows[0]["id"]) if rows else "")
+    note_self_fetch(len(rows), str(rows[0]["id"]) if rows else "", tool="conversation_search")
     return {"ok": True,
             "scope": "current" if scoped else "all",
             "count": len(rows),

@@ -1,0 +1,254 @@
+# ============================================================================
+# OmniAgent 主配置模板 → 拷到 ~/.omniagent/config.yaml
+#
+# 这份文件管「引擎怎么跑」，不管「连哪个模型」——端点/密钥/模型清单在
+# ~/.omniagent/models.json（见 examples/models.json），通道在 channels/，
+# 插件调用端在 plugins/，MCP 在 mcp.json。职责分开是刻意的：换模型不碰这里。
+#
+# 取值优先级（从高到低）：
+#   1. ~/.omniagent/config.yaml                ← 本模板的目标位置
+#   2. 项目根 config.yaml                       ← **已废弃**：仍会作为 base 参与合并，
+#      但代码不再依赖它，留着旧默认值会盖住代码缺省。检测到就打一次 WARN，建议直接删。
+#   3. 代码缺省（config.CONTEXT_DEFAULTS + 各读取点 get_config(path, 内置 default)）
+#   → 想要的行为等于缺省时，**把这个键整行删掉**比写个值更安全（少一份会过期的快照）。
+#
+# 谁来读：core（大脑循环 / 编排 / 记忆链路 / 网关派发），启动时读一次进缓存。
+# 改完要不要重启：手改本文件 = **要重启后端**（配置有进程内缓存，只有 Web 面板保存
+#   会顺带失效缓存）。桌面端由壳托管后端，退出再启动即可。
+# Web 面板的写入语义：只写「与代码缺省不同」的键（差集），并且只保留白名单顶层节
+#   runtime / brain / local_model / llm / security / skill；你手加的其它顶层节
+#   （server / desktop / knowledge / gateway / cuda）在面板保存时**不会被抹掉**。
+# ⚠ 白名单外的键不是不能读——get_config 读的是合并后的整棵树，手改照样生效；
+#   白名单只限制「面板能写哪些节」。
+# ============================================================================
+
+# ── brain：大脑引擎参数（**不含端点**）────────────────────────────────────
+# 谁来读：LLMClient / SDK 主链路 / 上下文压缩适配层；设置页「模型」的高级项。
+brain:
+  # 推理内容怎么取：native = 用端点原生的 reasoning 字段（默认）；
+  # think-tag = 要求模型把思考写进 <think> 标签再解析（给不给思考全裸的端点用）。
+  # 其它值一律按 native 处理。
+  reasoning_mode: native
+
+  # 模型输入预算（token）。>0 才启用粘性压缩；0 = 显式关闭压缩。
+  # 压缩触发阈值 = 本值 × long_task.retain_ratio（300000 × 0.5 = 150k）。
+  maxInputTokens: 300000
+
+  long_task:
+    # 压缩后尾部保留比例（相对触发阈值）。调大 = 保真更多原文、更容易再次触发压缩。
+    retain_ratio: 0.5
+    # Prune-First：压缩之前先对超长工具输出做首尾截断（省钱且通常够用，能不走摘要就不走）
+    prune:
+      threshold_chars: 8192     # 单条工具结果超过这么多字符才修剪
+      head_chars: 4096          # 保留开头
+      tail_chars: 1024          # 保留结尾（错误信息、结论通常在尾部）
+
+  request:
+    # 流式请求显式要 usage。OpenAI 官方默认随流回传，**OpenAI 兼容端点（DeepSeek 等）
+    # 默认不回** → 真实 token 用量、上下文圆环、输出截断检测全部失效，压缩也退回纯估算。
+    # 个别端点拒收这个参数时才需要置 false。
+    include_usage: true
+
+  provider_retry:
+    # 端点侧可重试失败（限流 / 空 choices / 连接抖动）的指数退避。
+    # 注意与「provider 降级」是两件事：退避是同端点重试，降级是换 provider。
+    enabled: true
+    max_attempts: 3             # 单次请求最多重试几轮
+    base_sec: 2.0               # 退避基数（×2ⁿ）
+    max_sec: 15.0               # 单轮退避上限（防止一次卡死整个 run）
+
+# ── runtime：派发与执行旋钮 ────────────────────────────────────────────────
+runtime:
+  default_max_steps: 40         # 任务缺省步数预算（请求没显式给时用这个）
+  chunk_turns: 50               # 单次 run 内多少个 SDK turn 切一块（内存/上下文整形用）
+
+  tools:
+    skill_load_limit: 8000      # 技能正文注入的字符上限
+
+  # 升级/终止判定（主 agent 把子任务交给更强模型或判失败的条件）
+  escalation:
+    verify_fail_max: 3          # verify 连续失败达此次数 → 升级
+    wallclock_sec: 120          # 单步墙钟超时（秒）——子任务防打转的安全网
+    no_confidence_hard: true    # 无置信度时按硬失败处理
+    worker_history_keep: 3      # 升级时保留的子任务历史条数
+
+  # 内核工具限流：**只有 shell_exec 这一节由内核读**（core.py 把它注入
+  # omni_core/tools/shell_tool.configure）。层级注意：它是 runtime 的**直接子键**，
+  # 不是 runtime.tools 的子键；缺项即用工具内置 _LIMITS，不会报错。
+  shell_exec:
+    timeout_sec: 30.0
+    max_output: 8000
+  # ⚠ 文件/联网/Python 的限流**不在这里**：那些是插件，configure 钩子收到的是
+  # 「本插件自有配置」dict，即 ~/.omniagent/plugins/<name>.yaml —— 想调
+  # read_limit / max_output / timeout_sec 请写 `plugins/filesystem.yaml`、
+  # `plugins/web.yaml`（见 examples/README.md 的「谁来读」表）。
+
+  # M4a 轨迹落盘：资产跟 task_id 走，落项目级 .omniagent/<project>/ 下
+  trajectory:
+    enabled: true               # false = 本次运行只在内存里跑，不落盘
+                                # （目录与滚动天数没有配置项：路径由 runtime_paths
+                                #  按 task_id 生成，写了 dir / prune_days 也没人读）
+
+  # Layer 0 派发底座：多执行单元注册表。槽名在这里声明，槽→模型的映射在
+  # models.json 的 defaults.<slot>（两层职责分离）。整节不配置 = 只有 worker 一个槽，
+  # 由主模型兼任，行为与不分层时完全一致。
+  # dispatch:
+  #   enabled: true             # false = 关闭派发，主 agent 自己做完
+  #   agents:
+  #     - worker
+  #     - researcher
+  #   executor_cfg:             # ⚠ 逃生门：给槽位**直接注入**端点，绕过 models.json。
+  #     worker:                 #   只在「临时试一个没入库的本地端点」时用；
+  #       base_url: http://127.0.0.1:8080/v1   # 长期配置请写 models.json 的 defaults
+  #       api_key: EMPTY
+  #       model: local-worker
+  #       reasoning_mode: off
+
+  long_task:
+    repeat_guard: 3             # 同名工具+同参数重复达此次数即判定打转（0 = 关闭整个守卫）
+    no_progress_guard: 3        # 同名工具连续返回**完全相同结果**达此次数就提醒换方案
+                                # （受 repeat_guard 约束：repeat_guard=0 时不构造守卫）
+    wallclock_sec: 0            # 主链墙钟（秒）；0 = 不检查。大步数预算下建议保持 0，
+                                # 免得被 escalation.wallclock_sec=120s 那层安全网腰斩
+    inject_instructions: true   # 纪律文件（AGENTS.md）总开关；false = 零注入
+    instructions_limit: 8192    # 注入块字符上限（纪律块与记忆块共用），超限截断并标注
+    # 收尾意图门（详见 doc/plans/implemented/memory-architecture.md §6）：纯文本收尾
+    # 在判成功前多走一次模型复核「是不是把没派发的调用当结论了」。
+    # 代价是一次不计入 brain_calls 的往返：本机实测尾巴 34.29s → 关门 0.04s。
+    # 作用域只有 task/auto——对话取向(mode=chat)恒不装门，那是取向定义不是偏好，
+    # 所以**没有** chat 专用子开关（加了就造出「总闸开+子闸关 = 白付 34s」的组合）。
+    # 设置页「通用 → 收尾意图门」写的就是这个键。
+    finish_intent_check: true
+
+  # 记忆层（L1/L2/L3）：总 gate 在 runtime.knowledge.memory.enabled，
+  # 参数在 runtime.knowledge.memory.ltm.*。现行架构见
+  # doc/plans/implemented/memory-architecture.md。
+  knowledge:
+    memory:
+      enabled: false            # 缺省关。开 = 注入 + L1 提炼 + L2 场景维护全链路
+      # FTS 分词器：trigram（缺省，零依赖）| simple（wangfenjin 扩展，中文效果更好，
+      # 但要把扩展 .so/.dll 放到 fts_ext_dir 且 SQLite 允许加载扩展）。
+      # 扩展没就位会自动降级回 trigram，只打日志不报错。
+      fts_tokenizer: trigram
+      fts_ext_dir: ""
+      ltm:
+        persona: ""             # 检索时的人物视角（留空 = 不带）
+        top_k: 5                # memory_recall 单次返回条数上限
+        inject_floor: 0.30      # 低于此分的原子不进入注入候选
+        consolidation_every: 20 # 新增多少条原子后跑一次巩固（L2/L3 维护）
+        rank_weights:           # 排序权重（相关/显著/时新），三者之和不强制为 1
+          relevance: 0.55
+          salience: 0.30
+          recency: 0.15
+
+# ── security：权限模式与审批（⚠ 顶层节，不是 runtime.security）──────────────
+# 谁来读：graph_runner 在 run 起始把这份快照凝固进 SecurityContext，run 内不变
+#         → 改完下一次 run 才生效。设置页「安全」写的就是本节的这些键。
+security:
+  mode: standard                # standard | read_only | full_access
+                                #   read_only：拒绝 exec/network/actuate（fail-closed）
+                                #   full_access：全局免审批（与「每任务完全访问」开关取或）
+  approval:
+    wait_seconds: 600           # 审批等待上限（秒）；0 = 无限等；超时按**拒绝**处理
+  audit: true                   # 审计落盘 ~/.omniagent/audit/YYYY-MM.jsonl
+
+# ── knowledge：记忆轴的参数（gate 在上面 runtime.knowledge 里，这里只有参数）──
+# 谁来读：记忆链路（提炼 / 场景块 / 日记 / 画像 / 关系卡）。缺省值见代码。
+knowledge:
+  profile:                      # L3 用户画像（user_profile.md）
+    enabled: true               # 注入开关
+    auto_maintain: true         # 新 atoms 攒够就让 LLM 增量重写画像
+    trigger_every_n: 20
+  scene:                        # L2 场景块
+    max_blocks: 15              # 容量上限（超限三级预警强制合并）
+    prompt_mode: personal       # 提炼 prompt 家族（personal=场景知识；work 家族待接入）
+  diary:
+    enabled: true               # 社交日记：巩固期写昨日第一人称日记 + 月记（§2.7）
+  relations:
+    enabled: true               # 关系卡（memory/relations/<uid>.md）——已改「可检索资产」：
+                                # 经 narrative_search/read 按需自取，不再自动注入（NP-2）
+  narrative:                    # 叙事检索/读取（NP-1，plan §6.5）
+    external_read_mode: summary_only   # 外部来源读印象卡：只给摘要、正文置空（N-10）
+
+# ── context：场合信号与共同背景加权（M2，plan §6.2）──────────────────────────
+# chat_id 只**加权不过滤**（INV-3）：跨场合记忆照样召回，只是排得靠后。
+context:
+  w_ctx: 0.25                   # 当前场合标注命中 → ×(1+w_ctx)
+  w_bg: 0.10                    # 圈层共同话题词面命中（同场合标注 + topics 相交）→ ×(1+w_bg)
+  context_chars: 200            # <current-context> 稳定段字符预算（超预算逐级丢 topics）
+
+# ── circle_note：圈层语境链（M3，plan §5.2）────────────────────────────────
+# 语境预期（这个场合大致聊什么/什么分寸），不是可引用事实：永不进 atoms、不参与四态。
+circle_note:
+  enabled: true
+  min_msgs: 12                  # 场合 buffer 攒够条数即触发 reflection（条数阈值）
+  interval_s: 600               # 距上次 reflection 的间隔阈值（低流量也能被喂到）
+  max_per_cycle: 5              # 每巩固周期全局最多 reflection 次数（N-13）
+
+# ── skill：技能层开关 ──────────────────────────────────────────────────────
+# 谁来读：技能装配与自动蒸馏。设置页「通用」里有 auto_distill 的开关。
+skill:
+  auto_distill: false           # 结构化宏自动提取。默认关：押的是「回放省步」价值假设，
+                                # 目前负结果两次，停手状态（见 plan §8.3）
+  replay_allow_tools:           # 硬重放白名单（确定性工具才可重放；GUI 坐标类不在列，
+    - shell_exec                # 命中白名单才原样重放，否则降为「参考建议」
+    - read_file
+    - write_file
+    - list_dir
+    - search_content
+  evict_candidate_ttl_days: 14  # candidate 过期 → 移入 _archive/
+  evict_active_idle_days: 30    # active 闲置且低效用 → 同上
+
+# ── gateway：IM 网关行为 ───────────────────────────────────────────────────
+gateway:
+  # 派发时给模型的「刚才在聊什么」回溯窗口（分钟）。条数上限在 dispatch 里另有约束，
+  # 两者取交集；跨窗的旧话让模型自己走 conversation_search 现查。
+  im_history_minutes: 90
+
+# ── server：后端监听（改这三项必须重启后端）────────────────────────────────
+server:
+  host: 127.0.0.1               # 非回环地址必须配 auth_token，否则**拒绝启动**
+  port: 8000
+  # auth_token: "换成长随机串"   # 非回环访问的 Bearer 凭证（nginx 转发时带上即可）
+  # allow_tokenless_lan: false   # true = 允许无 token 局域网直连（显式逃生门，自担风险）
+
+# ── desktop：Electron 壳可选项（Web 版完全不读这节）────────────────────────
+desktop:
+  hotkey: "Ctrl+Shift+O"        # 全局呼出/隐藏主窗口；置 "" 禁用
+  show_tray: true               # true = 关窗缩到托盘；false = 关窗即退出（同时停后端）
+  frameless: true               # true = 无边框窗口 + 顶部拖拽区
+  software_render: false        # 只在「窗口可见但整片空白、拖一下才出画面」且其余无效时开
+  window:
+    width: 1440
+    height: 900
+    min_width: 960
+    min_height: 600
+
+# ── cuda：训练/推理脚本用的工具链根路径 ────────────────────────────────────
+cuda:
+  path: ""                      # 留空 → 回退环境变量 CUDA_PATH
+
+# ============================================================================
+# 写了也没人读的键（保留在这里是为了「别踩」，不是为了兼容）
+# ----------------------------------------------------------------------------
+# runtime.backend               —— env 概念已退场；操作电脑 / Android 现在是普通
+#                                  插件（plugins/host、plugins/emulator 各自 enabled）
+# brain.base_url / model / api_key / provider
+#     runtime.executor / llm.providers / llm.local_as_tool
+#                              —— 端点真源收敛到 models.json，这几条整段不再读取
+# runtime.long_task.memory_in_user
+#                              —— 记忆注入位置的过渡开关，迁址定稿后代码已删该分支
+# local_model.auto_start / default_model
+#                              —— 只剩 GET /api/settings 的骨架初值，没有消费方
+#                                  （本地 GGUF 目录 local_model.models_dir 仍然有效）
+# runtime.security             —— 代码缺省里的一份历史位置；实际读的是**顶层** security
+# knowledge.memory.enabled     —— 同上，实际 gate 是 runtime.knowledge.memory.enabled
+# runtime.python_exec / runtime.filesystem / runtime.web
+#                              —— 这三个工具现在是**插件**：限流读的是
+#                                  ~/.omniagent/plugins/<name>.yaml（loader 把插件自有
+#                                  配置 dict 喂给 configure 钩子），不是主配置。
+#                                  例子里已经改到正确归属，主配置写它们没有反应。
+# runtime.trajectory.dir / .prune_days / runtime.world_model.dir
+#                              —— 落盘路径由 runtime_paths 按 task_id 生成，滚动策略
+#                                  在代码里；这三项在本机 config.yaml 里躺着，改了没反应
+# ============================================================================

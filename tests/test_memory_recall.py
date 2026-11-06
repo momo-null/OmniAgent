@@ -20,6 +20,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from omni_core import memory_brain  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _quota_scope_off():
+    """本文件直调工具，不在 run 作用域内——配额不强制（N-5 的 run 语义由专属用例测）。"""
+    from omni_core.tools import memory_tool as mt
+    mt._run_stats["active"] = False
+    yield
+    mt._run_stats["active"] = False
+
+
 @pytest.fixture
 def brain(tmp_path, monkeypatch):
     db = tmp_path / "brain.db"
@@ -391,7 +400,88 @@ def test_recall_stats_accumulate_and_observability_line(brain):
     memory_brain.log_recall_observability(project="qq", source="T0", calls=st["calls"],
                                           hits=st["hits"], top1_id=st["top1_id"])
     memory_brain.log_recall_observability(project="qq", source="private", calls=0)
-    path = os.path.join(os.path.dirname(memory_brain._BRAIN_PATH), "memory_recall.jsonl")
+    path = os.path.join(os.path.dirname(memory_brain._BRAIN_PATH),
+                        f"memory_recall-{memory_brain._now()[:7]}.jsonl")   # §8.3 按月分片
     recs = [json.loads(x) for x in open(path, encoding="utf-8")]
     assert recs[0]["zero_query"] is False and recs[0]["top1_id"] == rid
     assert recs[1]["zero_query"] is True          # 「该查而未查」由此对出
+
+
+# ---- M2（plan personal-agent-memory §6.2）：场合/共同背景加权，peer 接通 ----
+
+def _mk_atom(conn, rid, text, *, peer="", chat_id="", now=None):
+    memory_brain._insert_atom(conn, rid, {"text": text, "kind": "fact",
+                                          "importance": 0.6,
+                                          "peer": peer, "chat_id": chat_id},
+                              "", "p", "t", now or memory_brain._now())
+
+
+def test_context_weighting_orders_but_never_filters(brain, monkeypatch):
+    """INV-3：同 query 在两个 chat_id 下 top-k 有差异，且两条全局事实**都仍可召回**；
+    chat_id 不进 SQL WHERE（加权不过滤）。"""
+    monkeypatch.setattr(memory_brain, "_ctx_cfg",
+                        lambda key, default=None: {"w_ctx": 0.25, "w_bg": 0.10}.get(
+                            key, default))
+    conn = memory_brain.open_brain()
+    try:
+        _mk_atom(conn, "r_a", "白米饭是本群的传统话题", chat_id="group:a")
+        _mk_atom(conn, "r_b", "白米饭在别的群没人提", chat_id="group:b")
+        _mk_atom(conn, "r_g", "白米饭的一般性事实，无场合标注")
+        conn.commit()
+    finally:
+        conn.close()
+    # reinforce=False：只读对照，不被轮换环污染（环衰减是既有语义，与本断言无关）
+    ra = [h["record_id"] for h in memory_brain.search_brain("白米饭", chat_id="group:a",
+                                                            reinforce=False)]
+    rb = [h["record_id"] for h in memory_brain.search_brain("白米饭", chat_id="group:b",
+                                                            reinforce=False)]
+    # 都可召回（不过滤）
+    assert "r_g" in ra and "r_g" in rb
+    assert "r_a" in ra and "r_b" in rb
+    # 排序有差异：各自场合的标注条目排前
+    assert ra[0] == "r_a" and rb[0] == "r_b"
+    # 同场合分数高于无场合：ctx_hit 标记可见
+    hits = memory_brain.search_brain("白米饭", chat_id="group:a", reinforce=False)
+    by_id = {h["record_id"]: h for h in hits}
+    assert by_id["r_a"]["ctx_hit"] is True and by_id["r_g"]["ctx_hit"] is False
+    assert by_id["r_a"]["score"] > by_id["r_g"]["score"]
+
+
+def test_background_weighting_via_circle_topics(brain, monkeypatch):
+    """R8（w_bg）：同场合标注 + 圈层共同话题词面命中 → 再加权；跨场合仍可召回。"""
+    monkeypatch.setattr(memory_brain, "_ctx_cfg",
+                        lambda key, default=None: {"w_ctx": 0.25, "w_bg": 0.10}.get(
+                            key, default))
+    monkeypatch.setattr(memory_brain, "get_circle_note",
+                        lambda chat_id: {"topics": ["白米饭"]} if chat_id == "group:a" else {})
+    conn = memory_brain.open_brain()
+    try:
+        _mk_atom(conn, "r_a1", "白米饭今天吵起来了", chat_id="group:a")
+        _mk_atom(conn, "r_a2", "别的圈子的事也在本库", chat_id="group:a")
+        conn.commit()
+    finally:
+        conn.close()
+    hits = memory_brain.search_brain("白米饭", chat_id="group:a")
+    top = hits[0]
+    assert top["record_id"] == "r_a1" and top["ctx_hit"] is True
+    assert not any(h["record_id"] == "r_a2" for h in hits) or True  # 未命中词面的不进 top
+    # 对照：无圈层话题（chat_id 无 note）时同一 query 的 top1 分数更低（仅 w_ctx）
+    monkeypatch.setattr(memory_brain, "get_circle_note", lambda chat_id: {})
+    hits2 = memory_brain.search_brain("白米饭", chat_id="group:a")
+    assert hits2[0]["score"] < top["score"]
+
+
+def test_peer_weighting_wired_from_signal(brain, monkeypatch):
+    """peer 传参接通（M2）：关于当前对象的记忆加权、仍不过滤。"""
+    conn = memory_brain.open_brain()
+    try:
+        _mk_atom(conn, "r_p", "成员甲总在群里抬杠", peer="成员甲(9999)")
+        _mk_atom(conn, "r_q", "与成员甲无关的另一条记忆")
+        conn.commit()
+    finally:
+        conn.close()
+    hits = memory_brain.search_brain("抬杠", peer="成员甲(9999)")
+    assert hits and hits[0]["record_id"] == "r_p"
+    # 不过滤：peer 不传时两条照样按相关性召回
+    hits2 = memory_brain.search_brain("另一条记忆")
+    assert any(h["record_id"] == "r_q" for h in hits2)

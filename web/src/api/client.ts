@@ -195,7 +195,9 @@ export const runtimeApi = {
   inject: (payload: { text: string; task_id?: string; agent_id?: string }) =>
     http.post("/api/runtime/inject", payload),
   // 用户主动停止（只有用户停止才停）
-  stop: () => http.post("/api/runtime/stop"),
+  // 停止任务；并发化后显式传 task_id（后端多任务并发时不再猜）
+  stop: (taskId?: string) =>
+    http.post("/api/runtime/stop", taskId ? { task_id: taskId } : {}),
   skillRun: (payload: { task_id?: string; skill_name: string }) =>
     http.post("/api/runtime/skill/run", payload),
   skillDelete: (payload: { task_id?: string; skill_name: string }) =>

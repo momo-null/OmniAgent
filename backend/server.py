@@ -126,6 +126,10 @@ async def lifespan(app: FastAPI):
         from omni_core import memory_brain
         if memory_brain.start_l0_backfill():
             logger.info("L0 检索索引回填已发起（后台线程）")
+        # NP-0（plan personal-agent-memory §13.5）：叙事索引一次性迁移（重建 + 撞名处理，
+        # meta 标记只跑一次；失败静默——正文文件仍是唯一真相）。
+        if memory_brain.start_narrative_migration():
+            logger.info("叙事索引迁移已发起（后台线程）")
     except Exception as e:
         logger.warning("L0 回填发起失败（已忽略）: %s", e)
     yield

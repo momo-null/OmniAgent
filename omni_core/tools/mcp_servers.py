@@ -30,6 +30,9 @@
         enabled: false
         url: http://127.0.0.1:8010/mcp
 
+（真身是 JSON，容忍 ``//`` 注释；``env`` / ``cwd`` / ``headers`` 等逐键说明见
+``examples/mcp.json``。）
+
 过渡期纪律（sandbox-permission-design §6.5）：MCP 审批未收口前，mcp.json 只接
 **只读类** server（搜索 / 文档 / 浏览器快照类）；执行类（有写 / 执行副作用）
 暂不接，待自注册转调收口后再放行。

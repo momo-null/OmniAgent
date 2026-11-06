@@ -160,6 +160,8 @@ class InstructionMixin:
         if self.knowledge_cfg.get("memory"):
             # P1（2026-11-02，方案 C）：L1 检索结果**永不自动注入**——常驻 system 的是
             # 使用规则，内容由模型经 memory_recall（及 P2 的 conversation_search）自取。
+            # NP-2（plan personal-agent-memory §13.3.2）：叙事能力声明零内容化 + 「叙事
+            # 不得转述到对外消息」；七工具配额口径统一。
             parts.append(
                 "<memory-usage-rules>\n"
                 "长期记忆（你与主人的事实/规则/偏好/事件）不会自动提供给你，需要时自己查：\n"
@@ -167,8 +169,14 @@ class InstructionMixin:
                 "先调 memory_recall 查过再回答，不凭印象编造；\n"
                 "- 要原话、具体时间、具体是谁说的：memory_recall 只有摘要或查不到时，"
                 "调 conversation_search 检索原始聊天记录（关键词用 2-4 字最有效）；\n"
+                "- 你的经历叙事（日记/月记/对人的印象卡）同样不自动提供：被问「上次/那天/"
+                "我们/某个人」时先调 narrative_search 找条目（返回日期/摘要），"
+                "要读全文再调 narrative_read；\n"
+                "- 叙事内容只供你自己参考——不得把日记/月记/对人的印象直接转述到对外消息"
+                "里，也不得把它们当成客观事实引用；\n"
                 "- 查不到就如实说「没有相关记录」；一个 run 内自取过往（memory_recall + "
-                "conversation_search + msg_group_history）合计不超过 3 次，"
+                "conversation_search + msg_group_history + read_scene + narrative_search + "
+                "narrative_read）合计不超过 3 次，其中 narrative_* 不超过 2 次，"
                 "不要反复换关键词硬查；\n"
                 "- 与当前请求无关的记忆内容不要主动提及。\n"
                 "</memory-usage-rules>")
@@ -176,7 +184,13 @@ class InstructionMixin:
             try:
                 from omni_core.local import scene_executor
                 _pid = TaskStore.project_of(str(task_id)) if task_id else ""
-                _entries = scene_executor.load_scene_nav(_pid)
+                # NP-2（§13.3.2）：导航取消日记/月记固定配额（diary_cap=0, month_cap=0）——
+                # 稳定段只列主题块；叙事条目由 narrative_search 按需检索（R6）。
+                # 双保险过滤 diary-*：无论 load_scene_nav 的配额实现如何，
+                # 固定日记条目不得进稳定段（INV-11 / N-3）。
+                _entries = [e for e in scene_executor.load_scene_nav(
+                    _pid, diary_cap=0, month_cap=0)
+                    if not str(e.get("filename") or "").startswith("diary")]
                 if _entries:
                     # 2026-11-02 对齐原仓库 `Path + 热度 + Summary`（M-1 的"只给文件名"
                     # 让模型无法判断该读哪篇，diary-* 文件名零信息量）。每条三行，
@@ -210,6 +224,18 @@ class InstructionMixin:
                 if _pt.strip():
                     parts.append(f"<user-persona>\n{_pt.strip()}\n</user-persona>")
                     layers.append("user_profile")
+            except Exception:
+                pass
+        # M1（plan personal-agent-memory §6.1）：``<current-context>`` 工作记忆稳定段——
+        # run 起始由 context_signal.build_run 单点构造一次、run 内不变；≤200 字符
+        # （context.context_chars），每 run 只注入一次。空信号零注入（逐字节不变）。
+        if not is_sub:
+            try:
+                from omni_core.local.loop import context_signal as _cs
+                _ctx = _cs.render()
+                if _ctx:
+                    parts.append(_ctx)
+                    layers.append("context_signal")
             except Exception:
                 pass
         if not parts:

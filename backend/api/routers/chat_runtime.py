@@ -17,6 +17,7 @@ from backend.api.routers.helpers import (
     _finish_task,
     _is_any_running,
     _is_task_running,
+    _running_task_ids,
     _make_brain_cfg,
     _merge_message_step,
     _merge_thinking_step,
@@ -92,7 +93,7 @@ def _did_work(turn_steps: List[Dict[str, Any]], result: Optional[Dict[str, Any]]
     return False
 
 
-def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, full_access: Optional[bool] = None, agent_id: str = AGENT_MAIN, model: Optional[str] = None, mode: str = "auto", persona: str = ""):
+def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, full_access: Optional[bool] = None, agent_id: str = AGENT_MAIN, model: Optional[str] = None, mode: str = "auto", persona: str = "", tools_enabled: Optional[bool] = None, tool_allowlist: Optional[List[str]] = None):
     """统一 agent 入口（单入口处理闲聊 + 双 agent 任务执行）。
 
     一个会话 = 一个 task（首条消息由调用方在外部建好 task 并传入 task_id）。
@@ -186,6 +187,10 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         loop = ToolLoop(brain_cfg, executor_cfg=executor_cfg, verbose=True,
                         full_access=full_access,
                         config_snapshot=cfg, agent_id=agent_id,
+                        # 能力门透传（2026-11-05）：chat lane「轻工具集」落地口——
+                        # None = 不干预（缺省全量，既有调用方语义不变）
+                        tools_enabled=True if tools_enabled is None else bool(tools_enabled),
+                        tool_allowlist=tool_allowlist,
                         mode=mode, persona=persona, dispatch_ts=_ts_entry,
                         on_debug=_debug_push,
                         on_thinking=_on_thinking, on_tool_call=_on_tool_call,
@@ -278,7 +283,15 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         spec = TaskSpec(objective=last_user, done_when="",
                         task_id=task_id, project_id=None, max_steps=max_steps,
                         history=list(model_messages),
-                        task_mode=_task_mode)
+                        task_mode=_task_mode,
+                        run_key=run_key)
+        # M1（plan personal-agent-memory F-4）：Web 直连是「与主人对话」——进料道
+        # 标 chat，context_signal 据此构造 <current-context>（与 QQ 通道同一套结构）。
+        try:
+            from gateway.channels import context as _gwctx
+            _gwctx.set_source_kind("chat")
+        except Exception:
+            pass
         _debug_push("task_init", {
             "title": "任务下发",
             "objective": last_user,
@@ -384,6 +397,12 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             rec.loop = None
             # force 标记兜底清除（异常路径可能未走到消费点，防下一轮误跳沉淀）
             rec.force_interrupted = False
+        # M1：清掉本轮进料道标注（进程级单值，防残留串进下一轮）
+        try:
+            from gateway.channels import context as _gwctx
+            _gwctx.set_source_kind("")
+        except Exception:
+            pass
         _finish_task(task_id, agent_id)
         # daemon 纯文本汇报后 paused：本轮结束但任务保持活跃，等用户下条消息续跑，
         # 不标 done（否则 chat 多轮会话被误判结束、无法续跑）。仅当 run_task 正常返回
@@ -442,11 +461,14 @@ async def _stream_gen(task_id: str = "", sub: str = ""):
             # 全局**主**订阅透明跟随当前运行中的 task，消除订阅竞态丢事件；
             # 旁路订阅（sub 非空，如前端常驻听 tasks_changed）不跟随——它要的是
             # 全局事件（跨进程会话变更），跟着跑中的 task 会漏掉全局 outbox 里的事件。
+            # 并发化（2026-11-05）：仅当**恰有一个**运行中 task 时才跟随——多个并发时
+            # 跟随任意一个会把别的会话 outbox 消费掉（串台 + 丢事件）。多任务时主订阅
+            # （无 tid 的新会话视图）不跟随；各会话视图按自己的 tid 订阅，不受影响。
             eff = sub_id
             if eff == "_global" and not _sub:
-                rid = _running_task_id()
-                if rid:
-                    eff = rid
+                _rids = _running_task_ids()
+                if len(_rids) == 1:
+                    eff = _rids[0]
             _eff_last = eff
             parts = outbox_drain(eff, _sub)
 
@@ -470,7 +492,14 @@ async def _stream_gen(task_id: str = "", sub: str = ""):
                 yield _sse("debug", m)
 
             # 2) status + 数据快照（task-scoped）
-            tid = task_id or _running_task_id() or ""
+            # 并发化：主订阅未绑 task（新会话视图）时，仅当**恰有一个**运行才回报其
+            # tid（前端据此自动跟随）；多个并发时报空 tid + any-running，避免把
+            # 任意一个任务的 status 当成本视图的（前端会误切视图）。
+            tid = task_id or ""
+            if not tid:
+                _rids = _running_task_ids()
+                if len(_rids) == 1:
+                    tid = _rids[0]
             running = _is_task_running(tid) if tid else _is_any_running()
             _ctx = manager.get(tid, AGENT_MAIN) if tid else None
             yield _sse("status", {
@@ -598,7 +627,12 @@ async def api_stop(request: Request):
     except Exception:
         body = {}
     body = body or {}
-    task_id = str(body.get("task_id") or "") or (_running_task_id() or "")
+    task_id = str(body.get("task_id") or "")
+    if not task_id:
+        # 并发化：未显式指定 task 时仅在「恰有一个运行」时兜底，多个并发不猜
+        _rids = _running_task_ids()
+        if len(_rids) == 1:
+            task_id = _rids[0]
     agent_id = str(body.get("agent_id") or AGENT_MAIN)
     rec = manager.get(task_id, agent_id)
     loop = rec.loop if rec else None
@@ -631,7 +665,12 @@ async def api_inject(request: Request):
     text = str((body or {}).get("text") or "").strip()
     if not text:
         return JSONResponse({"ok": False, "error": "text 不能为空"}, status_code=400)
-    task_id = str(body.get("task_id") or "") or (_running_task_id() or "")
+    task_id = str(body.get("task_id") or "")
+    if not task_id:
+        # 并发化：未显式指定 task 时仅在「恰有一个运行」时兜底，多个并发不猜
+        _rids = _running_task_ids()
+        if len(_rids) == 1:
+            task_id = _rids[0]
     agent_id = str(body.get("agent_id") or AGENT_MAIN)
     rec = manager.get(task_id, agent_id)
     loop = rec.loop if rec else None
@@ -696,15 +735,14 @@ async def api_chat(request: Request):
     if not last_user:
         return JSONResponse({"ok": False, "error": "最后一条消息内容为空"}, status_code=422)
 
-    # 原子检查：已有任务在跑则拒绝；force=True（立即发送 / barge-in）例外——
-    # 仅打断**同一 task** 的运行轮（不隐式杀别的会话），硬停后立即派发新消息。
-    if _rt._is_any_running():
-        _rid = _rt._running_task_id()
+    # 原子检查（2026-11-05 并发化）：只拦「**本会话**正在跑」——别的会话跑它的，
+    # 不挡本会话发消息（新会话 / 空闲会话直接放行，多会话并行）。force=True
+    # （立即发送 / barge-in）仅打断**同一 task** 的运行轮（不隐式杀别的会话），
+    # 硬停后立即派发新消息。
+    if task_id and _rt._is_task_running(task_id):
         if not req.force:
-            return JSONResponse({"ok": False, "error": f"已有任务在运行（task_id={_rid}），请等待结束或先停止"}, status_code=409)
-        if not task_id or _rid != task_id:
-            return JSONResponse({"ok": False, "error": f"运行中的是另一个任务（task_id={_rid}），不能在本会话强制发送"}, status_code=409)
-        _rec_f = manager.get(_rid, AGENT_MAIN)
+            return JSONResponse({"ok": False, "error": "本会话正在运行，请等待结束或先停止"}, status_code=409)
+        _rec_f = manager.get(task_id, AGENT_MAIN)
         _loop_f = _rec_f.loop if _rec_f else None
         if _loop_f is None:
             return JSONResponse({"ok": False, "error": "当前任务没有可打断的运行体"}, status_code=409)
@@ -714,9 +752,9 @@ async def api_chat(request: Request):
         # 等旧线程自然收尾（finally 里 _finish_task 清 running 态）——不提前 flip 状态，
         # 避免与旧线程 finally 收尾竞态。request_stop 是硬取消（S1），收尾通常 <1s。
         _deadline = time.time() + 5.0
-        while _rt._is_any_running() and time.time() < _deadline:
+        while _rt._is_task_running(task_id) and time.time() < _deadline:
             await asyncio.sleep(0.1)
-        if _rt._is_any_running():
+        if _rt._is_task_running(task_id):
             _rec_f.force_interrupted = False
             return JSONResponse({"ok": False, "error": "打断超时，上一轮仍在收尾，请稍后重试"}, status_code=409)
         # 等旧线程尾批 outbox 推送（流式增量 / 终态记录）落定，保证时序：
@@ -766,10 +804,10 @@ async def api_chat(request: Request):
     # lane（plan §4）：mode=task 走 work lane，其余走 chat lane。二者互不阻塞
     # （干活期间照常聊天），但同一个 task 永远只允许一个 run。
     _lane = "work" if req.mode == "task" else "chat"
-    # 原子标记 task 为 running（阶段 0.5：复合键 (task_id, "main")）
+    # 原子标记 task 为 running（复合键 (task_id, "main")；并发化后唯一互斥 =
+    # 同 task 串行，前置检查已拦过一次，这里是与之竞态的并发请求的兜底）
     if not _try_start_task(task_id, AGENT_MAIN, lane=_lane):
-        _rid = _rt._running_task_id()
-        return JSONResponse({"ok": False, "error": f"已有任务在运行（task_id={_rid}），请等待结束或先停止"}, status_code=409)
+        return JSONResponse({"ok": False, "error": "本会话已有运行轮（同会话不并发），请等待结束或先停止"}, status_code=409)
 
     # 更新 task 状态为 running；mode 一并落盘（mode 与通道解绑 2026-10-31：会话取向跟
     # 最后一次**显式**声明走——Web/远程传了 chat/task 才写，缺省 auto 不覆盖已有声明，
@@ -786,7 +824,8 @@ async def api_chat(request: Request):
     push_chat("user", last_user, task_id=task_id)
     threading.Thread(target=_rt._dispatch_chat,
                      args=(task_id, messages, max_steps, full_access, AGENT_MAIN, req.model,
-                           req.mode, _persona), daemon=True).start()
+                           req.mode, _persona, req.tools_enabled, req.tool_allowlist),
+                     daemon=True).start()
     return JSONResponse({"ok": True, "task_id": task_id, "msg": "已下发",
                          "mode": req.mode, "persona": _persona})
 

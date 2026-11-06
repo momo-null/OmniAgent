@@ -13,6 +13,16 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _quota_scope_off():
+    """直调工具不在 run 作用域内：配额不强制（防批量顺序下共享账本泄漏）。"""
+    from omni_core.tools import memory_tool as mt
+    mt._run_stats["active"] = False
+    yield
+    mt._run_stats["active"] = False
+
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from omni_core import memory_brain  # noqa: E402

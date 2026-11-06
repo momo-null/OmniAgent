@@ -94,11 +94,17 @@ def test_stable_block_scene_nav_and_profile_in_system(monkeypatch):
     assert "windows-环境事实.md" in block
     # P6（2026-11-02）：对齐原仓库 Path + 热度 + Summary 三行索引；M-1 零摘要已废
     assert "SCENE-SUM" in block and "热度 3" in block
-    assert "DIARY-SUM" in block and "更新 2026-11-01" in block
+    # NP-2（plan personal-agent-memory §13.3.2，INV-11 / N-3）：稳定段取消日记/月记
+    # 固定配额——固定日记条目不进导航（叙事经 narrative_search 按需检索）
+    assert "DIARY-SUM" not in block and "diary-2026-10-31" not in block
     assert "read_scene" in block, "导航必须指引按需读取（渐进披露）"
     assert "<user-persona>" in block and "PROFILE-TEXT" in block
     assert layers == ["memory_rules", "scene_nav", "user_profile"]
     assert "<memory-usage-rules>" in block, "P1：使用规则常驻 system（检索结果永不自动注入）"
+    # NP-2：叙事能力声明（零内容）+ 不得转述规则 + 七工具配额口径
+    assert "narrative_search" in block and "narrative_read" in block
+    assert "不得把日记/月记/对人的印象直接转述到对外消息" in block
+    assert "合计不超过 3 次" in block and "不超过 2 次" in block
     assert "SCENE-CONTENT" not in block, "全文不得进稳定段（只准摘要 + read_scene）"
 
 
@@ -172,6 +178,37 @@ def test_search_results_never_auto_injected_rules_in_system(monkeypatch):
     placements = {r["placement"]: r for r in traj.records("memory_injected")}
     assert set(placements) == {"system"}
     assert placements["system"]["layers"] == ["memory_rules", "scene_nav", "user_profile"]
+    assert "<current-context>" not in instr, "空信号零注入"
+
+
+def test_context_signal_layer_in_stable_block(monkeypatch):
+    """M1（plan §6.1）：<current-context> 随稳定段进 system，layers 带 context_signal。"""
+    from omni_core.local.loop import context_signal as cs
+
+    loop = _loop()
+    loop.knowledge_cfg["memory"] = True
+    loop.knowledge_cfg["profile"] = True
+    _cfg(monkeypatch)
+    monkeypatch.setattr(scene_executor, "load_scene_nav", lambda pid, **k: [])
+    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "")
+    cs._CURRENT.clear()
+    cs._CURRENT.update({"chat_id": "group:7", "source_kind": "chat", "peer": "甲(1)",
+                        "project_id": "", "recent_topics": ["白米饭"], "tone": "",
+                        "run_id": "t:rk"})
+    try:
+        captured = {}
+        monkeypatch.setattr(sl, "run_subtask_sdk", _fake_sdk(captured))
+        traj = _Rec()
+        loop._run_via_sdk(_spec(), {"model": "m"}, "SYS", types.SimpleNamespace(),
+                          traj=traj, user_input="hi")
+        instr = captured["instructions"] or ""
+        assert instr.count("<current-context>") == 1      # 每 run 只注入一次
+        assert "chat=group:7" in instr
+        placements = {r["placement"]: r for r in traj.records("memory_injected")}
+        assert "context_signal" in placements["system"]["layers"]
+        assert len(instr.split("<current-context>")) - 1 <= 200  # ≤200 字符量级红线
+    finally:
+        cs._CURRENT.clear()
 
 
 def test_memory_gate_off_zero_injection(monkeypatch):

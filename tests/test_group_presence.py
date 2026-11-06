@@ -787,21 +787,23 @@ def test_chat_routes_exact_beats_channel(monkeypatch):
     assert chat_routes.resolve_project("feishu", "oc_x") == "default"   # 未配置 → 兜底
 
 
-def test_peer_note_injected_into_group_prompt(adapter, monkeypatch, tmp_path):
-    """关系卡：被某个人 @ 时把它对本人的印象（三行）注入场合自述。"""
+def test_peer_note_no_longer_injected_into_group_prompt(adapter, monkeypatch, tmp_path):
+    """关系卡改「可检索资产」（plan personal-agent-memory NP-2/D-2）：通道自动注入
+    已物理删除——场合自述不再出现印象卡正文；「记得这个人」改由 narrative_search
+    /narrative_read 按需自取（工具层出口约束见 test_narrative_tool）。"""
     from omni_core.local import runtime_paths as rp
 
     a, got = adapter
     rel = tmp_path / "relations"
     rel.mkdir()
     (rel / "222.md").write_text(
-        "-----META-START-----\nname: 张三\nuid: 222\n-----META-END-----\n"
-        "最近交手：连问三次主人是谁\n我对他的态度：警惕", encoding="utf-8")
+        "-----META-START-----\nname: 张三\nuid: 222\n-----META-END-----\n", encoding="utf-8")
     monkeypatch.setattr(rp, "global_relations", lambda: rel)
 
     a._handle_event(_at_event(851, "在吗", user_id=222), got.append)
-    assert any("关于这个人的印象" in m.text and "警惕" in m.text for m in got)
-    assert a._peer_note("999") == ""            # 没卡的人零注入
+    assert not any("关于这个人的印象" in m.text or "警惕" in m.text for m in got)
+    import pytest as _pytest
+    _pytest.raises(AttributeError, getattr, a, "_peer_note")   # 零痕迹删除
 
 
 def test_send_records_voice_mode_state(adapter, monkeypatch):

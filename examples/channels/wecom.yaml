@@ -1,0 +1,25 @@
+# ============================================================================
+# 企业微信通道模板 → 拷到 ~/.omniagent/channels/wecom.yaml
+#
+# ⚠ 现状如实说明：企微通道在代码里是 **P1 未实装的骨架**（gateway/channels/wecom.py）。
+#   它存在的意义是证明「新增通道 = 只写那个文件 + 一段配置，dispatch/插件/调度器零改动」。
+#   现在把它 enabled: true 会发生的事：
+#     · connect() 起一个空线程 —— 收不到任何消息；
+#     · send_text / send_card / broadcast 一律返回 {"ok": false, "error": "wecom 通道 P1 未实装"}。
+#   所以这份模板当前只有一个键是真起作用的：enabled。
+#
+# 真要接入时怎么改：在 wecom.py 的 build(cfg) 里读你需要的连接参数（corp_id /
+#   secret 走环境变量，与 feishu.yaml 的 app_secret_env 同一套做法），按回调 URL 或
+#   群机器人 webhook 实装 connect/send。**协议面（InboundMessage / ReplyChannel /
+#   ChannelAdapter）不该为接入而改动**——若必须改协议才能接入，说明抽象是假的。
+#   届时请把新增的键补回本文件，并同步 napcat.yaml / feishu.yaml 里的同类闸门语义。
+# ============================================================================
+
+enabled: false                  # 未实装，保持 false；true 也只是挂个空适配器
+
+# 预留：实装后这里会长这样（当前代码**不读取**以下任何键）
+# corp_id: ""
+# agent_id: ""
+# secret_env: WECOM_SECRET       # 与 feishu 一致：只填环境变量名
+# default_chat_id: ""            # cron notify_channel: wecom 时的投递目标
+# allow_tools: false             # 外部可达 → 缺省纯对话

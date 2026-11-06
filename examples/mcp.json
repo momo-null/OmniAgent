@@ -1,0 +1,68 @@
+// ============================================================================
+// OmniAgent 外部 MCP 接入模板 → 拷到 ~/.omniagent/mcp.json
+//
+// MCP 只用于**外部工具接入**（开源 MCP server / 第三方系统）：连接、工具发现、
+// schema 转换、派发都交给 Agents SDK 原生实现，自研工具与 MCP 工具平级暴露给模型。
+// 新增一个外部能力 = 在这里加一段 server，零代码改动。
+//
+// 谁来读：工具运行时（每个 run 装配 agent 时按内容取用；同配置跨 run 复用**已连接**
+//         实例），以及 Web「技能与工具」页（只读枚举 + 工具清单，含实际暴露名）。
+// 怎么改：首选 Web「技能与工具 → MCP」；手改本文件也认，改完**重启后端**生效。
+// 命名：  SDK 原生给 MCP 工具加前缀 ``mcp_<server>__<tool>``（同名冲突时再加短哈希），
+//         所以 tool_filter 里写原始名或带前缀的暴露名都能命中，两种写法都兼容。
+// 纪律：  MCP 审批未收口前，只接**只读类** server（搜索 / 文档 / 快照）；
+//         有写入或执行副作用的 server 暂不接（见 doc/plans 的 sandbox-permission §6.5）。
+// 注释：  // 只有读取端认；MCP 面板保存会把整份文件重写成无注释版本。
+// ============================================================================
+{
+  // 总闸：false 或缺省为空 = 一个 MCP server 都不装（调用方零特判，不会报错）
+  "enabled": true,
+
+  // 每一项 = 一个 server。stdio 与 streamable HTTP 二选一：给了 url 走 HTTP，
+  // 否则用 command 起子进程。**command 和 url 都没有的项被静默跳过**（占位用的
+  // 空壳条目不会拖垮启动）；单个 server 连不上也只跳过它自己，不影响其余。
+  "servers": [
+    {
+      // name 决定工具暴露名前缀（mcp_<name>__<tool>），也是日志与面板里的标识
+      "name": "example-docs",
+      "enabled": true,
+
+      // ── 本地 stdio 接入（三者按需）──────────────────────────────
+      // 启动命令：npx / uvx / python 之类的绝对路径或 PATH 里能找到的名字
+      "command": "npx",
+      // 参数数组（不是字符串），原样传给子进程
+      "args": ["-y", "@modelcontextprotocol/server-example", "."],
+      // 传给子进程的环境变量（密钥放这里，别写进 args——args 会进日志与进程列表）
+      "env": { "EXAMPLE_API_KEY": "" },
+      // 子进程工作目录：相对 "." 就是后端进程 cwd。留空则不传（用 SDK 默认）
+      "cwd": "",
+
+      // ── 远端 streamable HTTP 接入（写了 url 就忽略 command/args/env/cwd）──
+      // "url": "http://127.0.0.1:8010/mcp",
+      // "headers": { "Authorization": "Bearer <从环境变量注入，别在这里写明文>" },
+
+      // 工具按需注入（缺省 = 全量放行）。glob 匹配用的是标准库 fnmatch，
+      // exclude 优先级高于 include；两边都空 = 不过滤。
+      // 建议对暴露写操作的 server 先上白名单，只放行确实需要的读类工具。
+      "tool_filter": {
+        "include": ["read_*", "list_*", "search_*"],
+        "exclude": ["write_*", "delete_*"]
+      },
+
+      // 连接 / 探活 / 工具调用的统一超时（毫秒，缺省 60000）。
+      // 透传给 SDK 的 client_session_timeout_seconds，并在连接包装层同步生效。
+      // 指向一个「没在跑的本地服务」时，这里就是空等总时长的阀门，别调大。
+      "timeout_ms": 60000
+    },
+
+    // 第二个条目演示「先写好但不启用」：enabled=false 的项不会被连接，
+    // 面板里仍可见，方便随时开。
+    {
+      "name": "example-remote-disabled",
+      "enabled": false,
+      "url": "http://127.0.0.1:8011/mcp",
+      "tool_filter": { "include": [], "exclude": [] },
+      "timeout_ms": 60000
+    }
+  ]
+}

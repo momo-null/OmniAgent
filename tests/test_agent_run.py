@@ -67,18 +67,20 @@ def test_config_snapshot_used_not_global(monkeypatch):
 # ---------------------------------------------------------------------------
 # 2. 按 (task_id, agent_id) 停止 / 注入
 # ---------------------------------------------------------------------------
-def test_agent_run_keyed_lookup_and_single_task_mutex():
+def test_agent_run_keyed_lookup_and_same_task_mutex():
     import backend.api.router_runtime as RR
 
     tid_a = "t_agent_run_A"
     tid_b = "t_agent_run_B"
     try:
         assert RR._try_start_task(tid_a) is True
-        # 单任务互斥：已有运行体在跑时，新 task 启动应被拒
-        assert RR._try_start_task(tid_b) is False
+        # 并发化（2026-11-05）：不同 task 可同时运行；唯一互斥 = 同 task 串行
+        assert RR._try_start_task(tid_b) is True
+        assert RR._try_start_task(tid_a) is False          # 同 task 再启动 → 拒
         assert RR._is_any_running() is True
-        assert RR._running_task_id() == tid_a
+        assert sorted(RR._running_task_ids()) == sorted([tid_a, tid_b])
         assert RR._is_task_running(tid_a) is True
+        assert RR._is_task_running(tid_b) is True
 
         # 以复合键 (task_id, agent_id) 注入并查回运行体句柄（阶段 1：RuntimeContext 属性访问）
         fake = _FakeLoop()
@@ -93,6 +95,7 @@ def test_agent_run_keyed_lookup_and_single_task_mutex():
 
         RR._finish_task(tid_a)
         assert RR._is_task_running(tid_a) is False
+        assert RR._is_task_running(tid_b) is True          # 另一会话不受影响
     finally:
         RR.manager.pop(tid_a, RR.AGENT_MAIN)
         RR.manager.pop(tid_b, RR.AGENT_MAIN)

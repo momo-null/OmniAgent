@@ -273,6 +273,14 @@ class LLMClient:
         对象上（on_debug 等），同配置并发 run 也安全。
         """
         self.on_debug = on_debug
+        # 端点键缺失给人话报错（2026-11-05）：模型目录「providers 有但该槽位没选
+        # 默认」是合法状态，此前裸 KeyError: 'base_url' 对用户等于静默失败——
+        # 异常只进 SSE outbox 不落库，前端看到的是「消息秒完成无回复」。
+        if "base_url" not in (cfg or {}) or "model" not in (cfg or {}):
+            raise RuntimeError(
+                "[LLMClient] 模型端点未配置：模型目录该槽位没有默认选择"
+                "（缺 base_url/model）。请到 设置 → 模型与端点 选择该槽位的默认模型。"
+            )
         self.base_url = str(cfg["base_url"]).rstrip("/")
         self.model = cfg["model"]
         env_key = cfg.get("api_key_env", "OMNI_BRAIN_API_KEY")

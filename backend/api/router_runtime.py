@@ -35,7 +35,7 @@ from backend.api.routers.helpers import (  # noqa: F401
     _is_any_running, _is_task_running, _make_brain_cfg,
     _merge_message_step, _merge_thinking_step, _paths, _project_store,
     _read_latest_collected, _read_skills,
-    _read_trajectory, _read_world, _running_task_id,
+    _read_trajectory, _read_world, _running_task_id, _running_task_ids,
     _session_records_to_model_messages, _snapshot, _task_store,
     _trajectory_dir, _trim, _try_start_task, _upsert, clear_live_snapshot, config,
     live_snapshot, push_chat,

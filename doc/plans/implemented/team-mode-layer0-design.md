@@ -287,7 +287,7 @@ allow_dispatch = bool(_dispatch_cfg.get("enabled", True))
 
 - `omni_core/brain/router.py`：**不动**（`resolve_slot` 已通用）；仅文档/示例补充多 slot。
 
-- `config.example.yaml`：`runtime.dispatch.agents` 配置示例。
+- `config.example.yaml`（2026-11-05 起并入 `examples/config.yaml`）：`runtime.dispatch.agents` 配置示例。
 
 - `models.json`：配置示例补充多 slot 声明（§3.6）。
 

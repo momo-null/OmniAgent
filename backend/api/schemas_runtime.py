@@ -38,6 +38,14 @@ class ChatRequest(BaseModel):
     # 单链路参数化（plan §3.1）：auto（缺省，大脑自决）| chat（对话/语音）| task（干活）。
     # 三者跑**同一条链路**，只切参数：工具粗集 / system 模板 / 模型槽 / 写链取舍。
     mode: Literal["auto", "chat", "task"] = "auto"
+    # 能力门（运行级，2026-11-05）：plan §3.1 规定 chat lane 是「轻工具集」，但
+    # 2026-10-29 mode 收窄后实现从未裁过工具（mode 只管取向纪律）——对话/语音轮
+    # 因此拿到全量执行原语，闲聊跑偏去操作设备。这里把 gateway 已在用的运行级
+    # 能力门（core.ToolLoop tools_enabled / tool_allowlist，2026-10-29 引入）向上
+    # 暴露到 chat 入口：False = 纯对话运行（物理上无工具可调）；allowlist 在
+    # False 时仍暴露列出的只读/记忆工具。None = 不干预（缺省全量，语义不变）。
+    tools_enabled: Optional[bool] = None
+    tool_allowlist: Optional[list[str]] = None
     # 会话激活的人格（角色卡 id）。检索 / 写入 / 画像三处都按它过滤；
     # 空 = 用持久化在 task 上的值，再空则回退配置里的单人设缺省。
     persona: Optional[str] = Field(default=None, max_length=64,

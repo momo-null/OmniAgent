@@ -36,7 +36,7 @@ cd web && npm install && cd ..
 ```
 
 打开 `http://localhost:5173` → **设置 → 模型** 填 API provider 与 key（或选本地 GGUF）→ 直接聊。
-设置页写的是 `~/.omniagent/models.json`；仓库里只有 `config.example.yaml`（无任何明文密钥）。
+设置页写的是 `~/.omniagent/models.json`；仓库里不含任何明文密钥，每份配置的带注释模板都在 [`examples/`](examples/README.md)。
 
 不想开三个窗口就用桌面端（见[快速开始](#快速开始)）。
 
@@ -45,7 +45,7 @@ cd web && npm install && cd ..
 **一通道一文件**：`~/.omniagent/channels/<name>.yaml`（主配置里的 `channels:` 段已不再读取），聊天路由表是同目录的 `routes.yaml`。
 
 1. 装 [NapCat](https://github.com/NapNeko/NapCatQQ)，开启 HTTP（默认 `:3000`）与 WebSocket 服务（默认 `:3001`）；
-2. 建 `~/.omniagent/channels/napcat.yaml`：`enabled` / `http_url` / `ws_url` / `token`，群聊闸门 `reply_groups` / `allow_groups` / `require_at`，私聊白名单 `allow_users`；
+2. 抄 `examples/channels/napcat.yaml` 建 `~/.omniagent/channels/napcat.yaml`：`enabled` / `http_url` / `ws_url` / `token`，群聊闸门 `reply_groups` / `allow_groups` / `require_at`，私聊白名单 `allow_users`；
 3. 起网关：`python -m gateway.channel_gateway`（桌面端会自动拉起，不用手动跑）；
 4. 私聊直接回；群聊**默认必须 @ 它**才响应。语音进来会转写成 `[语音] <内容>`，**要不要用语音回由模型决定**（`msg_send_voice` vs `msg_send_text`，通道不自动改发送形式），图片真的看懂。
 
@@ -55,7 +55,7 @@ cd web && npm install && cd ..
 
 ### 3. 让它定时干活并回消息
 
-Web「定时任务」页新建（或改 `~/.omniagent/cron/jobs.json`，热加载不用重启）：写一句 objective + cron 表达式 + 完成条件，选 `notify_channel` 指定结果推到哪个通道。运行记录与失败原因都能在页面看到。
+Web「定时任务」页新建（或改 `~/.omniagent/cron/jobs.json`，热加载不用重启，容忍 `//` 注释；逐字段说明见 `examples/cron/jobs.json`）：写一句 objective + cron 表达式 + 完成条件，选 `notify_channel` 指定结果推到哪个通道。运行记录与失败原因都能在页面看到。
 
 ### 4. 让她开口说话、唱一句
 
@@ -63,9 +63,9 @@ Web「定时任务」页新建（或改 `~/.omniagent/cron/jobs.json`，热加�
 
 ```bash
 # 引擎侧：模型路径、音色、空闲回收、端口（留空 = 自动探测，一般不用改）
-copy plugins\voice\voice_service.example.yaml %USERPROFILE%\.omniagent\voice_service.yaml
+copy examples\voice_service.yaml %USERPROFILE%\.omniagent\voice_service.yaml
 # 调用端：只描述「把请求发到哪」
-copy plugins\voice\plugin.example.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
+copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
 ```
 
 - 服务默认只听回环、按需懒加载、空闲释放模型（进程不退、监听常在）；要放到局域网就改 `service_host` **并务必设 `service_token`**。
@@ -154,12 +154,15 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | `~/.omniagent/projects/<project>/` | 会话历史 `*.jsonl`、场景块（含 `diary-*` / 月记）、技能、项目级 `AGENTS.md` | 知识层 |
 | `~/.omniagent/tasks/<task>/` | 单次任务的轨迹、世界模型、收集结果、任务级技能 | 运行态 |
 
+上表前七行的每份配置，在仓库根 [`examples/`](examples/README.md) 里都有一份**逐键带注释的同名模板**（`examples/models.json`、`examples/config.yaml`、`examples/channels/*.yaml`、`examples/plugins/voice.yaml`、`examples/voice_service.yaml`、`examples/mcp.json`、`examples/cron/jobs.json`）：按同名路径抄进 `~/.omniagent/` 就是一份可读的初始配置，里面写清了每个键谁读、取值范围、改了要不要重启。示例不含明文密钥与本机绝对路径；`*.json` 三份容忍 `//` 注释，但 Web 面板保存会整体重写把它们抹掉——所以注释的家在 `examples/`，不在运行文件里。
+
 界面上：项目右键可**重命名**（只改显示名，不动目录与归属）/ 删除（级联删任务）；任务右键可改名、保存到项目、打开文件夹、删除。
 
 ## 边界（诚实说明）
 
 - 个人学习项目，Windows 优先、单机部署，**不保证稳定性与体验**；使用后果自负。
 - 记忆机制已真机验证，**长期有效性仍在观察**；召回验收阈值是在很小的语料上校准的，目前仍有指标未达标——这是刻意不调线的，语料长起来才重测。不是"过目不忘"。
+- **记忆层不是原创**：L0–L3 分层、多文件场景块与巩固周期移植自开源项目 **TencentDB Agent Memory**（上游 TypeScript 实现，本仓库以 Python + SQLite FTS5 重写）。哪里改了、哪里丢了、哪些是自创，摘要见「技术架构」一节的移植偏差表，逐条登记见 [`doc/plans/memory-recall-2026-11-02.md`](doc/plans/memory-recall-2026-11-02.md) §3。
 - 群聊轮不产 L1 原子（防记忆投毒），所以「按人记住」只能靠关系卡这一条登记在案的特例：只在 QQ 单一说话人的路径注入、≤200 字、不进检索、**无上限无 TTL**。覆盖率与「旧印象被当成近期事实」都仍在观察，暂不动机制。
 - 唱歌走的是「分离离线缓存 + 歌声转换在线」：库内点歌十几秒级，库外整条管线是分钟级（下载占大头），音质取决于声库素材与显存；在线曲库闸门默认关，站点源不入公开仓。
 - 语音服务默认只听回环；放到局域网而不设 token，等于让任何人白嫖你的显卡。
@@ -187,6 +190,30 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | 记忆存储 | SQLite（`brain.db`：atoms + `atoms_fts` + L0 逐字索引）+ JSONL 场景块 + Markdown 画像 / 关系卡 |
 
 **核心红线**：内核零场景硬编码——加能力 = 写工具 / 插件，绝不把某个 app / 游戏 / 业务的判断塞进 `omni_core/`。内核对语音零 import、语音插件不注册任何 agent 工具；「回不回话」是通道侧的纯计算，不交给模型猜。`scripts/review_lint.py`（R1 屏幕字段泄露 / R2 具体工具名分支 / R3 缺抽象方法）由 CI 守护（`.github/workflows/redline-lint.yml`），任何场景分支都必须抽成工具。
+
+**记忆层出处与移植偏差**
+
+记忆轴（L0–L3 分层 / 多文件场景块 / 巩固周期）移植自开源项目 **TencentDB Agent Memory**：上游是 TypeScript 实现，本仓库用 Python + SQLite FTS5 重写，参照件 clone 在 `external/TencentDB-Agent-Memory`（不入 git）。**2026-11-06 起上游定位降级为「机制参考与出处标注」**——上游的目标函数是多租户隔离，本仓库是单用户多语境，判据只能是「对单用户个人助理是否有用」，不以「上游这么做/没有」作为取舍理由。逐条取舍只登记在 [`doc/plans/memory-recall-2026-11-02.md`](doc/plans/memory-recall-2026-11-02.md) §3 与 `doc/plans/implemented/memory-architecture.md` 末尾的部件溯源表，本节只做摘要，不在两处各写一半。
+
+| 机制 | 上游 | 本仓库 | 性质 |
+|---|---|---|---|
+| L1 存储 | 双库 | `brain.db` 单库 + FTS5 `simple` 分词（2026-10-28 收敛） | 本地重写的取舍 |
+| L1 相关性打分 | 绝对分 `rel/(1+rel)` | 曾自创候选集线性归一，已回对齐。实测绝对分落点集中在 0.5–0.6，`threshold 0.3` 几乎挡不住任何弱命中（上游同样），真正控量的是 k + 去冗余 | 实现偏差 → 已对齐 |
+| L1 进 prompt | 自动注入已下线，改两个检索工具按需（每轮合计 ≤3 次，理由是破坏 prompt cache） | 曾每轮自动注入 8 条，2026-11-02 决策全局下线、改由模型自取 | 方向性偏离 → 已对齐 |
+| 记忆块位置 | stable / dynamic 拆分 + 渐进披露 | 曾自创「每步重发记忆块」的 Model 包装；静态内容每步重发 = 反复 priming，与工具调用写成文本的生成退化相关，2026-10-07 移除并写成 `review_lint` 红线 | 自创 → 已删并上锁 |
+| 写入去重候选 | FTS / 向量近邻 top5 + 一次批量 LLM 判 store/update/merge/skip | 曾用 `content[:12]` 精确短语探针，33 条 active 实测候选命中 0/33（即去重从未触发），现改为 FTS 全文近邻 top5 | 实质降级 → 已修复 |
+| L2 场景块进料 | 只吃 L1 原子增量（`queryMemoryRecords({updatedAfter: cursor})` → `extract(memories)`），且块尺寸在代码里**零硬检查**，靠 1500 字符/文件、400 字/核心叙事的 prompt 预算加 read+write 整体重写来收敛 | 曾直接喂「会话要点 + 世界状态」原文，每 900s 一轮：同一天的叙事被日记与场景块各记一遍，块曾被 `scene_edit` 一路加到 8081 字（当时全库唯一超 4000 的一块）。2026-11-05 改回 L1 原子增量 + `last_l2_atom_ts` 游标；2026-11-06 废除 `origin` 分组取料（多租户隔离语义不适配单用户语境，`origin` 只作溯源），改为**一池增量** + 复合游标（`updated + record_id`，同戳不丢料） | 实质偏离 → 已对齐后按单用户取向再修订 |
+| 场合信号 / 圈层语境 | 上游无此概念（单会话无「圈子」） | 2026-11-06 自建：`<current-context>` ≤200 字符场合信号 + `circle_note` 圈层语境摘要 + `w_ctx`/`w_bg` 场合与共同背景加权（**加权不过滤**，跨场合记忆照样可召回）；存储一池不拆分 | 自创，保留 |
+| 叙事检索 | 上游无叙事资产层 | 日记/月记/关系卡经 `narrative_index`（只存指针不存正文）+ `narrative_search`/`narrative_read` 按需检索读取；>7 天旧日记不再被导航窗口截断；关系卡自动注入已删除、改自取 | 自创，保留 |
+| 日记 / 月记按日统一 | 上游无此概念（单会话） | 2026-11-06 起按**日期**全局一篇，落 `~/.omniagent/memory/diary/`：素材跨项目聚合、一次生成；`narrative_index` 的 `doc_id` 为裸文件名、`project_id` 不再作键；旧按项目日记合并归档（正文零丢失）。项目 `scene_blocks/` 只留工作主题块 | 自创，对齐 §3.3 空间键表 |
+| 观察进料道 | 上游无此概念 | 非对话来源（主动阅读/检索/工具产出）经唯一入口 `capture_observation()` 落 `l0_messages(source_kind=observation)`，带 `provenance`/`observed_at`/`review_after`（出处与时效，到期由巩固期复核）；升格为事实必经巩固期价值判/四态 | 自创，保留（采集器实现为远期） |
+| 叙事与观察的出口 | 上游无此概念（无跨场合叙事 / 外部观察来源） | 2026-11-06 自建：跨场合叙事正文、未升格观察、关系卡评价不得直接转述到对外消息；允许以第一人称见闻表达（「我看到 / 我最近在关注」），禁止当作客观事实断言；约束落在工具层与规则文本，不靠检索侧过滤（§6.5 / §14.4） | 自创，保留 |
+| L2 块上限与读取 | 无上限、read 工具返回全文 | 自加 4000 硬上限，但只挂在 `scene_write`、`scene_edit` 漏守，且 read 侧截断到 4000（超限块"只看得见前半"，agent 无从精简）。现补成 write/edit 两路同守（只拦"编辑后更长且超上限"），读侧取消截断 | 自创，已补一致 |
+| 衰减 / 遗忘 | 没有 decay / dormant / archive，只有默认关闭的 `retentionDays` 硬删 | 曾自创 salience 衰减 + dormant/archive 状态机（默认关、从未启用，`access_count` 保留作簿记） | 自创 → 已决定删除 |
+| 关系卡 / 群聊多人 | 单会话语义，没有 peer 概念 | 为 IM 群场景自加：按 uid 全局一卡；2026-11-06 起改为**可检索资产**（`narrative_search`/`narrative_read` 按需自取），通道自动注入已删除 | 自创，保留 |
+| 收尾意图门 | 无此机制 | 畸形工具调用曾被当作普通文本输出、导致任务静默假成功，故对纯文本收尾加一次语义复核（仅 oneshot 成功路径、每 run ≤2 次、判定异常 fail-open） | 自创，保留 |
+
+结论是**不换方案，也不整包接入上游**：它是单会话语义，缺 peer 与群聊多人的概念，接进来还要额外拖进一套 Node 服务栈。
 
 **目录地图**
 
@@ -263,7 +290,7 @@ cd web && npm install && cd ..
 .\start_all.bat      # three windows: backend :8000 + voice engine :18742 + frontend :5173
 ```
 
-Open `http://localhost:5173` → **Settings → Models**, add your provider and key (or pick a local GGUF), then chat. The settings page writes `~/.omniagent/models.json`; the repo ships only `config.example.yaml`, with no plaintext secrets.
+Open `http://localhost:5173` → **Settings → Models**, add your provider and key (or pick a local GGUF), then chat. The settings page writes `~/.omniagent/models.json`; the repo ships no plaintext secrets — every config has a fully commented template in [`examples/`](examples/README.md).
 
 Prefer fewer windows? Use the desktop app (see [Quick Start](#quick-start)).
 
@@ -272,7 +299,7 @@ Prefer fewer windows? Use the desktop app (see [Quick Start](#quick-start)).
 **One file per channel**: `~/.omniagent/channels/<name>.yaml` (the main config's `channels:` section is no longer read); the routing table is `routes.yaml` in the same directory.
 
 1. Install [NapCat](https://github.com/NapNeko/NapCatQQ) with HTTP (`:3000`) and WebSocket (`:3001`) enabled;
-2. Create `~/.omniagent/channels/napcat.yaml`: `enabled` / `http_url` / `ws_url` / `token`, group gates `reply_groups` / `allow_groups` / `require_at`, private allow-list `allow_users`;
+2. Copy `examples/channels/napcat.yaml` to `~/.omniagent/channels/napcat.yaml`: `enabled` / `http_url` / `ws_url` / `token`, group gates `reply_groups` / `allow_groups` / `require_at`, private allow-list `allow_users`;
 3. Start the gateway: `python -m gateway.channel_gateway` (the desktop app spawns it for you);
 4. Private chats reply directly; group chats need an @ by default. Incoming voice is transcribed as `[voice] <content>`, and **the model decides** whether to answer with voice (`msg_send_voice`) or text — the channel never rewrites the medium. Images are genuinely understood.
 
@@ -282,7 +309,7 @@ External channels are **chat-only** by default (`allow_tools: false`, the model 
 
 ### 3. Scheduled work with delivery
 
-Create a job in the web UI (or edit `~/.omniagent/cron/jobs.json` — hot-reloaded): one-line objective + cron expression + optional completion check + `notify_channel` for delivery. Run history and failure reasons are visible in the UI.
+Create a job in the web UI (or edit `~/.omniagent/cron/jobs.json` — hot-reloaded, `//` comments tolerated, field-by-field notes in `examples/cron/jobs.json`): one-line objective + cron expression + optional completion check + `notify_channel` for delivery. Run history and failure reasons are visible in the UI.
 
 ### 4. Give it a voice (and a song)
 
@@ -290,9 +317,9 @@ Voice is split into **service-side and client-side config**; switching engines m
 
 ```bash
 # engine side: model paths, timbre, idle reaping, port (blank = auto-detect)
-copy plugins\voice\voice_service.example.yaml %USERPROFILE%\.omniagent\voice_service.yaml
+copy examples\voice_service.yaml %USERPROFILE%\.omniagent\voice_service.yaml
 # client side: describes only where the request goes
-copy plugins\voice\plugin.example.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
+copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
 ```
 
 - The service listens on loopback only, lazy-loads models and releases them on idle (the process keeps listening); to expose it on your LAN set `service_host` **and a `service_token`**.
@@ -381,6 +408,8 @@ Or run `pack_desktop.bat` from the repo root (builds `web/dist` first). The shel
 | `~/.omniagent/projects/<project>/` | Session `*.jsonl`, scene blocks (incl. `diary-*` and monthly notes), skills, project `AGENTS.md` | knowledge layer |
 | `~/.omniagent/tasks/<task>/` | Trajectory, world model, collected results, task-level skills | runtime state |
 
+The first seven rows each have a **fully commented template with the same name** under [`examples/`](examples/README.md) in the repo root (`examples/models.json`, `examples/config.yaml`, `examples/channels/*.yaml`, `examples/plugins/voice.yaml`, `examples/voice_service.yaml`, `examples/mcp.json`, `examples/cron/jobs.json`): copy them into `~/.omniagent/` at the same relative paths and you start from a readable config, with every key documented — who reads it, its range, and whether a change needs a restart. Templates carry no secrets and no machine-specific absolute paths. The three `*.json` files tolerate `//` comments, but the web UI rewrites them wholesale, so commentary lives in `examples/`, not in the live files.
+
 In the UI: right-click a project to rename (display name only) or delete (cascades to its tasks); right-click a task to rename, save to project, open folder, or delete.
 
 ## Boundaries (honest notes)
@@ -388,6 +417,7 @@ In the UI: right-click a project to rename (display name only) or delete (cascad
 - Personal learning project, Windows-first, single machine, **no stability or UX guarantee**; use at your own risk.
 - The memory mechanism is live-verified, but **long-term effectiveness is still under observation**; the recall acceptance thresholds were calibrated on a very small corpus and some metrics still miss them — deliberately not re-tuned until the corpus grows. This is not perfect recall.
 - Group turns do not produce L1 atoms (memory-poisoning defence), so "remembering a person" relies on the one registered exception: relation cards. They inject only on single-speaker QQ paths, stay ≤200 chars, are not searchable, and have **no size cap and no TTL**. Coverage and "an old impression read as recent fact" remain under observation; the mechanism is intentionally untouched for now.
+- **The memory layer is not original work**: the L0–L3 tiers, the multi-file scene blocks and the consolidation cycle are ported from the open-source **TencentDB Agent Memory** (upstream is TypeScript; rewritten here in Python + SQLite FTS5). The summary table at the end of the Architecture section lists what changed, what was dropped and what is self-authored; the itemised record lives in [`doc/plans/memory-recall-2026-11-02.md`](doc/plans/memory-recall-2026-11-02.md) §3.
 - Singing follows "offline separation cache + online voice conversion": library songs return in seconds, a brand-new song takes minutes end to end (download dominates), and quality depends on the voice-bank material and your VRAM. The online gate is off by default and site sources are not published.
 - The voice service listens on loopback by default; exposing it to your LAN without a token means anyone can burn your GPU.
 - Automatic skill distillation is off by default: an early pilot showed no step savings, A/B still pending.
@@ -414,6 +444,25 @@ One line: **agent loop** (OpenAI Agents SDK `Runner`) → **tool layer** (plugin
 | Memory storage | SQLite (`brain.db`: atoms + `atoms_fts` + L0 verbatim index) + JSONL scene blocks + Markdown profile / relation cards |
 
 **Core red line**: zero scene-specific logic in the kernel — adding a capability means writing a tool / plugin, never hard-coding an app, game or business branch into `omni_core/`. The kernel never imports the voice plugin and the voice plugin registers no agent tools; "whether to speak" is pure channel-side computation rather than a model guess. `scripts/review_lint.py` (R1 screen-field leakage / R2 concrete-tool branching / R3 missing abstract methods) runs in CI (`.github/workflows/redline-lint.yml`).
+
+**Memory layer provenance and porting deltas**
+
+The memory axis (L0–L3 tiers / multi-file scene blocks / consolidation cycle) is ported from the open-source **TencentDB Agent Memory**: upstream is a TypeScript implementation, rewritten here in Python + SQLite FTS5, with the reference clone kept at `external/TencentDB-Agent-Memory` (not in git). Per-item trade-offs are recorded only in [`doc/plans/memory-recall-2026-11-02.md`](doc/plans/memory-recall-2026-11-02.md) §3 and the provenance table at the end of `doc/plans/implemented/memory-architecture.md`; this table is a summary, not a second copy.
+
+| Mechanism | Upstream | This repo | Nature |
+|---|---|---|---|
+| L1 storage | two databases | single `brain.db` + FTS5 with the `simple` tokenizer (converged 2026-10-28) | choice made while rewriting |
+| L1 relevance score | absolute `rel/(1+rel)` | used to be a self-invented candidate-set normalisation, now realigned. Measured absolute scores cluster at 0.5–0.6, so `threshold 0.3` rejects almost no weak hit (same upstream) — volume is actually controlled by k plus de-redundancy | implementation drift → realigned |
+| L1 into the prompt | automatic injection retired in favour of two retrieval tools, max 3 calls per turn, because it breaks prompt caching | used to auto-inject 8 atoms per turn; retired globally on 2026-11-02, the model now fetches what it needs | directional deviation → realigned |
+| Memory block placement | stable / dynamic split plus progressive disclosure | used to have a self-invented wrapper re-sending the memory block on every step; re-priming static content correlated with degraded tool calling, removed on 2026-10-07 and locked down by `review_lint` | self-invented → deleted and guarded |
+| Write-time dedup candidates | FTS / vector neighbours top5, one batched LLM call deciding store/update/merge/skip | used a `content[:12]` exact-phrase probe: 0 of 33 active atoms produced any candidate, i.e. dedup never fired; now full-text FTS neighbours top5 | silent downgrade → fixed |
+| L2 scene-block feed | L1 atom deltas only (`queryMemoryRecords({updatedAfter: cursor})` → `extract(memories)`); block size has **no code-level check** upstream, it is held by prompt budgets — 1500 chars per file, 400 per core narrative — plus read+write full rewrites | used to be fed raw "conversation digest + world state" every 900s: one day's story was recorded twice (diary and scene block) and `scene_edit` grew the block to 8081 chars, the only file in the store past 4000. Realigned on 2026-11-05 to L1 atom deltas plus a `last_l2_atom_ts` cursor, taken per `origin` (the project id stamped at write time) to mirror upstream's per-isolation-scope extractor run; `origin=''` hand-notes stay visible to every library, while storage and retrieval remain a single pool | directional deviation → realigned |
+| L2 size cap and reads | no cap; the read tool returns the whole file | a self-added 4000 hard cap was enforced on `scene_write` only and skipped on `scene_edit`, while reads truncated to 4000 (an oversized block was only half visible, so it could never be pruned). Now both write paths enforce it — the edit check only rejects an edit that grows past the cap — and reads return the full file | self-invented, made consistent |
+| Decay / forgetting | none (no decay / dormant / archive), only `retentionDays` hard delete, off by default | self-invented salience decay and dormant/archive state machine (off by default, never enabled; `access_count` kept as bookkeeping) | self-invented → decided to delete |
+| Relation cards / multi-speaker groups | single-conversation semantics, no peer concept | added for IM groups: one card per uid globally, injected only on named or direct mentions, never searchable | self-authored, kept |
+| Finish-intent gate | no such mechanism | malformed tool calls were once emitted as plain text and the task silently reported success, so a plain-text finish now gets one semantic re-check (oneshot success path only, max twice per run, fail-open if the judge errors) | self-authored, kept |
+
+The conclusion was **not to swap approaches and not to embed upstream wholesale**: upstream has single-conversation semantics with no notion of peers or multi-speaker groups, and adopting it would also drag a Node service stack into a Python process.
 
 **Repository map**
 

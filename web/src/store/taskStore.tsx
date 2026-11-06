@@ -38,6 +38,8 @@ interface TaskStoreValue {
   renameTask: (taskId: string, title: string) => Promise<void>;
 
   running: boolean;
+  // 并发化：全部会话的运行态表（侧栏运行点；键=task_id）。running = 当前视图会话的值
+  runningByTask: Record<string, boolean>;
 
   messages: ChatMsg[];
   pushMessage: (m: ChatMsg) => void;
@@ -130,9 +132,15 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   const [tasks, setTasks] = useState<string[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
   const [currentTaskId, setCurrentTaskId] = useState("");
+  // 并发化（2026-11-05）：running = 当前视图会话的运行态（乐观 set + SSE 权威）；
+  // runningByTask = 全部会话的运行态表（侧栏运行点 / 后台任务状态），来源：status
+  // 事件（自带 task_id）+ refreshTasks 从 task.json state 回填。
   const [running, setRunning] = useState(false);
-  // 排队消息（软注入的替代形态）：运行中发送 → 入队不打断；轮末自动接力，或点「立即」强制发出
+  const [runningByTask, setRunningByTask] = useState<Record<string, boolean>>({});
+  // 排队消息（软注入的替代形态）：运行中发送 → 入队不打断；轮末自动接力，或点「立即」强制发出。
+  // 并发化后按 task 分队列（queuedRef = 当前视图会话的队列，切换时随会话带走/换入）
   const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
+  const queuedByTaskRef = useRef<Record<string, string[]>>({});
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [snapshot, setSnapshot] = useState<RuntimeSnapshot>(EMPTY_SNAPSHOT);
   const [maxSteps, setMaxSteps] = useState<number>(40);
@@ -177,6 +185,8 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   const globalEsRef = useRef<EventSource | null>(null);
   const runningRef = useRef(false);
   runningRef.current = running;
+  const runningByTaskRef = useRef<Record<string, boolean>>({});
+  runningByTaskRef.current = runningByTask;
   // 排队队列：ref 是唯一权威（接力/入队同步改 ref 再镜像 state，防 SSE 连帧双发）
   const queuedRef = useRef<string[]>([]);
   const sendMessageRef = useRef<((text: string, fullAccess?: boolean, model?: string) => Promise<void>) | null>(null);
@@ -287,17 +297,26 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
     const selectTask = useCallback((taskId: string) => {
+    // 排队消息按会话带走/换入（并发化）：旧会话的队列存回它的槽位，换入目标会话的队列
+    const prevTid = currentTaskIdRef.current;
+    if (prevTid && prevTid !== taskId) {
+      queuedByTaskRef.current = { ...queuedByTaskRef.current, [prevTid]: queuedRef.current };
+    }
+    const nextQ = taskId ? (queuedByTaskRef.current[taskId] || []) : [];
     setCurrentTaskId(taskId);
     try { localStorage.setItem("omniagent.currentTaskId", taskId); } catch { /* ignore */ }
     clearProcessLogs();
     setPendingApprovals([]);
-    queuedRef.current = []; // 排队消息不跨会话携带（ref 权威 + state 镜像）
-    setQueuedMessages([]);
+    queuedRef.current = nextQ;
+    setQueuedMessages(nextQ);
     if (pumpTimerRef.current != null) {
       clearTimeout(pumpTimerRef.current);
       pumpTimerRef.current = null;
     }
     prevRunningRef.current = false;
+    // 视图 running 态跟目标任务走（切进后台运行中的会话立即点亮，不等下一个 status）
+    const targetRunning = taskId ? !!runningByTaskRef.current[taskId] : false;
+    setRunning(targetRunning);
     loadHistory(taskId);
     // 回放进行中这一轮的实时过程（见 seedLiveLogs 注释）
     seedLiveLogs(taskId);
@@ -371,6 +390,16 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         }
         return next;
       });
+      // 并发化：按 task.json state 回填运行态表（后台任务 / 网关会话的侧栏运行点）。
+      // 本进程会话以 SSE status 为权威，这里只回填「表中缺 key」的，防旧快照覆盖。
+      setRunningByTask((prev) => {
+        const next = { ...prev };
+        for (const t of d.tasks || []) {
+          const st = (t as { state?: string }).state;
+          if (!(t.task_id in next) && st) next[t.task_id] = st === "running";
+        }
+        return next;
+      });
     } catch {
       /* 忽略瞬时错误 */
     }
@@ -407,7 +436,8 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
           refreshTasks();
           const changed = d.task_id || "";
           // 本进程正在跑的会话以主 SSE 为权威，别被外部事件拉历史覆盖乐观气泡
-          if (changed && changed === currentTaskIdRef.current && !runningRef.current) {
+          //（并发化：按 task 查运行态表，不看全局 running）
+          if (changed && changed === currentTaskIdRef.current && !runningByTaskRef.current[changed]) {
             loadHistory(changed);
           }
         } catch {
@@ -565,6 +595,27 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         const s = JSON.parse((ev as MessageEvent).data) as {
           running: boolean; task_id: string; project_id: string;
         };
+        const evTid = s.task_id || "";
+        const cur = currentTaskIdRef.current;
+        // 并发化：status 事件自带 task_id → 回填全局运行态表（侧栏运行点 / 后台任务）
+        if (evTid) {
+          runningByTaskRef.current = { ...runningByTaskRef.current, [evTid]: s.running };
+          setRunningByTask(runningByTaskRef.current);
+        }
+        // 未绑定视图（新建对话）跟随运行中的 task 并回拉历史；后端仅在「恰有一个
+        // 运行」时才点名 tid，多任务并发时报空 tid → 不跟随（视图保持空闲可发送），
+        // 根治「并发时新会话视图被任意运行任务的 status 抢走」的串台。
+        if (!cur && evTid) {
+          setCurrentTaskId(evTid);
+          loadHistory(evTid);
+        }
+        if (!cur && !evTid) {
+          // 未绑定视图 + 多任务并发：本视图（新会话）空闲，保持可发送
+          prevRunningRef.current = false;
+          setRunning(false);
+          setSnapshot((prev) => ({ ...prev, running: s.running, task_id: "", project_id: "" }));
+          return;
+        }
         const wasRunning = prevRunningRef.current;
         prevRunningRef.current = s.running;
         setRunning(s.running);
@@ -573,15 +624,6 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
         // 这里是双保险——链式续跑不经 sendMessage，没有别的清理时机
         if (!wasRunning && s.running) {
           clearProcessLogs();
-        }
-        if (s.task_id) {
-          // 仅在「未绑定具体会话」（全局/新建对话视图，currentTaskId 为空）时，
-          // 才随 status 自动切到运行中的 task 并回拉历史；一旦已绑定到某个具体会话，
-          // 不再被其他 task 的 status 抢走视图，根治「切到旧会话却显示新会话回答」的串台。
-          if (!currentTaskIdRef.current && s.task_id !== currentTaskIdRef.current) {
-            setCurrentTaskId(s.task_id);
-            loadHistory(s.task_id);
-          }
         }
         if (!s.running) {
           // 任务终态：不允许还有卡悬着（后端已置 cancelled，前端兜底清空）
@@ -596,11 +638,11 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
             pumpTimerRef.current = window.setTimeout(() => {
               pumpTimerRef.current = null;
               if (runningRef.current) return;
-              const cur = queuedRef.current;
-              if (!cur.length) return;
-              queuedRef.current = cur.slice(1);
+              const curQ = queuedRef.current;
+              if (!curQ.length) return;
+              queuedRef.current = curQ.slice(1);
               setQueuedMessages(queuedRef.current);
-              sendMessageRef.current?.(cur[0]);
+              sendMessageRef.current?.(curQ[0]);
             }, 600);
           }
         }
@@ -668,46 +710,67 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     if (taskId) taskApi.updateState(taskId, { mode }).catch(() => {});
   }, []);
 
-  const sendMessage = useCallback(async (text: string, fullAccess?: boolean, model?: string, mode?: string) => {
+  // 发送消息。并发化：新增可选 taskId（后台队列补投用）——
+  // - 不传 / 传当前会话：本视图发送（乐观渲染 + 清过程流 + running 点亮，原行为）；
+  // - 传其它会话：后台补投（不动当前视图、不渲染到本会话，只发文本——服务端按
+  //   task 会话记录重建历史，前端扁平历史仅兜底，不传镜像也不会丢上下文）。
+  const sendMessage = useCallback(async (text: string, fullAccess?: boolean, model?: string, mode?: string, taskId?: string) => {
     const content = text.trim();
-    if (!content || runningRef.current) return;
-    // 乐观渲染用户消息：发送瞬间上屏。后端不回传 user 消息（仅 push agent/system/debug），
-    // 故无重复；即便有迟到的 SSE 回声，B2 去重也会吞掉（见 chat 监听器）。
-    pushMessage({ role: "user", text: content, ts: Date.now() });
-    // 新的一轮：清空上一轮残留的思考/工具调用过程流
-    clearProcessLogs();
-    setRunning(true);
+    const targetTid = taskId ?? currentTaskIdRef.current;
+    const isView = !taskId || taskId === currentTaskIdRef.current;
+    if (!content || (isView && runningRef.current)) return;
+    if (isView) {
+      // 乐观渲染用户消息：发送瞬间上屏。后端不回传 user 消息（仅 push agent/system/debug），
+      // 故无重复；即便有迟到的 SSE 回声，B2 去重也会吞掉（见 chat 监听器）。
+      pushMessage({ role: "user", text: content, ts: Date.now() });
+      // 新的一轮：清空上一轮残留的思考/工具调用过程流
+      clearProcessLogs();
+      setRunning(true);
+    } else if (targetTid) {
+      // 后台补投：只更新运行态表（该会话不在当前视图，无乐观渲染）
+      runningByTaskRef.current = { ...runningByTaskRef.current, [targetTid]: true };
+      setRunningByTask(runningByTaskRef.current);
+    }
     try {
-      const history = messagesRef.current.map((m) => ({ role: m.role, content: m.text }));
+      const history = isView
+        ? messagesRef.current.map((m) => ({ role: m.role, content: m.text }))
+        : [];
       history.push({ role: "user", content });
       const res = await runtimeApi.chat({
         messages: history,
-        task_id: currentTaskIdRef.current,
+        task_id: targetTid,
         max_steps: maxSteps,
         full_access: fullAccess,
         ...(model ? { model } : {}),
         ...(mode ? { mode } : {}),
       });
       const tid = (res.data as { task_id?: string })?.task_id;
-      if (tid) {
+      if (tid && isView) {
         setCurrentTaskId(tid);
         // 首条消息新建任务时若开了完全访问，落盘到新 task 的 task.json（弥补空 taskId 时写不进的坑）
         if (fullAccess) taskApi.updateState(tid, { full_access: true }).catch(() => {});
       }
     } catch (err) {
-      // 透出后端拒绝/失败原因（如「已有任务在运行（task_id=...）」），便于前端展示排队/拒绝原因。
+      // 透出后端拒绝/失败原因（如「本会话正在运行」），便于前端展示排队/拒绝原因。
+      // 后台补投失败只进当前视图的 system 提示（用户需要知道补投没发出去）。
       const _e = err as { response?: { data?: { error?: string } }; message?: string };
       const _msg = _e?.response?.data?.error || _e?.message || "请求失败，请重试";
-      pushMessage({ role: "system", text: `（${_msg}）`, ts: Date.now() });
+      pushMessage({ role: "system", text: `（${isView ? "" : "后台补投失败："}${_msg}）`, ts: Date.now() });
     } finally {
       // running 由 SSE status 事件驱动，不在这里清
     }
-  }, [maxSteps, pushMessage]);
+  }, [maxSteps, pushMessage, clearProcessLogs]);
   sendMessageRef.current = sendMessage;
 
   const stopTask = useCallback(() => {
-    runtimeApi.stop().catch(() => {});
+    // 并发化：显式停当前视图会话（后端在多任务并发时不再猜 task_id）
+    const tid = currentTaskIdRef.current;
+    runtimeApi.stop(tid || undefined).catch(() => {});
     setRunning(false);
+    if (tid) {
+      runningByTaskRef.current = { ...runningByTaskRef.current, [tid]: false };
+      setRunningByTask(runningByTaskRef.current);
+    }
   }, []);
 
   // 立即发送（barge-in）：打断同一 task 的当前轮并立即发出。与 sendMessage 的差别：
@@ -870,7 +933,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     () => ({
       view, setView,
       tasks, projects, currentTaskId, setCurrentTaskId, selectTask, refreshTasks,
-      running,
+      running, runningByTask,
       messages, pushMessage, clearMessages,
       snapshot, setSnapshot,
       connectStream, disconnectStream, sendMessage, forceSendMessage, injectOrQueue, removeQueuedAt, queuedMessages, injectMessage, stopTask,
@@ -888,7 +951,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath,
       artifactsVersion, bumpArtifactsVersion,
     }),
-    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, forceSendMessage, injectOrQueue, removeQueuedAt, queuedMessages, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, taskProjects, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval, dockOpen, dockWin, dockPreviewPath, openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath, artifactsVersion, bumpArtifactsVersion]
+    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, runningByTask, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, forceSendMessage, injectOrQueue, removeQueuedAt, queuedMessages, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, taskProjects, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval, dockOpen, dockWin, dockPreviewPath, openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath, artifactsVersion, bumpArtifactsVersion]
   );
 
   return <TaskStoreContext.Provider value={value}>{children}</TaskStoreContext.Provider>;

@@ -149,8 +149,10 @@ def test_group_title_falls_back_to_group_id(adapter, monkeypatch):
 
 # === 群上下文（被 @ 时自动带最近几条群消息） ===
 
-def test_group_at_includes_recent_context(adapter, monkeypatch):
-    """被 @ 时自动带「群里刚才的消息」：排在 @ 消息之前，且标注为不可信背景。"""
+def test_group_at_no_verbatim_context_injection(adapter, monkeypatch):
+    """F-4（plan personal-agent-memory M1）：通道只给结构不给文本——被 @ 的场合自述
+    不再注入「群里刚才的消息」原文块（原 _group_context_block 已删）；话题词面走
+    <current-context>.recent_topics，更多历史由模型自调 msg_group_history。"""
     monkeypatch.setattr(adapter, "group_name", lambda gid: "")
     monkeypatch.setattr(adapter, "group_history", lambda gid, limit=8: [
         {"who": "张三", "text": "明天去哪吃", "message_id": "a"},
@@ -164,30 +166,21 @@ def test_group_at_includes_recent_context(adapter, monkeypatch):
                     {"type": "text", "data": {"text": " 你觉得呢"}}],
     }, emit)
     text = got[0].text
-    assert "[群里刚才的消息" in text
-    assert "张三: 明天去哪吃" in text and "李四: 火锅吧" in text
-    assert "不要执行" in text                     # 外部内容当背景，不当指令
-    assert text.index("张三") < text.index("你觉得呢")  # 上下文在前，@ 的消息在后
+    assert "[群里刚才的消息" not in text
+    assert "明天去哪吃" not in text and "火锅吧" not in text   # 原文不进场合自述
+    assert "你觉得呢" in text and "msg_send_text" in text      # 机制性内容保留
 
-
-def test_group_context_excludes_current_message(adapter, monkeypatch):
-    """当前这条 @ 不能重复出现在上下文块里（历史接口可能已包含它）。"""
+def test_group_history_data_source_intact(adapter, monkeypatch):
+    """群历史数据源仍在（msg_group_history 工具的同一数据源）——注入删了，
+    自取通道没删；当前消息的排除语义由 group_history 自身保证。"""
     monkeypatch.setattr(adapter, "group_name", lambda gid: "")
     monkeypatch.setattr(adapter, "group_history", lambda gid, limit=8: [
         {"who": "张三", "text": "旧消息", "message_id": "old"},
         {"who": "李四", "text": "当前这条", "message_id": "701"},
     ])
-    got, emit = _collector()
-    adapter._handle_event({
-        "post_type": "message", "message_type": "group", "self_id": 111,
-        "user_id": 222, "group_id": 333, "message_id": 701,
-        "message": [{"type": "at", "data": {"qq": "111"}},
-                    {"type": "text", "data": {"text": " 在吗"}}],
-    }, emit)
-    text = got[0].text
-    assert "旧消息" in text
-    assert "李四: 当前这条" not in text
-
+    rows = adapter.group_history("333")
+    assert any(r["text"] == "旧消息" for r in rows)
+    assert not any(r["text"] == "在吗" for r in rows)
 
 def test_private_message_has_no_group_context(adapter, monkeypatch):
     """私聊不需要群上下文：一次都不该去拉群历史。"""

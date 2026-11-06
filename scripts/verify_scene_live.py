@@ -77,19 +77,19 @@ BLOCK_EXISTING = (
     "- Windows 路径单反斜杠在 JSON 参数里可直接用\n"
 )
 
-EVIDENCE = (
-    "[会话要点]\n"
-    "[user] 分析d盘文件占用,找出最大的那一批文件\n"
-    "[assistant] 用 Get-PSDrive D 查得 D 盘总容量 345.21GB,已用 299.2GB,剩余 46.01GB。\n"
-    "[assistant] 用 PowerShell 递归统计一级目录占用:D:\\Program Files (x86) 占 203.75GB,\n"
-    "D:\\AI 占 40.09GB;扫描脚本 scan_d.ps1 用 $ErrorActionPreference = 'SilentlyContinue'\n"
-    "跳过无权限目录,300s 超时内完成;发现 $root 路径拼接必须用反引号转义,否则 PowerShell\n"
-    "把 D:\\ 当转义序列;单个文件最大的是 pagefile.sys 与某 4GB 级压缩包。\n"
-    "[世界状态]\n"
-    "# 最近动作\n"
-    "- shell_exec(Get-PSDrive D ...) -> ok, returncode 0\n"
-    "- write_file(scan_d.ps1) -> ok; shell_exec(powershell -File scan_d.ps1) -> ok\n"
-)
+# 进料形态 = L2 的真实契约(2026-11-05 对齐 TAM):游标之后的 L1 原子增量,JSON 的
+# 「新记忆列表」。原子文本是已过抽取/去重/合并/冲突裁决的短句,不是会话原文——
+# 真机跑出来的循环才是生产链路会看到的形状。夹具数据一律构造值。
+EVIDENCE = json.dumps([
+    {"id": "m_live01", "kind": "episode", "created_at": "2026-10-06T18:10:00+00:00",
+     "content": "D 盘总容量 345.21GB,已用 299.2GB,剩余 46.01GB"},
+    {"id": "m_live02", "kind": "episode", "created_at": "2026-10-06T18:18:00+00:00",
+     "content": "一级目录占用:Program Files (x86) 203.75GB,AI 目录 40.09GB"},
+    {"id": "m_live03", "kind": "fact", "created_at": "2026-10-06T18:20:00+00:00",
+     "content": "扫描脚本要显式设 timeout_sec,并用 SilentlyContinue 跳过无权限目录"},
+    {"id": "m_live04", "kind": "rule", "created_at": "2026-10-06T18:20:00+00:00",
+     "content": "PowerShell 里拼接根路径必须反引号转义,否则盘符被当转义序列"},
+], ensure_ascii=False, indent=2)
 
 
 def s1_scene_maintenance(brain_cfg: dict) -> dict:
@@ -194,9 +194,14 @@ def s2_capacity_merge(brain_cfg: dict) -> dict:
     config.get_config = patched_get_config
     try:
         stats: dict = {}
-        scene_executor.maintain_scenes(pid, brain_cfg, "新证据: 无(仅容量整理)", stats=stats,
-                                       on_debug=lambda k, p: calls.setdefault(
-                                           "dbg", []).append(str(p)[:200]))
+        # 零新增原子的进料形状：容量整理只靠既有序块,不靠新证据
+        scene_executor.maintain_scenes(
+            pid, brain_cfg, json.dumps([{"id": "-", "kind": "-",
+                                        "content": "无新增原子：本轮只做容量整理(MERGE)"}],
+                                       ensure_ascii=False),
+            stats=stats,
+            on_debug=lambda k, p: calls.setdefault(
+                "dbg", []).append(str(p)[:200]))
         out["stats"] = {k: (str(v)[:220] if isinstance(v, str) else v)
                         for k, v in stats.items() if k != "error"} | (
             {"error": stats["error"]} if "error" in stats else {})

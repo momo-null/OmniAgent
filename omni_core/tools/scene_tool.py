@@ -50,6 +50,16 @@ def read_scene(scene_name: str = "") -> Dict[str, Any]:
         from omni_core.local import scene_executor
         from omni_core.local.task_store import TaskStore
 
+        # N-5（plan §6.3）：read_scene 属七工具自取池——配额与计数走 memory_tool
+        # 统一账本（run 作用域内 ≤3 次/run；非 run 上下文恒视为满额）。
+        try:
+            from omni_core.tools import memory_tool as _mt
+            blocked = _mt._quota_block("read_scene")
+            if blocked:
+                return blocked
+        except Exception:
+            pass
+
         tid = current_scene_task_id()
         pid = TaskStore.project_of(tid) if tid else ""
         if not pid:
@@ -59,12 +69,22 @@ def read_scene(scene_name: str = "") -> Dict[str, Any]:
             entries = scene_executor.list_scene_blocks(pid)
             if not entries:
                 return {"ok": False, "error": "当前项目无场景记忆"}
+            try:
+                from omni_core.tools import memory_tool as _mt2
+                _mt2.note_self_fetch(0, "", tool="read_scene")
+            except Exception:
+                pass
             return {"ok": True, "scenes": [
                 {"filename": e["filename"], "summary": e["summary"], "heat": e["heat"]}
                 for e in entries]}
         text = scene_executor.read_scene_block(pid, name)
         if not text:
             return {"ok": False, "error": f"未找到场景块: {name}"}
+        try:
+            from omni_core.tools import memory_tool as _mt2
+            _mt2.note_self_fetch(1, name, tool="read_scene")
+        except Exception:
+            pass
         return {"ok": True, "chars": len(text), "scene": text}
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}

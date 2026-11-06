@@ -454,6 +454,13 @@ def msg_group_history(group_id: str = "", limit: int = 20, channel: str = "",
         # P2（2026-11-02）：关键词路径转查 L0 逐字索引（brain.db.l0_messages）——
         # OneBot 的实时历史只有最近几十条，翻旧事必须查本地表；查不到就明确说没有。
         try:
+            from omni_core.tools import memory_tool as _mtq
+            blocked = _mtq._quota_block("msg_group_history")
+            if blocked:
+                return blocked
+        except Exception:
+            pass   # 配额面缺失不影响查询本身
+        try:
             from omni_core import memory_brain
         except Exception:
             memory_brain = None
@@ -469,7 +476,8 @@ def msg_group_history(group_id: str = "", limit: int = 20, channel: str = "",
                 if memory_brain is not None else [])
         try:
             from omni_core.tools import memory_tool as _mt
-            _mt.note_self_fetch(len(rows), str(rows[0]["id"]) if rows else "")
+            _mt.note_self_fetch(len(rows), str(rows[0]["id"]) if rows else "",
+                                tool="msg_group_history")
         except Exception:
             pass   # 记账失败不影响本次查询
         return {"ok": True, "group_id": gid, "keyword": kw, "count": len(rows),

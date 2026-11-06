@@ -18,26 +18,31 @@ from backend.api.runtime_manager import RuntimeManager  # noqa: E402
 
 # ---------------------------------------------------------------- lane（§4）
 
-def test_same_lane_is_serial_and_other_lane_parallel():
-    """对话 lane 串行；工作 lane 不受对话影响——这就是「干活期间聊天不被 409」。"""
+def test_same_lane_concurrent_tasks_and_lane_stats():
+    """并发化（2026-11-05）：同 lane 内不同 task 可并行；lane 降级为诊断元数据，
+    is_any_running(lane) 仍按 lane 统计。"""
     m = RuntimeManager()
     assert m.try_start("t_chat", lane="chat") is True
-    assert m.try_start("t_chat2", lane="chat") is False, "对话 lane 内必须串行"
-    assert m.try_start("t_work", lane="work") is True, "工作 lane 不受对话 lane 阻塞"
+    assert m.try_start("t_chat2", lane="chat") is True, "并发化：同 lane 不同 task 可并行"
+    assert m.try_start("t_work", lane="work") is True, "工作 lane 同样可跑"
     assert m.is_any_running("chat") is True
     assert m.is_any_running("work") is True
     assert m.is_any_running(None) is True
+    assert sorted(m.running_task_ids("chat")) == ["t_chat", "t_chat2"]
+    assert m.running_task_ids("work") == ["t_work"]
 
     m.finish("t_chat")
-    assert m.is_any_running("chat") is False
+    assert m.is_any_running("chat") is True        # t_chat2 仍在跑
     assert m.is_any_running("work") is True
 
 
 def test_same_task_never_runs_twice_across_lanes():
-    """同一个 task 无论如何不允许并发 run（会话/轨迹按 task 落盘，必须串行）。"""
+    """唯一互斥：同一个 task 无论如何不允许并发 run（会话/轨迹按 task 落盘，必须串行）。"""
     m = RuntimeManager()
     assert m.try_start("t_same", lane="work") is True
     assert m.try_start("t_same", lane="chat") is False
+    assert m.try_start("t_same", lane="work") is False
+    assert m.try_start("t_same2", lane="chat") is True, "别的 task 不受影响"
 
 
 # ------------------------------------------------------- did_work（§3.3 门）

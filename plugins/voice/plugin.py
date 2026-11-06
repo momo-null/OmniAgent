@@ -87,21 +87,39 @@ def _default_model(*parts: str) -> str:
 
 
 def _get_stt():
-    """SenseVoice 识别器单例（首次调用才构造；缺模型给可执行提示）。"""
+    """STT 识别器单例（首次调用才构造；缺模型给可执行提示）。
+
+    模型选型走 voice_service.yaml 的 ``stt_model``（2026-11-06）：``sense-voice``
+    （多语言小模型，原缺省）/ ``paraformer``（阿里 FunASR 中文专用 int8，生活化
+    口语与标点更强——中文场景主推，接口不变只换 recognizer 构造）。
+    目录：``stt_model_dir`` 显式配置优先，否则 ``~/.omniagent/models/<stt_model>/``
+    （paraformer 包解包后可能带一层版本目录，glob 兜底找 model.int8.onnx）。
+    """
     global _STT
     if _STT is None:
-        model_dir = str(_cfg().get("stt_model_dir") or _default_model("sense-voice"))
+        import sherpa_onnx
+
+        kind = str(_cfg().get("stt_model") or "sense-voice").strip().lower()
+        model_dir = str(_cfg().get("stt_model_dir") or "") or _default_model(kind)
         model = os.path.join(model_dir, "model.int8.onnx")
-        tokens = os.path.join(model_dir, "tokens.txt")
+        if kind == "paraformer" and not os.path.isfile(model):
+            import glob as _glob
+
+            hits = _glob.glob(os.path.join(model_dir, "*", "model.int8.onnx"))
+            if hits:
+                model = hits[0]
+        tokens = os.path.join(os.path.dirname(model), "tokens.txt")
         missing = [p for p in (model, tokens) if not os.path.isfile(p)]
         if missing:
             raise RuntimeError(
-                "SenseVoice 模型缺失: " + ", ".join(missing)
+                f"{kind} STT 模型缺失: " + ", ".join(missing)
                 + "（下载见 doc/plans/implemented/voice-2026-10-31.md §4）")
-        import sherpa_onnx
-
-        _STT = sherpa_onnx.OfflineRecognizer.from_sense_voice(
-            model=model, tokens=tokens, use_itn=True, num_threads=2)
+        if kind == "paraformer":
+            _STT = sherpa_onnx.OfflineRecognizer.from_paraformer(
+                model=model, tokens=tokens, num_threads=2)
+        else:
+            _STT = sherpa_onnx.OfflineRecognizer.from_sense_voice(
+                model=model, tokens=tokens, use_itn=True, num_threads=2)
     return _STT
 
 
@@ -291,6 +309,59 @@ def transcribe_local(wav_bytes: bytes) -> str:
         # 十几秒里把 GS 引擎子进程拉起来，用户感知不到冷启动。
         _WORKER.prewarm()
     return text
+
+
+# ── 语义收口（2026-11-06）：Smart Turn v3（pipecat-ai 开源，MIT）────────────────
+# 能量 VAD 的静音 ≠ 说完了：「我再想想……」这类思考性停顿会被挂起窗收口成一句，
+# AI 立刻接话就是抢话。这里用音频原生的 end-of-turn 判断补一道：喂尾部 8 秒
+# 16k PCM，返回「这轮说完没有」。8MB int8 ONNX、CPU 推理 ~12ms，对链路无感。
+# 预处理逐行对齐官方 inference.py（WhisperFeatureExtractor(chunk_length=8)）。
+
+_TURN = None
+_TURN_LOCK = threading.Lock()
+_TURN_FE = None
+
+
+def _get_turn():
+    """Smart Turn ONNX 会话单例（模型缺失抛 RuntimeError，服务端 500 → 壳侧 fail-open）。"""
+    global _TURN, _TURN_FE
+    if _TURN is None:
+        import onnxruntime as ort
+
+        path = os.path.join(_default_model("smart-turn"), "smart-turn-v3.2-cpu.onnx")
+        if not os.path.isfile(path):
+            raise RuntimeError("Smart Turn 模型缺失: " + path)
+        so = ort.SessionOptions()
+        so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        so.inter_op_num_threads = 1
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        _TURN = ort.InferenceSession(path, sess_options=so)
+        from transformers import WhisperFeatureExtractor
+
+        _TURN_FE = WhisperFeatureExtractor(chunk_length=8)
+    return _TURN
+
+
+def turn_check_local(wav_bytes: bytes) -> Dict[str, Any]:
+    """一段话音频 → {completed, probability}。completed=false = 用户话没说完
+    （调用方该继续听，不是接话）。空音频按完结返回（壳侧本来就会丢空文本）。"""
+    import numpy as np
+
+    samples = _decode_wav_16k_mono(wav_bytes)
+    if samples.size == 0:
+        return {"completed": True, "probability": 1.0}
+    session = _get_turn()
+    with _TURN_LOCK:
+        keep = 8 * 16000
+        seg = (samples[-keep:].astype(np.float32) if samples.size >= keep else
+               np.pad(samples.astype(np.float32), (keep - samples.size, 0)))
+        inputs = _TURN_FE(seg, sampling_rate=16000, return_tensors="np",
+                          padding="max_length", max_length=keep, truncation=True,
+                          do_normalize=True)
+        feats = inputs.input_features.squeeze(0).astype(np.float32)[None, ...]
+        prob = float(session.run(None, {"input_features": feats})[0][0].item())
+    _STT_LAST_USED = time.time()
+    return {"completed": prob > 0.5, "probability": round(prob, 4)}
 
 
 def transcribe(wav_bytes: bytes) -> str:

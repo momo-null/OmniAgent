@@ -327,28 +327,55 @@ class TestMcpSettingsValidation:
 
 # === P1.4 原子运行状态 ===
 class TestAtomicRunState:
-    def test_concurrent_chat_rejected(self, client, monkeypatch, tmp_path):
-        """已有 task 运行时，第二个 /chat 应返回 409"""
+    def test_concurrent_chat_scoped_to_same_task(self, client, monkeypatch, tmp_path):
+        """并发化（2026-11-05）：/chat 只拦「本会话正在跑」——
+        - 会话 A 运行中，会话 B（新会话）发消息 → 正常开跑；
+        - 会话 A 自身再发（不带 force）→ 409，原因可见。"""
         from omni_core.local import runtime_paths as P
         monkeypatch.setattr(P, "_GLOBAL", tmp_path / ".omniagent")
         P.ensure_global_dirs()
 
-        # 直接标记一个 task 为 running
         import backend.api.router_runtime as rt
-        rt._try_start_task("t_fake_running_001")
+        calls = {"dispatch": 0}
 
-        # 第二个应被拒绝
-        r = client.post("/api/runtime/chat", json={
-            "messages": [{"role": "user", "content": "hi"}],
-        })
-        assert r.status_code == 409
-        # 阶段 1 目标 4：拒绝原因需回带运行中的 task_id（排队/拒绝原因可见）
-        _body = r.json()
-        assert _body.get("ok") is False
-        assert "t_fake_running_001" in (_body.get("error") or "")
+        def _fake_dispatch(task_id, history, max_steps, full_access=None, agent_id=None,
+                           model=None, mode="auto", persona="",
+                           tools_enabled=None, tool_allowlist=None):
+            calls["dispatch"] += 1
 
-        # 清理
-        rt._finish_task("t_fake_running_001")
+        monkeypatch.setattr(rt, "_dispatch_chat", _fake_dispatch)
+
+        # 会话 A 建好并标记 running
+        meta_a = client.post("/api/runtime/tasks", json={"objective": "busyA"}).json()
+        tid_a = meta_a["task"]["task_id"]
+        assert rt._try_start_task(tid_a) is True
+
+        new_tid = ""
+        try:
+            # 新会话（无 task_id）发消息 → 并发开跑，不再被 A 挡住
+            r = client.post("/api/runtime/chat", json={
+                "messages": [{"role": "user", "content": "hi"}],
+            })
+            assert r.status_code == 200, r.text
+            assert r.json()["ok"] is True
+            assert calls["dispatch"] == 1
+            new_tid = r.json().get("task_id") or ""
+
+            # 会话 A 自身再发（不带 force）→ 409，拒绝原因指向本会话
+            r2 = client.post("/api/runtime/chat", json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "task_id": tid_a,
+            })
+            assert r2.status_code == 409
+            _body = r2.json()
+            assert _body.get("ok") is False
+            assert "本会话正在运行" in (_body.get("error") or "")
+        finally:
+            rt._finish_task(tid_a)
+            # 桩掉的 dispatch 不会走 finally 收尾，新 task 的 running 记录必须手动清，
+            # 否则泄漏进后续用例（stop 的「恰有一个运行」兜底会被两个 running 破坏）
+            if new_tid:
+                rt._finish_task(new_tid)
 
 
 # === P1.5 task-scoped SSE ===
@@ -490,20 +517,38 @@ def test_delete_task_removes_project_session(client):
 
 # === barge-in（立即发送 / force） ===
 class TestChatForceInterrupt:
-    """/chat force=true：运行中打断**同一 task** 的当前轮并立即派发新消息。"""
+    """/chat force=true：运行中打断**同一 task** 的当前轮并立即派发新消息。
 
-    def test_force_rejects_other_running_task(self, client, monkeypatch):
-        """运行中的是别的 task：force 不允许隐式杀别人的会话 → 409。"""
+    并发化（2026-11-05）：/chat 只拦「本会话正在跑」——别的会话在跑不再 409。"""
+
+    def test_force_starts_own_turn_while_other_task_running(self, client, monkeypatch):
+        """别的 task 在跑、本 task 空闲：force 直接在本会话开跑（不再 409）。"""
         import backend.api.router_runtime as rt
-        monkeypatch.setattr(rt, "_is_any_running", lambda: True)
+        rt_create = client.post("/api/runtime/tasks", json={"objective": "bargeX"})
+        tid = rt_create.json()["task"]["task_id"]
+        # 本 task 空闲、另一个 task 在跑
+        monkeypatch.setattr(rt, "_is_task_running",
+                            lambda task_id, agent_id=None: task_id == "t_other")
         monkeypatch.setattr(rt, "_running_task_id", lambda: "t_other")
-        r = client.post("/api/runtime/chat", json={
-            "messages": [{"role": "user", "content": "hi"}],
-            "task_id": "t_mine",
-            "force": True,
-        })
-        assert r.status_code == 409
-        assert "另一个任务" in r.json()["error"]
+        calls = {"dispatch": 0}
+
+        def _fake_dispatch(task_id, history, max_steps, full_access=None, agent_id=None,
+                           model=None, mode="auto", persona="",
+                           tools_enabled=None, tool_allowlist=None):
+            calls["dispatch"] += 1
+
+        monkeypatch.setattr(rt, "_dispatch_chat", _fake_dispatch)
+        try:
+            r = client.post("/api/runtime/chat", json={
+                "messages": [{"role": "user", "content": "hi"}],
+                "task_id": tid,
+                "force": True,
+            })
+            assert r.status_code == 200, r.text
+            assert calls["dispatch"] == 1
+        finally:
+            from backend.api.routers.helpers import manager as _mgr, AGENT_MAIN as _main
+            _mgr.finish(tid, _main)
 
     def test_force_rejects_when_no_runnable_loop(self, client, monkeypatch):
         """同 task 运行中但没有可打断的运行体（loop 缺失）→ 409。"""
@@ -512,7 +557,8 @@ class TestChatForceInterrupt:
         from unittest.mock import MagicMock
         rt_create = client.post("/api/runtime/tasks", json={"objective": "barge0"})
         tid = rt_create.json()["task"]["task_id"]
-        monkeypatch.setattr(rt, "_is_any_running", lambda: True)
+        monkeypatch.setattr(rt, "_is_task_running",
+                            lambda task_id, agent_id=None: task_id == tid)
         monkeypatch.setattr(rt, "_running_task_id", lambda: tid)
         monkeypatch.setattr(cr, "manager", MagicMock())
         cr.manager.get.return_value = MagicMock(loop=None)
@@ -532,9 +578,10 @@ class TestChatForceInterrupt:
         rt_create = client.post("/api/runtime/tasks", json={"objective": "barge1"})
         tid = rt_create.json()["task"]["task_id"]
         calls = {"stop": 0, "dispatch": 0}
-        # _is_any_running 调用序列：分支检查 True → 等待循环 False → 复查 False
+        # _is_task_running 调用序列：分支检查 True → 等待循环 False → 复查 False
         seq = [True, False, False]
-        monkeypatch.setattr(rt, "_is_any_running", lambda: seq.pop(0) if seq else False)
+        monkeypatch.setattr(rt, "_is_task_running",
+                            lambda task_id, agent_id=None: seq.pop(0) if seq else False)
         monkeypatch.setattr(rt, "_running_task_id", lambda: tid)
 
         class _Loop:
@@ -547,7 +594,8 @@ class TestChatForceInterrupt:
         cr.manager.get.return_value = rec
 
         def _fake_dispatch(task_id, history, max_steps, full_access=None, agent_id=None,
-                           model=None, mode="auto", persona=""):
+                           model=None, mode="auto", persona="",
+                           tools_enabled=None, tool_allowlist=None):
             calls["dispatch"] += 1
 
         monkeypatch.setattr(rt, "_dispatch_chat", _fake_dispatch)
@@ -561,21 +609,51 @@ class TestChatForceInterrupt:
         assert calls["stop"] == 1
         assert calls["dispatch"] == 1
         assert rec.force_interrupted is True
-        # 清理：桩掉的 dispatch 不会收尾，泄漏的 running 记录会堵死真实 manager 的全局互斥
+        # 清理：桩掉的 dispatch 不会收尾，泄漏的 running 记录会堵死真实 manager 的同 task 互斥
         from backend.api.routers.helpers import manager as _mgr, AGENT_MAIN as _main
         _mgr.finish(tid, _main)
 
-    def test_without_force_still_rejected_while_running(self, client, monkeypatch):
-        """回归：不带 force 的运行中 /chat 仍 409（主路径语义不变）。"""
+    def test_without_force_still_rejected_while_own_running(self, client, monkeypatch):
+        """回归：本会话运行中 + 不带 force → 仍 409（排队/注入语义不变）。"""
         import backend.api.router_runtime as rt
-        monkeypatch.setattr(rt, "_is_any_running", lambda: True)
+        monkeypatch.setattr(rt, "_is_task_running",
+                            lambda task_id, agent_id=None: task_id == "t_any")
         monkeypatch.setattr(rt, "_running_task_id", lambda: "t_any")
         r = client.post("/api/runtime/chat", json={
             "messages": [{"role": "user", "content": "hi"}],
             "task_id": "t_any",
         })
         assert r.status_code == 409
-        assert "已有任务在运行" in r.json()["error"]
+        assert "本会话正在运行" in r.json()["error"]
+
+    def test_concurrent_start_other_task_ok(self, client, monkeypatch):
+        """并发化核心：会话 A 在跑，会话 B 发消息 → 正常开跑（不再全局 409）。"""
+        import backend.api.router_runtime as rt
+        rt_a = client.post("/api/runtime/tasks", json={"objective": "busyA"})
+        tid_a = rt_a.json()["task"]["task_id"]
+        rt_b = client.post("/api/runtime/tasks", json={"objective": "idleB"})
+        tid_b = rt_b.json()["task"]["task_id"]
+        monkeypatch.setattr(rt, "_is_task_running",
+                            lambda task_id, agent_id=None: task_id == tid_a)
+        calls = {"dispatch": 0}
+
+        def _fake_dispatch(task_id, history, max_steps, full_access=None, agent_id=None,
+                           model=None, mode="auto", persona="",
+                           tools_enabled=None, tool_allowlist=None):
+            calls["dispatch"] += 1
+
+        monkeypatch.setattr(rt, "_dispatch_chat", _fake_dispatch)
+        try:
+            r = client.post("/api/runtime/chat", json={
+                "messages": [{"role": "user", "content": "并发开跑"}],
+                "task_id": tid_b,
+            })
+            assert r.status_code == 200, r.text
+            assert r.json()["ok"] is True
+            assert calls["dispatch"] == 1
+        finally:
+            from backend.api.routers.helpers import manager as _mgr, AGENT_MAIN as _main
+            _mgr.finish(tid_b, _main)
 
 
 def test_wind_down_injection_auto_chain(monkeypatch):

@@ -185,6 +185,8 @@ def main() -> int:
     try:
         from omni_core import memory_brain
         memory_brain.start_l0_backfill()
+        # NP-0：叙事索引一次性迁移（重建 + 撞名处理；meta 标记只跑一次，失败静默）
+        memory_brain.start_narrative_migration()
     except Exception:
         pass
 
