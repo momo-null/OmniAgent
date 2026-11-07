@@ -323,10 +323,10 @@ def test_explicit_mode_grants_send_tool_only(monkeypatch):
 
 
 def test_dispatch_passes_chat_scope_to_l0_index(monkeypatch, tmp_path):
-    """P2：派发写会话气泡时把「哪个聊天窗口 + 消息还是任务」一起交给 L0 索引。
+    """H-7：派发写会话气泡时把「通用场合键 + 消息还是任务」一起交给 L0 索引。
 
-    IM 来源 kind=chat（人话），cron/手动派发 kind=task（机器指令）——同一张表里不区分，
-    conversation_search 就会把派单提示词当聊天旧事命中（检索串味）。
+    IM 来源 kind=chat（人话）、场合键 group:；cron/手动派发 kind=task（机器指令）、
+    场合键由会话构造 web:<sid>——所有进料都有来源，不再留空（检索串味靠 kind 分）。
     """
     from omni_core import memory_brain
 
@@ -340,7 +340,7 @@ def test_dispatch_passes_chat_scope_to_l0_index(monkeypatch, tmp_path):
                            source="msg:napcat")
     user_rows = [s for s in seen if s[1] == "user" and "今晚吃什么" in s[2]]
     assert user_rows, seen
-    assert user_rows[0][3]["chat_id"] == "group:333333"
+    assert user_rows[0][3]["context_key"] == "group:333333"
     assert user_rows[0][3]["kind"] == "chat"
 
     seen.clear()
@@ -348,7 +348,7 @@ def test_dispatch_passes_chat_scope_to_l0_index(monkeypatch, tmp_path):
                            source="cron")
     task_rows = [s for s in seen if s[1] == "user" and "跑一下日报" in s[2]]
     assert task_rows and task_rows[0][3]["kind"] == "task"
-    assert task_rows[0][3]["chat_id"] == ""       # 无回发句柄 = 没有 IM 聊天窗口
+    assert task_rows[0][3]["context_key"] == "s_cron_l0"   # 无 IM 句柄 = 按会话构造场合键
 
 
 # ── msg_send_voice：发送方式由模型选，通道不支持就明确报错 ────────────────
@@ -498,8 +498,8 @@ def test_msg_group_history_keyword_queries_l0_index(monkeypatch, tmp_path):
     ch_ctx.register(adapter)
     ch_ctx.set_current_reply(reply)
     memory_brain.index_l0_message("s_g333", "user", "「小明」(10001): 便签放抽屉里",
-                                  chat_id="group:333")
-    memory_brain.index_l0_message("s_g999", "user", "便签买过三盒", chat_id="group:999")
+                                  context_key="group:333", speaker="小明(10001)")
+    memory_brain.index_l0_message("s_g999", "user", "便签买过三盒", context_key="group:999")
     try:
         r = plugin.msg_group_history(group_id="333", channel="group_hist_kw_chan",
                                      keyword="便签")

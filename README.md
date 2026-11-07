@@ -162,8 +162,9 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 
 - 个人学习项目，Windows 优先、单机部署，**不保证稳定性与体验**；使用后果自负。
 - 记忆机制已真机验证，**长期有效性仍在观察**；召回验收阈值是在很小的语料上校准的，目前仍有指标未达标——这是刻意不调线的，语料长起来才重测。不是"过目不忘"。
-- **记忆层不是原创**：L0–L3 分层、多文件场景块与巩固周期移植自开源项目 **TencentDB Agent Memory**（上游 TypeScript 实现，本仓库以 Python + SQLite FTS5 重写）。哪里改了、哪里丢了、哪些是自创，摘要见「技术架构」一节的移植偏差表，逐条登记见 [`doc/plans/memory-recall-2026-11-02.md`](doc/plans/memory-recall-2026-11-02.md) §3。
-- 群聊轮不产 L1 原子（防记忆投毒），所以「按人记住」只能靠关系卡这一条登记在案的特例：只在 QQ 单一说话人的路径注入、≤200 字、不进检索、**无上限无 TTL**。覆盖率与「旧印象被当成近期事实」都仍在观察，暂不动机制。
+- **记忆层不是原创**：L0–L3 分层、多文件场景块与巩固周期移植自开源项目 **TencentDB Agent Memory**（上游 TypeScript 实现，本仓库以 Python + SQLite FTS5 重写）。哪里改了、哪里丢了、哪些是自创，摘要见「技术架构」一节的移植偏差表，逐条登记见 [`doc/plans/implemented/memory-architecture.md`](doc/plans/implemented/memory-architecture.md) §13.1（2026-11-06 吸收自 2 号方案）。
+- 群聊轮不产 L1 原子（防记忆投毒），这是登记在案的刻意取舍：他人可控文本不进事实库，只走叙事层沉淀（场景块 + 日记）。「按人记住」靠关系卡，但它已改成**可检索的自传体资产**——通道自动注入已删除，模型经 `narrative_search`/`narrative_read` 按需自取，外部来源只给摘要（2026-11-06）。
+- 记忆的 P6 增量（2026-11-07）：日记带**经历质地**（触发物/心境/带说话人的原话片段，观察见闻同篇可检索）；日记与关系卡可标**共同经历**参与人（配置驱动，缺省关）；本地 `/memory/*` API 给主人**查看/纠正/遗忘**入口（tombstone 软删、审计可溯）。第三方能力「干净引入」门禁已固化，当前未引入任何第三方包。
 - 唱歌走的是「分离离线缓存 + 歌声转换在线」：库内点歌十几秒级，库外整条管线是分钟级（下载占大头），音质取决于声库素材与显存；在线曲库闸门默认关，站点源不入公开仓。
 - 语音服务默认只听回环；放到局域网而不设 token，等于让任何人白嫖你的显卡。
 - 技能自动蒸馏默认关闭，早期试点未观察到步数收益，A/B 仍待补测。
@@ -193,7 +194,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 
 **记忆层出处与移植偏差**
 
-记忆轴（L0–L3 分层 / 多文件场景块 / 巩固周期）移植自开源项目 **TencentDB Agent Memory**：上游是 TypeScript 实现，本仓库用 Python + SQLite FTS5 重写，参照件 clone 在 `external/TencentDB-Agent-Memory`（不入 git）。**2026-11-06 起上游定位降级为「机制参考与出处标注」**——上游的目标函数是多租户隔离，本仓库是单用户多语境，判据只能是「对单用户个人助理是否有用」，不以「上游这么做/没有」作为取舍理由。逐条取舍只登记在 [`doc/plans/memory-recall-2026-11-02.md`](doc/plans/memory-recall-2026-11-02.md) §3 与 `doc/plans/implemented/memory-architecture.md` 末尾的部件溯源表，本节只做摘要，不在两处各写一半。
+记忆轴（L0–L3 分层 / 多文件场景块 / 巩固周期）移植自开源项目 **TencentDB Agent Memory**：上游是 TypeScript 实现，本仓库用 Python + SQLite FTS5 重写，参照件 clone 在 `external/TencentDB-Agent-Memory`（不入 git）。**2026-11-06 起上游定位降级为「机制参考与出处标注」**——上游的目标函数是多租户隔离，本仓库是单用户多语境，判据只能是「对单用户个人助理是否有用」，不以「上游这么做/没有」作为取舍理由。逐条取舍登记在 `doc/plans/implemented/memory-architecture.md` §13.1（2026-11-06 吸收自 2 号方案）与同稿末尾的部件溯源表，本节只做摘要，不在两处各写一半。
 
 | 机制 | 上游 | 本仓库 | 性质 |
 |---|---|---|---|
@@ -206,7 +207,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | 场合信号 / 圈层语境 | 上游无此概念（单会话无「圈子」） | 2026-11-06 自建：`<current-context>` ≤200 字符场合信号 + `circle_note` 圈层语境摘要 + `w_ctx`/`w_bg` 场合与共同背景加权（**加权不过滤**，跨场合记忆照样可召回）；存储一池不拆分 | 自创，保留 |
 | 叙事检索 | 上游无叙事资产层 | 日记/月记/关系卡经 `narrative_index`（只存指针不存正文）+ `narrative_search`/`narrative_read` 按需检索读取；>7 天旧日记不再被导航窗口截断；关系卡自动注入已删除、改自取 | 自创，保留 |
 | 日记 / 月记按日统一 | 上游无此概念（单会话） | 2026-11-06 起按**日期**全局一篇，落 `~/.omniagent/memory/diary/`：素材跨项目聚合、一次生成；`narrative_index` 的 `doc_id` 为裸文件名、`project_id` 不再作键；旧按项目日记合并归档（正文零丢失）。项目 `scene_blocks/` 只留工作主题块 | 自创，对齐 §3.3 空间键表 |
-| 观察进料道 | 上游无此概念 | 非对话来源（主动阅读/检索/工具产出）经唯一入口 `capture_observation()` 落 `l0_messages(source_kind=observation)`，带 `provenance`/`observed_at`/`review_after`（出处与时效，到期由巩固期复核）；升格为事实必经巩固期价值判/四态 | 自创，保留（采集器实现为远期） |
+| 观察进料道 | 上游无此概念 | 非对话来源（主动阅读/检索/工具产出）经唯一入口 `capture_observation()` 落 `l0_messages(source_kind=observation)`，带必填结构化 `provenance` 与可选 `observed_at`/`review_after`，**只作追溯标注、不判真假、不升格为事实**（H-5 / INV-14）；采集器为 P5 远期 | 自创，保留 |
 | 叙事与观察的出口 | 上游无此概念（无跨场合叙事 / 外部观察来源） | 2026-11-06 自建：跨场合叙事正文、未升格观察、关系卡评价不得直接转述到对外消息；允许以第一人称见闻表达（「我看到 / 我最近在关注」），禁止当作客观事实断言；约束落在工具层与规则文本，不靠检索侧过滤（§6.5 / §14.4） | 自创，保留 |
 | L2 块上限与读取 | 无上限、read 工具返回全文 | 自加 4000 硬上限，但只挂在 `scene_write`、`scene_edit` 漏守，且 read 侧截断到 4000（超限块"只看得见前半"，agent 无从精简）。现补成 write/edit 两路同守（只拦"编辑后更长且超上限"），读侧取消截断 | 自创，已补一致 |
 | 衰减 / 遗忘 | 没有 decay / dormant / archive，只有默认关闭的 `retentionDays` 硬删 | 曾自创 salience 衰减 + dormant/archive 状态机（默认关、从未启用，`access_count` 保留作簿记） | 自创 → 已决定删除 |
@@ -241,7 +242,6 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | 架构图集 N1–N10 |
 | [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | 架构决策权威（单一事实来源） |
 | [`doc/plans/implemented/memory-architecture.md`](doc/plans/implemented/memory-architecture.md) | 记忆架构现行事实源（L0–L3 / 日记 / 关系卡 / 不变量 / 明确不做） |
-| [`doc/plans/memory-recall-2026-11-02.md`](doc/plans/memory-recall-2026-11-02.md) | 召回诊断与验收实测值 |
 | [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | 消息通道机制（协议 / 能力门 / 场合自述） |
 | [`doc/plans/implemented/group-presence-2026-10-30.md`](doc/plans/implemented/group-presence-2026-10-30.md) | 群自然存在感（T0/T1/T2 分层、闸门顺序、参数与状态划分） |
 | [`doc/plans/implemented/voice-2026-10-31.md`](doc/plans/implemented/voice-2026-10-31.md) | 语音交互与引擎（对讲式 / 免提 / 接口契约冻结） |
@@ -416,8 +416,9 @@ In the UI: right-click a project to rename (display name only) or delete (cascad
 
 - Personal learning project, Windows-first, single machine, **no stability or UX guarantee**; use at your own risk.
 - The memory mechanism is live-verified, but **long-term effectiveness is still under observation**; the recall acceptance thresholds were calibrated on a very small corpus and some metrics still miss them — deliberately not re-tuned until the corpus grows. This is not perfect recall.
-- Group turns do not produce L1 atoms (memory-poisoning defence), so "remembering a person" relies on the one registered exception: relation cards. They inject only on single-speaker QQ paths, stay ≤200 chars, are not searchable, and have **no size cap and no TTL**. Coverage and "an old impression read as recent fact" remain under observation; the mechanism is intentionally untouched for now.
-- **The memory layer is not original work**: the L0–L3 tiers, the multi-file scene blocks and the consolidation cycle are ported from the open-source **TencentDB Agent Memory** (upstream is TypeScript; rewritten here in Python + SQLite FTS5). The summary table at the end of the Architecture section lists what changed, what was dropped and what is self-authored; the itemised record lives in [`doc/plans/memory-recall-2026-11-02.md`](doc/plans/memory-recall-2026-11-02.md) §3.
+- Group turns do not produce L1 atoms (memory-poisoning defence), a deliberate registered trade-off: externally controllable text never enters the fact store; chat traffic settles through the narrative layer (scene blocks + diary). "Remembering a person" relies on relation cards, which are now **searchable autobiographical assets** — channel auto-injection was removed; the model fetches them on demand via `narrative_search`/`narrative_read`, and external sources get summary-only (2026-11-06).
+- **The memory layer is not original work**: the L0–L3 tiers, the multi-file scene blocks and the consolidation cycle are ported from the open-source **TencentDB Agent Memory** (upstream is TypeScript; rewritten here in Python + SQLite FTS5). The summary table at the end of the Architecture section lists what changed, what was dropped and what is self-authored; the itemised record lives in [`doc/plans/implemented/memory-architecture.md`](doc/plans/implemented/memory-architecture.md) §13.1 (absorbed from the 2026-11-02 plan on 2026-11-06).
+- Memory P6 additions (2026-11-07): diaries carry **experience texture** (triggers/mood/speaker-attributed quotes; observation notes join the same entry and are searchable); diaries and relation cards can be tagged with **shared-experience** participants (config-driven, off by default); a local `/memory/*` API gives the owner **view/correct/forget** controls (tombstone soft-delete, auditable). Third-party capability gates are codified; no third-party package is currently bundled.
 - Singing follows "offline separation cache + online voice conversion": library songs return in seconds, a brand-new song takes minutes end to end (download dominates), and quality depends on the voice-bank material and your VRAM. The online gate is off by default and site sources are not published.
 - The voice service listens on loopback by default; exposing it to your LAN without a token means anyone can burn your GPU.
 - Automatic skill distillation is off by default: an early pilot showed no step savings, A/B still pending.
@@ -447,7 +448,7 @@ One line: **agent loop** (OpenAI Agents SDK `Runner`) → **tool layer** (plugin
 
 **Memory layer provenance and porting deltas**
 
-The memory axis (L0–L3 tiers / multi-file scene blocks / consolidation cycle) is ported from the open-source **TencentDB Agent Memory**: upstream is a TypeScript implementation, rewritten here in Python + SQLite FTS5, with the reference clone kept at `external/TencentDB-Agent-Memory` (not in git). Per-item trade-offs are recorded only in [`doc/plans/memory-recall-2026-11-02.md`](doc/plans/memory-recall-2026-11-02.md) §3 and the provenance table at the end of `doc/plans/implemented/memory-architecture.md`; this table is a summary, not a second copy.
+The memory axis (L0–L3 tiers / multi-file scene blocks / consolidation cycle) is ported from the open-source **TencentDB Agent Memory**: upstream is a TypeScript implementation, rewritten here in Python + SQLite FTS5, with the reference clone kept at `external/TencentDB-Agent-Memory` (not in git). Per-item trade-offs are recorded only in `doc/plans/implemented/memory-architecture.md` §13.1 (absorbed from the 2026-11-02 plan) and the provenance table at the end of that document; this table is a summary, not a second copy.
 
 | Mechanism | Upstream | This repo | Nature |
 |---|---|---|---|
@@ -490,7 +491,6 @@ The conclusion was **not to swap approaches and not to embed upstream wholesale*
 | [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | Architecture diagrams N1–N10 |
 | [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | Authoritative architecture decisions |
 | [`doc/plans/implemented/memory-architecture.md`](doc/plans/implemented/memory-architecture.md) | Current memory architecture (L0–L3 / diary / relation cards / invariants / explicit non-goals) |
-| [`doc/plans/memory-recall-2026-11-02.md`](doc/plans/memory-recall-2026-11-02.md) | Recall diagnosis and measured acceptance values |
 | [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | Message-channel design (protocol / tool gate / narration) |
 | [`doc/plans/implemented/group-presence-2026-10-30.md`](doc/plans/implemented/group-presence-2026-10-30.md) | Natural group presence (T0/T1/T2 layering, gate ordering, parameter vs state split) |
 | [`doc/plans/implemented/voice-2026-10-31.md`](doc/plans/implemented/voice-2026-10-31.md) | Voice interaction & engines (walkie-talkie / hands-free / frozen API contract) |

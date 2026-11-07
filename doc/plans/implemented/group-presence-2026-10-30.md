@@ -3,7 +3,7 @@
 状态：**已实施并经两轮试点校准**（2026-10-31 / 11-01），分期 M1–M3 全部交付；
 提交 `05fd684`（wave promotion）/ `2f179e6`（thread economy + QQ channel boundaries）/ `df67a6b` / `798671d`。
 本文是群聊判定层在仓库内的**唯一设计源**：只讲**要不要说话**（T0/T1/T2），不讲**她记得什么**——
-记忆侧见 `doc/plans/implemented/memory-architecture.md` §2.1/§2.7/§2.8，召回质量见 `doc/plans/memory-recall-2026-11-02.md`。
+记忆侧见 `doc/plans/implemented/memory-architecture.md` §2.1/§2.7/§2.8，召回诊断与移植偏差见同稿 §13（2026-11-06 吸收自 2 号方案）。
 **开放项与待办**在本地 worklog 追踪（`doc/worklog/group-presence-tracking.md`，不进仓库）：
 观察项 OBS、出站自然度缺口等。
 逐轮试点实测、校准与事故的完整原文为本地留档（不进仓库），本文只保留定稿后的现行机制。

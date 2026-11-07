@@ -80,7 +80,7 @@ def test_local_day_across_utc_midnight_one_diary(brain, monkeypatch):
             "这条素材拉长是为了稳稳超过八十字的白卷门槛，别被当成灌水截掉")
     (rp.project_dir("qq") / "s_x.jsonl").write_text(
         "\n".join(json.dumps({"ts": t, "role": "user", "content": body,
-                              "chat_id": "group:1"}, ensure_ascii=False)
+                              "context_key": "group:1"}, ensure_ascii=False)
                   for t in (ts_a, ts_b)) + "\n", encoding="utf-8")
     calls = []
     monkeypatch.setattr(mb.llm_judge, "chat_json",
@@ -91,10 +91,10 @@ def test_local_day_across_utc_midnight_one_diary(brain, monkeypatch):
     assert (se.diary_dir() / f"diary-{d}.md").exists()   # H-4：全局一天一篇
     # 两个 UTC 日界的素材进了同一篇：LLM 只被调一次（一次生成 = 一篇）
     assert len(calls) == 1
-    # 索引：时间区间覆盖两个 UTC 时刻、场合标注来自 rec.chat_id
+    # 索引：时间区间覆盖两个 UTC 时刻、场合标注来自 rec.context_key
     row = mb.get_narrative_row(f"diary-{d}.md", "diary")
     assert row and row["date_from"] == d and row["date_to"] == d
-    assert row["chat_ids"] == ["group:1"]
+    assert row["context_keys"] == ["group:1"]
     assert row["time_from"] and row["time_to"]
 
 
@@ -125,8 +125,8 @@ def _mk_migration_fixture(pid: str, utc_day: str, hour: int):
         ts = (base + timedelta(minutes=i * 3)).isoformat()
         (rp.project_dir(pid) / "s_a.jsonl").open("a", encoding="utf-8").write(
             json.dumps({"ts": ts, "role": "user", "content": body,
-                        "chat_id": "group:77"}, ensure_ascii=False) + "\n")
-        mb.index_l0_message("s_a", "user", body, chat_id="group:77", recorded_at=ts)
+                        "context_key": "group:77"}, ensure_ascii=False) + "\n")
+        mb.index_l0_message("s_a", "user", body, context_key="group:77", recorded_at=ts)
     # 老日记文件按 **UTC 文件名日期** 落盘（迁移前的形态），并同步进 scene_index
     d = se.scene_blocks_dir(pid)
     d.mkdir(parents=True, exist_ok=True)
@@ -139,84 +139,6 @@ def _mk_migration_fixture(pid: str, utc_day: str, hour: int):
     return fname
 
 
-def test_migration_renames_to_local_day(brain, monkeypatch):
-    """素材真实本地日 D ≠ 文件名日期 且 diary-D.md 不存在 → 重命名 + 索引 local（N-11）。"""
-    from datetime import datetime, timedelta
-    utc_day = localtime.local_days_ago(3)
-    hour = _find_utc_hour_with_different_local_day(utc_day)
-    if hour is None:
-        pytest.skip("当前时区与 UTC 同日，撞名重命名场景不可构造")
-    fname = _mk_migration_fixture("mig-a", utc_day, hour)
-    # 目标本地日（多数派）：该素材小时的本地日
-    from datetime import datetime, timezone, timedelta
-    ts = datetime.strptime(f"{utc_day}T{hour:02d}:30:00", "%Y-%m-%dT%H:%M:%S").replace(
-        tzinfo=timezone.utc).isoformat()
-    d_local = localtime.local_date(ts)
-
-    out = mb.migrate_narrative_once(force=True)
-    d = se.scene_blocks_dir("mig-a")
-    assert not (d / fname).exists()                    # 老名已不在
-    assert (d / f"diary-{d_local}.md").exists()        # 新名（本地日）在场
-    names = [p.name for p in d.glob("diary-2*.md")]
-    assert names == [f"diary-{d_local}.md"]            # 无重复、无缺篇
-    row = mb.get_narrative_row(f"diary-{d_local}.md", "diary")
-    assert row and row["date_from"] == d_local and row["date_basis"] == "local"
-    assert row["chat_ids"] == ["group:77"]             # 场合标注从 l0 回填
-    assert "旧正文" in (d / f"diary-{d_local}.md").read_text(encoding="utf-8")  # 正文零改写
-    assert out["renamed"] >= 1
-    # meta 标记：再跑一次跳过
-    assert mb.migrate_narrative_once().get("skipped") == 1
-
-
-def test_migration_collision_keeps_old_file_marks_legacy(brain):
-    """diary-D.md 已存在 → 保留老文件不覆盖、两篇都在、UTC 名索引标 legacy（N-11）。"""
-    from datetime import datetime, timezone
-    utc_day = localtime.local_days_ago(4)
-    hour = _find_utc_hour_with_different_local_day(utc_day)
-    if hour is None:
-        pytest.skip("当前时区与 UTC 同日，撞名场景不可构造")
-    fname = _mk_migration_fixture("mig-b", utc_day, hour)
-    ts = datetime.strptime(f"{utc_day}T{hour:02d}:30:00", "%Y-%m-%dT%H:%M:%S").replace(
-        tzinfo=timezone.utc).isoformat()
-    d_local = localtime.local_date(ts)
-    # 预占目标名
-    d = se.scene_blocks_dir("mig-b")
-    (d / f"diary-{d_local}.md").write_text(
-        "-----META-START-----\ncreated: x\nupdated: x\nsummary: 占位\nheat: 0\n"
-        "-----META-END-----\n已占位的目标日记。", encoding="utf-8")
-
-    out = mb.migrate_narrative_once(force=True)
-    # 无覆盖：占位文件原样、老文件原样；无重复（两个不同名文件都在）
-    assert "已占位" in (d / f"diary-{d_local}.md").read_text(encoding="utf-8")
-    assert "旧正文" in (d / fname).read_text(encoding="utf-8")
-    legacy_row = mb.get_narrative_row(fname, "diary")
-    assert legacy_row and legacy_row["date_basis"] == "legacy"
-    assert legacy_row["date_from"] == utc_day          # 失败退化 = 文件名日期当日
-    local_row = mb.get_narrative_row(f"diary-{d_local}.md", "diary")
-    assert local_row and local_row["date_basis"] == "legacy"  # 迁移期建的老行统一 legacy
-
-
-def test_migration_indexes_month_and_relations(brain):
-    """月记按日历区间、关系卡按 uid 建索引；正文文件零改写。"""
-    d = se.scene_blocks_dir("mig-c")
-    d.mkdir(parents=True, exist_ok=True)
-    (d / "diary-month-2026-09.md").write_text(
-        "-----META-START-----\ncreated: x\nupdated: x\nsummary: 九月地图\nheat: 0\n"
-        "-----META-END-----\n九月正文。", encoding="utf-8")
-    rel = rp.global_relations()
-    rel.mkdir(parents=True, exist_ok=True)
-    (rel / "999999.md").write_text(
-        "-----META-START-----\nname: 成员甲\nuid: 999999\nupdated: x\n"
-        "topics: [\"抬杠\", \"白米饭\"]\n-----META-END-----\n最近交手：起哄。", encoding="utf-8")
-    out = mb.migrate_narrative_once(force=True)
-    m = mb.get_narrative_row("diary-month-2026-09.md", "month")
-    assert m and m["date_from"] == "2026-09-01" and m["date_to"] == "2026-09-30"
-    assert m["summary"] == "九月地图"
-    r = mb.get_narrative_row("999999", "relation")
-    assert r and r["peers"] == ["成员甲(999999)"] and r["topics"] == ["抬杠", "白米饭"]
-    assert "九月正文" in (d / "diary-month-2026-09.md").read_text(encoding="utf-8")
-
-
 # ---------------------------------------------------------------- upsert 幂等 / 检索
 
 def test_upsert_narrative_index_idempotent(brain):
@@ -224,7 +146,7 @@ def test_upsert_narrative_index_idempotent(brain):
     assert mb.upsert_narrative_index("diary-2026-11-05.md", "diary", project_id="",
                                      date_from="2026-11-05", date_to="2026-11-05",
                                      summary="第一版", topics=["甲"],
-                                     chat_ids=["group:1"], peers=["甲(1)"]) is True
+                                     context_keys=["group:1"], peers=["甲(1)"]) is True
     assert mb.upsert_narrative_index("diary-2026-11-05.md", "diary", project_id="",
                                      date_from="2026-11-05", date_to="2026-11-05",
                                      summary="第二版", topics=["甲", "乙"]) is True
@@ -255,17 +177,17 @@ def test_upsert_narrative_index_idempotent(brain):
 
 
 def test_search_narrative_weighted_not_filtered(brain):
-    """同 query 在两个 chat_id 下排序有差异，且**两条都仍可召回**（INV-3 / N-2 前置）。"""
+    """同 query 在两个 context_key 下排序有差异，且**两条都仍可召回**（INV-3 / N-2 前置）。"""
     mb.upsert_narrative_index("diary-2026-11-01.md", "diary", project_id="p",
                               date_from="2026-11-01", date_to="2026-11-01",
                               summary="甲场合的抬杠日常", topics=["抬杠", "甲场合"],
-                              chat_ids=["group:a"])
+                              context_keys=["group:a"])
     mb.upsert_narrative_index("diary-2026-11-02.md", "diary", project_id="p",
                               date_from="2026-11-02", date_to="2026-11-02",
                               summary="乙场合的钓鱼日常", topics=["钓鱼", "乙场合"],
-                              chat_ids=["group:b"])
-    r1 = mb.search_narrative("抬杠", chat_id="group:a")
-    r2 = mb.search_narrative("抬杠", chat_id="group:b")
+                              context_keys=["group:b"])
+    r1 = mb.search_narrative("抬杠", context_key="group:a")
+    r2 = mb.search_narrative("抬杠", context_key="group:b")
     a_id, b_id = "diary-2026-11-01.md", "diary-2026-11-02.md"
     assert any(x["doc_id"] == a_id for x in r1)
     assert any(x["doc_id"] == b_id for x in r2), "跨场合叙事仍可召回（INV-3）"

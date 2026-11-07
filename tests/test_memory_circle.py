@@ -107,17 +107,17 @@ def test_due_thresholds_and_once_per_cycle(brain):
 
 
 def test_flush_tail_accumulates_and_reflects(brain):
-    """flush 尾部接线：带 chat_id 的消息按场合累积；到阈值触发一次 reflection。"""
-    msgs = [{"role": "user", "content": f"群友第{i}句在聊白米饭", "chat_id": "group:9"}
+    """flush 尾部接线：带 context_key 的消息按场合累积；到阈值触发一次 reflection。"""
+    msgs = [{"role": "user", "content": f"群友第{i}句在聊白米饭", "context_key": "group:9"}
             for i in range(12)]
     brain.script = [{"summary": "他们在聊白米饭", "topics": ["白米饭"], "tone": ""}]
-    mb._flush_tail("p", BRAIN_CFG, {}, "", True, msgs=msgs)
+    mb._flush_tail("p", BRAIN_CFG, {}, True, msgs=msgs)
     note = mb.get_circle_note("group:9")
     assert note and note["topics"] == ["白米饭"]
     assert len(brain.calls) == 1                 # 一次 reflection，一次 LLM
-    # 无 chat_id 的消息不触发任何 LLM（Web/任务输入缺场合键 → 语境链静默跳过）
+    # 无 context_key 的消息不触发任何 LLM（Web/任务输入缺场合键 → 语境链静默跳过）
     n_calls = len(brain.calls)
-    mb._flush_tail("p", BRAIN_CFG, {}, "", True,
+    mb._flush_tail("p", BRAIN_CFG, {}, True,
                    msgs=[{"role": "user", "content": "没有场合键的一轮"}])
     assert len(brain.calls) == n_calls
 
@@ -128,12 +128,12 @@ def test_coldstart_and_global_budget(brain, monkeypatch):
         cid = f"group:{i}"
         for j in range(15):
             mb.index_l0_message(f"s{i}_{j}", "user", f"第{i}个群的白米饭第{j}句",
-                                chat_id=cid, recorded_at=f"2026-11-05T0{j % 9}:00:00+00:00")
+                                context_key=cid, recorded_at=f"2026-11-05T0{j % 9}:00:00+00:00")
     monkeypatch.setattr(mb, "_circle_cfg",
                         lambda key, default=None: {"max_per_cycle": 3}.get(key, default))
     for i in range(3):
         brain.script.append({"summary": f"第{i}个群首版", "topics": ["白米饭"], "tone": ""})
-    n = mb.run_context_reflections(BRAIN_CFG, "", coldstart=True)
+    n = mb.run_context_reflections(BRAIN_CFG, coldstart=True)
     assert n == 3                                # 7 个候选场合，预算 3 → 只跑 3 个
     have = []
     for i in range(7):
@@ -148,7 +148,7 @@ def test_context_signal_includes_tone(brain):
     brain.script = [{"summary": "氛围归纳", "topics": ["词面"], "tone": "互相起哄的分寸"}]
     assert mb.reflect_circle_note(BRAIN_CFG, "group:5") is True
     cs.build_run(task_id="", objective="", run_key="", source_kind="chat")
-    cs._CURRENT["chat_id"] = "group:5"
+    cs._CURRENT["context_key"] = "group:5"
     cs._CURRENT["tone"] = cs._circle_tone("group:5")
     block = cs.render()
     assert "tone=互相起哄的分寸" in block

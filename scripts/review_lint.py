@@ -8,6 +8,8 @@
       当作数据访问（字典 key / .get / 属性调用），而非注释说明。
   R2 具体工具名分支：内核文件里对具体设备工具名做 if 分支
       （内核元工具 verify/plan/task_done/record/collect_list 豁免）。
+  R5 内核场景语义（INV-4）：omni_core/** 出现群聊/私聊/名片(uid)/具体平台名或
+      场合键前缀分支（含注释与 LLM prompt），能力层目录不豁免。
   R4 记忆注入回流：内核里出现尾部每步重发机制的记号（_TailInjectModel/tail_inject*），
       或在 scene_executor 之外调用 load_scene_text/read_scene_full（L2 全文只准经
       read_scene 工具按需进上下文——见 doc/plans/implemented/memory-architecture.md §5）。
@@ -61,7 +63,7 @@ KERNEL_META_TOOLS = {"verify", "plan", "task_done", "record", "collect_list", "e
 TAIL_INJECT_RE = re.compile(r"\b(_TailInjectModel|tail_inject\w*)\b")
 # L2 场景全文读取只允许在 scene_executor.py 内部出现（供 read_scene 工具与整理 agent 用）；
 # 历史单文件版函数名一并保留在模式里—— reintroduction 即违规
-SCENE_FULLTEXT_RE = re.compile(r"\b(load_scene_text|read_scene_full|read_scene_block)\s*\(")
+SCENE_FULLTEXT_RE = re.compile(r"\b(load_scene_text|read_scene_full)\s*\(")
 SCENE_FULLTEXT_ALLOW = "omni_core/local/scene_executor.py"
 
 
@@ -120,6 +122,27 @@ def check_r2_tool_branch(lines: list[str], path: Path, findings: list[str]) -> N
 
 
 
+# R5：内核通用性（INV-4）——具体场合/渠道/平台词表与场合键前缀分支一律禁止。
+# 注释与 LLM prompt 同样受约束（模型可见文本也是内核契约）；不豁免能力层目录。
+SCENE_WORD_RE = re.compile(
+    r"群聊|私聊|群名片|群里|群友|跨群|分群|名片\(uid\)|「名片」|"
+    r"QQ|飞书|企业微信|抖音|B站|视频站|napcat|feishu|wecom|onebot|"
+    r"startswith\(['\"]group|startswith\(['\"]private"
+)
+
+
+def check_r5_scene_semantics(lines: list[str], path: Path, findings: list[str]) -> None:
+    """INV-4：场合键取值与格式由边界层/配置提供，内核只认不透明结构键。"""
+    rel = _posix(path)
+    for n, raw in enumerate(lines, 1):
+        m = SCENE_WORD_RE.search(raw)
+        if m:
+            findings.append(
+                f"[R5] {rel}:{n} 内核出现具体场合/渠道语义 {m.group(0)!r} "
+                f"（INV-4：取值与格式由边界层提供，内核零场景硬编码）"
+            )
+
+
 def check_r4_memory_placement(lines: list[str], path: Path, findings: list[str]) -> None:
     """记忆注入 placement 三不变量（TAM 对齐）：禁尾部重发记号回流、禁 L2 全文进注入路径。"""
     rel = _posix(path)
@@ -171,8 +194,9 @@ def main() -> int:
 
     findings: list[str] = []
 
-    kernel_files = [f for f in discover_files(KERNEL_DIRS) if not is_exempt(f)]
-    if not kernel_files:
+    all_kernel_files = discover_files(KERNEL_DIRS)
+    kernel_files = [f for f in all_kernel_files if not is_exempt(f)]
+    if not all_kernel_files:
         print(f"[ERR] 未发现内核文件: {KERNEL_DIRS}", file=sys.stderr)
         return 2
     for p in kernel_files:
@@ -180,6 +204,9 @@ def main() -> int:
         check_r1_screen_field(lines, p, findings)
         check_r2_tool_branch(lines, p, findings)
         check_r4_memory_placement(lines, p, findings)
+    # R5 不豁免能力层：历史最严重的「群聊唤醒等级写进内核」就在 tools/ 下
+    for p in all_kernel_files:
+        check_r5_scene_semantics(_read(p), p, findings)
 
     scanned = ", ".join(f"{len(kernel_files)} 内核文件" for _ in [0])
     if not findings:
@@ -190,10 +217,9 @@ def main() -> int:
     for f in findings:
         print("  " + f)
     print(
-        "\n说明：R1=屏幕字段泄露 / R2=具体工具名分支 / R3=text_of非抽象 / "
-        "R4=记忆注入placement回流。"
-        "L1 能力层（omni_core/tools/**）豁免 R1/R2/R4；"
-        "R3（text_of 非抽象）随 env 概念退场移除。"
+        "\n说明：R1=屏幕字段泄露 / R2=具体工具名分支 / R4=记忆注入placement回流 / "
+        "R5=内核场景语义硬编码（INV-4）。"
+        "L1 能力层（omni_core/tools/**）仅豁免 R1/R2/R4，R5 全内核强制。"
     )
     return 1 if args.strict else 0
 

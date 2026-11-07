@@ -33,22 +33,21 @@ def test_enqueue_pops_capture_at_enqueue_time(monkeypatch):
 
     calls = []
 
-    def fake_flush(pid, cfg=None, source_task="", persona="", msgs=None,
+    def fake_flush(pid, cfg=None, source_task="", msgs=None,
                    allow_write=True, allow_atoms=True):
-        calls.append({"pid": pid, "msgs": msgs, "persona": persona,
+        calls.append({"pid": pid, "msgs": msgs,
                       "allow_write": allow_write})
         return {"stored": 1}
 
     monkeypatch.setattr(memory_brain, "pop_capture", fake_pop)
     monkeypatch.setattr(memory_brain, "flush_brain", fake_flush)
     done = []
-    assert memory_writer.enqueue("p1", {"m": "x"}, source_task="t1", persona="pp",
+    assert memory_writer.enqueue("p1", {"m": "x"}, source_task="t1",
                                  did_work=False,
                                  on_done=done.append) is True
     assert popped == ["p1"], "入队时就该 pop"
     assert memory_writer.wait_idle(5.0)
     assert calls and calls[0]["msgs"][0]["content"] == "a"
-    assert calls[0]["persona"] == "pp"
     assert calls[0]["allow_write"] is False, "did_work=False 必须门掉 L2 写"
     assert done and done[0]["stored"] == 1, "on_done 要拿到 stats"
 
@@ -57,7 +56,7 @@ def test_worker_serializes_and_counts(monkeypatch):
     """单 worker 串行：两轮按入队顺序处理，processed 计数对齐。"""
     order = []
 
-    def fake_flush(pid, cfg=None, source_task="", persona="", msgs=None,
+    def fake_flush(pid, cfg=None, source_task="", msgs=None,
                    allow_write=True, allow_atoms=True):
         order.append(source_task)
         time.sleep(0.02)
@@ -87,7 +86,7 @@ def test_flush_failure_is_isolated(monkeypatch):
     """单轮失败只记 failed，worker 继续活着处理下一轮。"""
     seen = []
 
-    def flaky(pid, cfg=None, source_task="", persona="", msgs=None,
+    def flaky(pid, cfg=None, source_task="", msgs=None,
               allow_write=True, allow_atoms=True):
         seen.append(source_task)
         if source_task == "bad":
@@ -145,7 +144,7 @@ def test_enqueue_throttled_fires_on_interval_for_quiet_chat(monkeypatch):
     monkeypatch.setattr(memory_writer, "enqueue", lambda *a, **k: sent.append(k) or True)
     assert memory_writer.enqueue_throttled("p", {"m": "x"}, min_msgs=12,
                                            min_interval=600.0) is True    # 首次
-    memory_writer._last_chat_enqueue["p"] = time.time() - 601.0           # 假装过了 10 分钟
+    memory_writer._last_enqueue["p"] = time.time() - 601.0           # 假装过了 10 分钟
     assert memory_writer.enqueue_throttled("p", {"m": "x"}, min_msgs=12,
                                            min_interval=600.0) is True    # 到间隔
     assert all(k.get("allow_atoms") is False for k in sent)

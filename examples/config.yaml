@@ -169,9 +169,13 @@ knowledge:
                                 # 经 narrative_search/read 按需自取，不再自动注入（NP-2）
   narrative:                    # 叙事检索/读取（NP-1，plan §6.5）
     external_read_mode: summary_only   # 外部来源读印象卡：只给摘要、正文置空（N-10）
+    we_memory:                  # P6-2 共同经历（H-6 §16.3）：缺省全关=行为与现状一致
+      enabled: false            # 开后日记/关系卡 META 标「共同经历及参与人」（取值来自下行，内核零词表）
+      participants: []          # 参与人称呼列表（如主人的称呼）；素材里出现才标，不产 atoms
+      rhythm: false             # 表达节奏开关：聊到共同经历时「自我披露/把话递回去」的分寸提示
 
 # ── context：场合信号与共同背景加权（M2，plan §6.2）──────────────────────────
-# chat_id 只**加权不过滤**（INV-3）：跨场合记忆照样召回，只是排得靠后。
+# context_key 只**加权不过滤**（INV-3）：跨场合记忆照样召回，只是排得靠后。
 context:
   w_ctx: 0.25                   # 当前场合标注命中 → ×(1+w_ctx)
   w_bg: 0.10                    # 圈层共同话题词面命中（同场合标注 + topics 相交）→ ×(1+w_bg)

@@ -96,9 +96,9 @@ class TaskStore:
 
     @staticmethod
     def find_by_session(project_id: Optional[str], session_id: Optional[str]) -> Optional[Dict[str, Any]]:
-        """按 (project, session) 找最近一个任务（聊天窗口 → 单一任务复用）。
+        """按 (project, session) 找最近一个任务（同一会话标识 → 单一任务复用）。
 
-        用途：消息通道一个聊天窗口长期只应占一条会话条目——后续消息复用同一
+        用途：同一会话标识长期只应占一条会话条目——后续消息复用同一
         task，历史连续，侧栏不堆同名条目。``session_id`` 为空（一次性/定时任务）
         直接返回 None，不参与复用。归属缺省按 default 项目归一（与 create 一致）。
         """
@@ -512,20 +512,24 @@ class ProjectStore:
         content: str,
         task_id: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
-        chat_id: str = "",
+        context_key: str = "",
         l0_kind: str = "chat",
+        speaker: str = "",
     ) -> None:
+        # H-7：所有进料必填通用场合键，由边界层归一后传入；未给时以会话标识兜底，
+        # 内核不假设任何渠道前缀、不留空来源。
+        context_key = str(context_key or "").strip() or str(session_id)
         with ProjectStore._lock:
             d = ProjectStore.ensure(project_id)
             path = P.session_file(project_id, session_id)
             rec = {"role": role, "content": content, "ts": _now_iso()}
             if task_id:
                 rec["task_id"] = P.validate_identifier(task_id, "task_id")
-            # chat_id（plan §13.4，N-8）：IM 来源的真实聊天窗口键，随消息落盘——
-            # 日记蒸馏据此把经历记到正确场合头上、叙事索引场合标注由此而来；
-            # 老记录缺该字段按空处理（读者一律 .get("chat_id", "")）。
-            if chat_id:
-                rec["chat_id"] = str(chat_id)
+            # context_key（H-7）：一等通用场合键，随消息落盘——日记蒸馏据此把经历
+            # 记到正确场合头上、叙事索引场合标注由此而来；必填，无兼容分支。
+            rec["context_key"] = context_key
+            if speaker:
+                rec["speaker"] = str(speaker)
             # extra：结构化 agent turn（执行步骤 steps + 机器状态 meta），
             # 既供前端刷新后恢复完整过程流，也供下一轮模型上下文回填（根治跨轮失忆）。
             if extra:
@@ -535,13 +539,13 @@ class ProjectStore:
         # 记忆 L0:会话消息入 buffer(提炼在任务收尾 flush 时批量做;异常静默)
         # P2（2026-11-02）：同时同步插一行进 brain.db 的 l0_messages——「写入即入表」，
         # 对齐原仓库 l0_conversations；jsonl 仍是文件真相，表只是检索副本（conversation_search
-        # 查它）。chat_id 由调用方（网关）给出，缺省留空则按 session_id 定位会话。
+        # 查它）。context_key 必填（H-7）：由边界层归一，内核只透传。
         try:
             from omni_core import memory_brain
-            memory_brain.capture(project_id, role, content, chat_id=str(chat_id or ""))
+            memory_brain.capture(project_id, role, content, context_key=context_key)
             memory_brain.index_l0_message(session_id, role, content,
-                                          chat_id=chat_id, kind=l0_kind,
-                                          recorded_at=rec["ts"])
+                                          context_key=context_key, kind=l0_kind,
+                                          speaker=speaker, recorded_at=rec["ts"])
         except Exception:
             pass
 

@@ -30,6 +30,7 @@ from backend.api.routers.debug_api import router as debug_router
 from backend.api.router_settings import router as settings_router
 from backend.api.router_cron import router as cron_router
 from backend.api.routers.audio_api import router as audio_router
+from backend.api.routers.memory_api import router as memory_router
 
 # ── 服务配置 ──────────────────────────────────────────────
 _server_cfg = (config.load_config() or {}).get("server", {}) or {}
@@ -120,18 +121,6 @@ async def lifespan(app: FastAPI):
         logger.info("loop 组件池：MCP 启动预热已发起（后台线程）")
     except Exception as e:  # 预热失败不阻断启动
         logger.warning("MCP 启动预热失败（已忽略）: %s", e)
-    # P2 L0 检索索引：首次上线把既有会话 jsonl 回填进 brain.db.l0_messages（后台线程，
-    # meta 标记保证只跑一次）。conversation_search 查不到旧记录是可容忍的降级，不阻断启动。
-    try:
-        from omni_core import memory_brain
-        if memory_brain.start_l0_backfill():
-            logger.info("L0 检索索引回填已发起（后台线程）")
-        # NP-0（plan personal-agent-memory §13.5）：叙事索引一次性迁移（重建 + 撞名处理，
-        # meta 标记只跑一次；失败静默——正文文件仍是唯一真相）。
-        if memory_brain.start_narrative_migration():
-            logger.info("叙事索引迁移已发起（后台线程）")
-    except Exception as e:
-        logger.warning("L0 回填发起失败（已忽略）: %s", e)
     yield
     # P1 工具插件：进程退出前依次调用各插件 shutdown()（异常吞掉，不阻断退出）。
     try:
@@ -186,8 +175,11 @@ app.include_router(system_router)
 app.include_router(settings_router)
 app.include_router(cron_router)
 app.include_router(audio_router)
-# ── Debug 模块挂载（可整体删除：删本行 + backend/api/routers/debug_api.py +
-#    前端 web/src/components/DebugPanel.tsx 与 web/src/api/debugApi.ts） ──
+# ── 记忆主人入口（H-6 P6-3：查看/纠正/遗忘，本地 tombstone 软删，不新增远端）──
+app.include_router(memory_router)
+# ── Debug 模块挂载（可整体删除：删本行 + backend/api/routers/debug_api.py、
+#    debug_memory_data.py + 前端 web/src/components/DebugPanel.tsx、
+#    web/src/components/debug/ 与 web/src/api/debugApi.ts） ──
 app.include_router(debug_router)
 
 

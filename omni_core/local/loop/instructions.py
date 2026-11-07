@@ -162,7 +162,7 @@ class InstructionMixin:
             # 使用规则，内容由模型经 memory_recall（及 P2 的 conversation_search）自取。
             # NP-2（plan personal-agent-memory §13.3.2）：叙事能力声明零内容化 + 「叙事
             # 不得转述到对外消息」；七工具配额口径统一。
-            parts.append(
+            _rules = (
                 "<memory-usage-rules>\n"
                 "长期记忆（你与主人的事实/规则/偏好/事件）不会自动提供给你，需要时自己查：\n"
                 "- 必查：被问过往事件、以前的约定、人物关系、主人的相关信息时，"
@@ -175,11 +175,27 @@ class InstructionMixin:
                 "- 叙事内容只供你自己参考——不得把日记/月记/对人的印象直接转述到对外消息"
                 "里，也不得把它们当成客观事实引用；\n"
                 "- 查不到就如实说「没有相关记录」；一个 run 内自取过往（memory_recall + "
-                "conversation_search + msg_group_history + read_scene + narrative_search + "
+                "conversation_search + 历史自取工具 + read_scene + narrative_search + "
                 "narrative_read）合计不超过 3 次，其中 narrative_* 不超过 2 次，"
                 "不要反复换关键词硬查；\n"
                 "- 与当前请求无关的记忆内容不要主动提及。\n"
                 "</memory-usage-rules>")
+            # P6-2（H-6 §16.3）表达节奏开关（缺省关）：开启时加一句「自我披露 / 把话
+            # 递回去」的分寸；关闭时稳定段逐字节不变（验收口径，不做主动闲聊）。
+            try:
+                import config as _cfg_mod
+                if (bool(_cfg_mod.get_config(
+                        "knowledge.narrative.we_memory.enabled", False))
+                        and bool(_cfg_mod.get_config(
+                            "knowledge.narrative.we_memory.rhythm", False))):
+                    _rules = _rules.replace(
+                        "</memory-usage-rules>",
+                        "- 聊到你们共同经历过的事时，可以用自己的口气自然提起，也可以把"
+                        "话递回去问问对方当时的感觉；不硬塞回忆、不为提起而提起。\n"
+                        "</memory-usage-rules>")
+            except Exception:
+                pass
+            parts.append(_rules)
             layers.append("memory_rules")
             try:
                 from omni_core.local import scene_executor

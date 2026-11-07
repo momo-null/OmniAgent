@@ -60,16 +60,15 @@ def brain(tmp_path, monkeypatch):
     from omni_core.local import scene_executor
     monkeypatch.setattr(scene_executor, "maybe_maintain", lambda *a, **k: None)
     # 巩固在后台线程跑，会抢占本测试的假 LLM 脚本 → 桩掉线程体（保留派发闸语义）
-    def _noop_run(cfg, persona):
+    def _noop_run(cfg):
         with memory_brain._dispatch_lock:
             memory_brain._dispatch_state["running"] = False
 
     monkeypatch.setattr(memory_brain, "_run_consolidation", _noop_run)
-    # persona 固定，避免依赖真实 config
+    # 固定配置读数，避免依赖真实 config（persona 配置键已随死维度清理退役）
     monkeypatch.setattr(memory_brain, "_cfg",
-                        lambda key, default=None: {"persona": "tangtang"}.get(
-                            key, default if default is not None
-                            else memory_brain._LTM_DEFAULTS.get(key)))
+                        lambda key, default=None: default if default is not None
+                        else memory_brain._LTM_DEFAULTS.get(key))
     return fake
 
 
@@ -78,7 +77,7 @@ def test_flush_writes_novel_atom_with_value_fields(brain):
     memory_brain.capture("p_test", "user", "以后改我代码前先跟我说方案")
     memory_brain.capture("p_test", "assistant", "好的记住了")
     stats = memory_brain.flush_brain("p_test", {"base_url": "http://x", "api_key": "k"},
-                                     source_task="t1", persona="tangtang")
+                                     source_task="t1")
     assert stats["extracted"] == 1 and stats["stored"] == 1
     conn = memory_brain.open_brain()
     row = conn.execute("SELECT content, kind, importance, persona, origin, state "
@@ -94,7 +93,7 @@ def test_blank_extraction_still_counts_flush(brain):
     brain.script = [{"facts": []}]
     memory_brain.capture("p", "user", "你好啊")
     memory_brain.capture("p", "assistant", "在的")
-    stats = memory_brain.flush_brain("p", {"base_url": "http://x"}, persona="tangtang")
+    stats = memory_brain.flush_brain("p", {"base_url": "http://x"})
     assert stats["extracted"] == 0
     conn = memory_brain.open_brain()
     cnt = conn.execute("SELECT v FROM meta WHERE k='flush_count'").fetchone()
@@ -106,7 +105,7 @@ def test_duplicate_strengthens_instead_of_new_row(brain):
     brain.script = [_extract("用户偏好先聊后动的工作方式"), _value("preference", 0.8)]
     memory_brain.capture("p", "user", "以后改我代码前先跟我说方案")
     memory_brain.capture("p", "assistant", "好")
-    memory_brain.flush_brain("p", {"base_url": "http://x"}, persona="tangtang")
+    memory_brain.flush_brain("p", {"base_url": "http://x"})
     conn = memory_brain.open_brain()
     rid = conn.execute("SELECT record_id FROM atoms").fetchone()[0]
     acc0 = conn.execute("SELECT access_count FROM atoms").fetchone()[0]
@@ -116,7 +115,7 @@ def test_duplicate_strengthens_instead_of_new_row(brain):
                     _decide("duplicate", target_id=rid)]
     memory_brain.capture("p", "user", "再次强调：以后改我代码前先跟我说方案")
     memory_brain.capture("p", "assistant", "嗯")
-    stats = memory_brain.flush_brain("p", {"base_url": "http://x"}, persona="tangtang")
+    stats = memory_brain.flush_brain("p", {"base_url": "http://x"})
     assert stats["duplicated"] == 1
     conn = memory_brain.open_brain()
     n = conn.execute("SELECT COUNT(*) FROM atoms").fetchone()[0]
@@ -131,7 +130,7 @@ def test_conflict_tombstones_old_row(brain):
     brain.script = [_extract("用户所在地是广州"), _value("fact", 0.7)]
     memory_brain.capture("p", "user", "用户所在地是广州")
     memory_brain.capture("p", "assistant", "好的")
-    memory_brain.flush_brain("p", {"base_url": "http://x"}, persona="tangtang")
+    memory_brain.flush_brain("p", {"base_url": "http://x"})
     conn = memory_brain.open_brain()
     rid = conn.execute("SELECT record_id FROM atoms").fetchone()[0]
     conn.close()
@@ -139,7 +138,7 @@ def test_conflict_tombstones_old_row(brain):
                     _decide("conflict", target_id=rid)]
     memory_brain.capture("p", "user", "我搬家了，现在所在地是上海")
     memory_brain.capture("p", "assistant", "记下了")
-    memory_brain.flush_brain("p", {"base_url": "http://x"}, persona="tangtang")
+    memory_brain.flush_brain("p", {"base_url": "http://x"})
     conn = memory_brain.open_brain()
     states = dict(conn.execute("SELECT record_id, state FROM atoms"))
     conn.close()
@@ -156,7 +155,7 @@ def test_overlong_merge_is_rejected_not_truncated(brain):
     brain.script = [_extract("改我代码前先给方案"), _value("rule", 0.9)]
     memory_brain.capture("p", "user", "改我代码前先给方案")
     memory_brain.capture("p", "assistant", "好")
-    memory_brain.flush_brain("p", {"base_url": "http://x"}, persona="tangtang")
+    memory_brain.flush_brain("p", {"base_url": "http://x"})
     conn = memory_brain.open_brain()
     rid, old = conn.execute("SELECT record_id, content FROM atoms").fetchone()
     conn.close()
@@ -164,7 +163,7 @@ def test_overlong_merge_is_rejected_not_truncated(brain):
                     _decide("merge", target_id=rid, merged="约" * 250)]
     memory_brain.capture("p", "user", "再补一句：改我代码前先给方案，并且要等我点头")
     memory_brain.capture("p", "assistant", "嗯")
-    stats = memory_brain.flush_brain("p", {"base_url": "http://x"}, persona="tangtang")
+    stats = memory_brain.flush_brain("p", {"base_url": "http://x"})
     assert stats["merged"] == 0 and stats["merge_rejected"] == 1
     conn = memory_brain.open_brain()
     rows = conn.execute("SELECT record_id, content, state FROM atoms").fetchall()
@@ -179,14 +178,14 @@ def test_search_persona_dead_dim_removed_and_reinforce(brain):
     """P2（plan personal-agent-memory §4.3）：persona 死维度清理——写入冻结（恒空）、
     过滤路径移除（单库单人格，INV-1）；召回即强化语义不变。"""
     rid = memory_brain.remember("糖糖的新闻简报来自四个来源", kind="fact",
-                                importance=0.8, persona="tangtang")
-    memory_brain.remember("中性记忆：项目在 D 盘", kind="fact", importance=0.6, persona="")
+                                importance=0.8)
+    memory_brain.remember("中性记忆：项目在 D 盘", kind="fact", importance=0.6)
     conn = memory_brain.open_brain()
     contents = dict(conn.execute("SELECT record_id, persona FROM atoms"))
     conn.close()
     assert all(v == "" for v in contents.values())   # persona 冻结恒空（含存量清空）
     # 过滤路径已移除：带 persona 查询与不带完全同结果（不再是 WHERE 条件）
-    hits = memory_brain.search_brain("新闻简报来源", persona="tangtang")
+    hits = memory_brain.search_brain("新闻简报来源")
     assert len(hits) == 1 and hits[0]["record_id"] == rid
     conn = memory_brain.open_brain()
     acc = conn.execute("SELECT access_count FROM atoms WHERE record_id=?",
@@ -206,7 +205,7 @@ def test_update_and_forget_tombstone(brain):
     rows = dict(conn.execute("SELECT record_id, state FROM atoms"))
     conn.close()
     assert rows[rid] == "tombstone" and rows[new_rid] == "tombstone"
-    assert memory_brain.search_brain("所在地", persona="tangtang") == []
+    assert memory_brain.search_brain("所在地") == []
 
 
 def test_low_importance_exact_match_survives_floor(brain):
@@ -216,7 +215,7 @@ def test_low_importance_exact_match_survives_floor(brain):
     for i in range(6):   # 语料太小 bm25 会退化（idf≈0），补无关条目还原真实量级
         memory_brain.remember(f"无关事实第{i}条：项目在D盘根目录", kind="fact",
                               importance=0.5)
-    hits = memory_brain.search_brain("便签 备忘录", persona="tangtang", reinforce=False)
+    hits = memory_brain.search_brain("便签 备忘录", reinforce=False)
     assert [h["record_id"] for h in hits] == [rid]
     assert hits[0]["score"] >= 0.30
 
@@ -232,19 +231,18 @@ def test_trigram_two_char_query_falls_back_to_like(brain, monkeypatch):
     """trigram 下纯 2 字 query 无 MATCH 也必须走 LIKE 兜底。
     P2：persona 隔离已随死维度清理移除（单库单人格，INV-1）——两条都召回。"""
     monkeypatch.setattr(memory_brain, "_fts_tokenizer", lambda: "trigram")
-    rid = memory_brain.remember("用户偏好把待办写在便签上", kind="fact", importance=0.8,
-                                persona="tangtang")
+    rid = memory_brain.remember("用户偏好把待办写在便签上", kind="fact", importance=0.8)
     other = memory_brain.remember("别人的便签习惯", kind="fact", importance=0.8,
-                                  persona="other")
+                                  )
     ids = [h["record_id"] for h in
-           memory_brain.search_brain("便签", persona="tangtang", reinforce=False)]
+           memory_brain.search_brain("便签", reinforce=False)]
     assert rid in ids and other in ids
 
 
 def test_consolidation_worker_runs_and_rescores(brain):
     """巩固 worker 全链路（备份→重算→写 meta），确保触发后真的能跑完不留 last_consolidation 空。"""
     rid = memory_brain.remember("用户偏好把待办写在便签上", kind="fact", importance=0.8)
-    memory_brain._consolidation_worker({"base_url": "http://x"}, "tangtang")
+    memory_brain._consolidation_worker({"base_url": "http://x"})
     conn = memory_brain.open_brain()
     last = conn.execute("SELECT v FROM meta WHERE k='last_consolidation'").fetchone()
     sal = conn.execute("SELECT salience FROM atoms WHERE record_id=?", (rid,)).fetchone()[0]
@@ -260,12 +258,12 @@ def test_consolidation_dispatch_not_deadlocked(brain, monkeypatch):
     import time as _t
     calls = []
 
-    def fake_worker(cfg, persona):
+    def fake_worker(cfg):
         calls.append(1)
 
-    def fake_run(cfg, persona):
+    def fake_run(cfg):
         try:
-            memory_brain._consolidation_worker(cfg, persona)
+            memory_brain._consolidation_worker(cfg)
         finally:
             with memory_brain._dispatch_lock:
                 memory_brain._dispatch_state["running"] = False
@@ -274,7 +272,7 @@ def test_consolidation_dispatch_not_deadlocked(brain, monkeypatch):
     monkeypatch.setattr(memory_brain, "_run_consolidation", fake_run)
     monkeypatch.setattr(memory_brain, "_consolidation_worker", fake_worker)
     memory_brain.remember("用户偏好把待办写在便签上", kind="fact", importance=0.8)
-    memory_brain.maybe_consolidate({"base_url": "http://x"}, "tangtang")
+    memory_brain.maybe_consolidate({"base_url": "http://x"})
     for _ in range(60):
         if calls:
             break
@@ -305,7 +303,7 @@ def test_flush_tags_peer_from_judge(brain):
     ]
     memory_brain.capture("p_peer", "user", "「成员甲」(999999): 你这话根本站不住脚")
     memory_brain.capture("p_peer", "assistant", "嫌难听还点，下次不叫了")
-    memory_brain.flush_brain("p_peer", {"base_url": "http://x"}, persona="tangtang")
+    memory_brain.flush_brain("p_peer", {"base_url": "http://x"})
     conn = memory_brain.open_brain()
     row = conn.execute("SELECT peer FROM atoms WHERE content LIKE '%嘲笑%'").fetchone()
     conn.close()
@@ -317,10 +315,10 @@ def test_search_peer_boost_not_filter(brain):
     now = memory_brain._now()
     memory_brain._insert_atom(conn, "rid-a", {"text": "成员甲 踩我语音", "kind": "episode",
                                               "importance": 0.6, "peer": "成员甲(999999)"},
-                              "", "qq", "t", now)
+                              "qq", "t", now)
     memory_brain._insert_atom(conn, "rid-b", {"text": "成员甲 踩我语音", "kind": "episode",
                                               "importance": 0.6, "peer": ""},
-                              "", "qq", "t", now)
+                              "qq", "t", now)
     conn.commit()
     hits = memory_brain.search_brain("成员甲 踩我语音", peer="成员甲(999999)", conn=conn)
     ids = [h["record_id"] for h in hits]
@@ -333,15 +331,14 @@ def test_inject_prefix_and_extract_peer(brain):
     conn = memory_brain.open_brain()
     memory_brain._insert_atom(conn, "rid-p", {"text": "成员甲 爱踩我语音", "kind": "rule",
                                               "importance": 0.9, "peer": "成员甲(999999)"},
-                              "", "qq", "t", memory_brain._now())
+                              "qq", "t", memory_brain._now())
     conn.commit()
     conn.close()
     q = "「成员甲」(999999) 又踩我，怎么回"
-    text, meta = memory_brain.inject_text_brain(query=q)
+    text, meta = memory_brain.inject_text_brain(query=q, peer="成员甲(999999)")
     assert "关于 成员甲(999999)：" in text
-    assert meta["peer"] == "成员甲(999999)"                 # 从 query 自动解析
-    assert memory_brain.extract_peer("先说「阿伟」(222333) 的事") == "阿伟(222333)"
-    assert memory_brain.extract_peer("没有标注的普通句子") == ""
+    assert meta["peer"] == "成员甲(999999)"                 # 结构化 peer 由调用方给
+    assert not hasattr(memory_brain, "extract_peer")       # 内核不再解析名片格式
 
 
 def test_consolidation_groups_by_peer(brain, monkeypatch):
@@ -352,11 +349,11 @@ def test_consolidation_groups_by_peer(brain, monkeypatch):
         memory_brain._insert_atom(conn, f"ep-a{i}",
                                   {"text": f"成员甲第{i}次踩我语音", "kind": "episode",
                                    "importance": 0.6, "peer": "成员甲(999999)"},
-                                  "", "qq", "t", now)
+                                  "qq", "t", now)
     memory_brain._insert_atom(conn, "ep-b0",
                               {"text": "成员甲第9次被我怼", "kind": "episode",
                                "importance": 0.6, "peer": ""},
-                              "", "qq", "t", now)
+                              "qq", "t", now)
     conn.commit()
     conn.close()
 
@@ -373,7 +370,7 @@ def test_consolidation_groups_by_peer(brain, monkeypatch):
         return {"rule": "成员甲 爱用语音踩我"}  # 抽象器
 
     monkeypatch.setattr(memory_brain.llm_judge, "chat_json", _router)
-    memory_brain._consolidate_impl({"base_url": "http://x"}, "tangtang")
+    memory_brain._consolidate_impl({"base_url": "http://x"})
     conn = memory_brain.open_brain()
     rules = conn.execute("SELECT content, peer FROM atoms WHERE kind='rule'").fetchall()
     conn.close()
@@ -435,28 +432,15 @@ def test_maintain_diary_writes_and_idempotent(brain):
     assert memory_brain.maintain_diary({"base_url": "http://x"}) == 0   # 幂等
 
 
-def test_peer_lines_group_by_uid_across_projects(monkeypatch, tmp_path):
-    """关系素材按 **uid** 跨项目/跨会话合并（人是跨场景的，不分群/不分项目）。"""
-    import json as _json
-
-    proj = tmp_path / "projects"
-    for pid, rows in {
-        "qq": [{"ts": memory_brain._now(), "role": "user",
-                "content": "「成员甲」(999999): 你这话站不住脚"},
-               {"ts": memory_brain._now(), "role": "assistant", "content": "嫌弃就别叫"}],
-        "wechat": [{"ts": memory_brain._now(), "role": "user",
-                    "content": "「成员甲」(999999): 又来问你一遍"}],
-    }.items():
-        d = proj / pid
-        d.mkdir(parents=True)
-        (d / "s_x.jsonl").write_text(
-            "\n".join(_json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
-            encoding="utf-8")
-    monkeypatch.setattr(memory_brain.rp, "projects_root", lambda: proj)
-
+def test_peer_lines_group_by_uid_across_projects(brain):
+    """关系素材按**结构化 speaker** 的 uid 跨会话合并，内核不解析文本格式。"""
+    for sid, text in (("s_x", "你这话站不住脚"), ("s_y", "又来问你一遍")):
+        memory_brain.index_l0_message(sid, "user", text,
+                                      context_key="group:10001",
+                                      speaker="成员甲(999999)")
     peers = memory_brain._peer_lines(limit_days=7)
     assert "999999" in peers
-    assert len(peers["999999"]["lines"]) == 2          # 两个项目的账并到一起
+    assert len(peers["999999"]["lines"]) == 2
     assert peers["999999"]["name"] == "成员甲"
 
 
@@ -591,3 +575,43 @@ def test_nav_includes_month_beyond_daily_window(brain):
     names = [e["filename"] for e in scene_executor.load_scene_nav("qq")]
     assert "diary-month-2026-09.md" in names                  # 月记全露（不挤 7 篇窗口）
     assert len([n for n in names if n.startswith("diary-2")]) == 7
+
+
+# ---- P6-2（H-6 §16.3）：关系卡共同经历标记 ----
+
+def test_relation_card_we_marker(monkeypatch, tmp_path):
+    """P6-2：关系卡素材出现配置参与人才标 we；开关关不标。"""
+    import sys
+    import types
+
+    from omni_core.local import runtime_paths as rp
+
+    monkeypatch.setattr(memory_brain, "enabled", lambda: True)
+    monkeypatch.setattr(memory_brain, "_BRAIN_PATH", str(tmp_path / "brain.db"))
+    table = {"knowledge.narrative.we_memory.enabled": True,
+             "knowledge.narrative.we_memory.participants": ["主人"]}
+    stub = types.ModuleType("config")
+    stub.get_config = lambda k, d=None: table.get(k, True)
+    monkeypatch.setitem(sys.modules, "config", stub)
+    monkeypatch.setattr(memory_brain, "_peer_lines", lambda days=7: {
+        "u1": {"name": "张三", "lines": ["主人带我去展馆，和张三聊了一路"] * 5}})
+    monkeypatch.setattr(memory_brain.llm_judge, "chat_json",
+                        lambda *a, **k: {"card": "一起看过展，聊得来。"})
+    assert memory_brain.maintain_relations({"base_url": "x", "model": "m"}, "") == 1
+    raw = (rp.global_relations() / "u1.md").read_text(encoding="utf-8")
+    assert 'we: ["主人"]' in raw
+    conn = memory_brain.open_brain()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM atoms").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    # 关 → 不标
+    stub2 = types.ModuleType("config")
+    stub2.get_config = lambda k, d=None: True
+    monkeypatch.setitem(sys.modules, "config", stub2)
+    monkeypatch.setattr(memory_brain, "_peer_lines", lambda days=7: {
+        "u2": {"name": "李四", "lines": ["主人带我去展馆，和李四聊了一路"] * 5}})
+    assert memory_brain.maintain_relations({"base_url": "x", "model": "m"}, "") == 1
+    raw2 = (rp.global_relations() / "u2.md").read_text(encoding="utf-8")
+    assert "\nwe:" not in raw2

@@ -23,15 +23,14 @@ from omni_core.tools.memory_tool import _brain, _brain_cfg, _is_external_source,
     _quota_block, note_self_fetch
 
 
-def _current_chat_id() -> str:
+def _current_context_key() -> str:
+    """当前场合键来自 run 级信号（边界层写入），内核不读通道句柄。"""
     try:
-        from gateway.channels import context as _ch
-        reply = _ch.get_current_reply()
-        if reply is not None:
-            return str(getattr(reply, "chat_id", "") or "")
+        from omni_core.local.loop import context_signal as _cs
+        return str((_cs.current() or {}).get("context_key")
+                   or _cs.boundary().get("context_key") or "")
     except Exception:
-        pass
-    return ""
+        return ""
 
 
 @function_tool(
@@ -41,7 +40,7 @@ def _current_chat_id() -> str:
                  "不带正文；要读全文用 narrative_read。日期用 YYYY-MM-DD（本地日历日）。"),
 )
 def narrative_search(query: str = "", kind: str = "", date_from: str = "",
-                     date_to: str = "", peer: str = "", chat_id: str = "",
+                     date_to: str = "", peer: str = "", context_key: str = "",
                      limit: int = 8) -> Dict[str, Any]:
     """检索叙事条目（不返回正文）。
 
@@ -49,8 +48,8 @@ def narrative_search(query: str = "", kind: str = "", date_from: str = "",
         query: 检索线索（关键词/短语；空 = 按日期区间浏览）。
         kind: diary(日记) | month(月记) | relation(印象卡)；空 = 全部。
         date_from / date_to: 本地日历日区间（含端点；空 = 不限）。
-        peer: 对象（名片(uid)）；关于 TA 的叙事加权（不过滤）。
-        chat_id: 场合键；同场合标注的叙事加权（不过滤，跨场合照样可召回）。
+        peer: 对象（结构化 peer 键）；关于 TA 的叙事加权（不过滤）。
+        context_key: 场合键；同场合标注的叙事加权（不过滤，跨场合照样可召回）。
         limit: 最多几条（1-20，缺省 8）。
     """
     b = _brain()
@@ -64,18 +63,18 @@ def narrative_search(query: str = "", kind: str = "", date_from: str = "",
                               date_from=str(date_from or "").strip(),
                               date_to=str(date_to or "").strip(),
                               peer=str(peer or "").strip(),
-                              chat_id=str(chat_id or "").strip(),
+                              context_key=str(context_key or "").strip(),
                               limit=int(limit or 8) if str(limit or "").strip() else 8)
     note_self_fetch(len(rows), str(rows[0]["doc_id"]) if rows else "",
                     tool="narrative_search")
     external = _is_external_source()
-    cur_chat = _current_chat_id()
+    cur_chat = _current_context_key()
     out = []
     for r in rows:
-        cross = bool(external and cur_chat and cur_chat not in (r.get("chat_ids") or []))
+        cross = bool(external and cur_chat and cur_chat not in (r.get("context_keys") or []))
         out.append({"doc_id": r["doc_id"], "kind": r["kind"], "date": r["date"],
                     "summary": r["summary"], "topics": r.get("topics") or [],
-                    "score": r["score"], "chat_ids": r.get("chat_ids") or [],
+                    "score": r["score"], "context_keys": r.get("context_keys") or [],
                     "peers": r.get("peers") or [], "cross_context": cross,
                     **({"project": r["project_id"]} if r.get("project_id") else {})})
     return {"ok": True, "count": len(out),
@@ -87,7 +86,7 @@ def narrative_search(query: str = "", kind: str = "", date_from: str = "",
 @function_tool(
     name="narrative_read",
     description=("读你自己一篇经历叙事的全文：日记（diary-YYYY-MM-DD.md）、月记"
-                 "（diary-month-YYYY-MM.md）或对某人的印象卡（uid）。"
+                 "（diary-month-YYYY-MM.md）或对某人的印象卡（对象标识）。"
                  "doc_id 来自 narrative_search 的结果。"),
 )
 def narrative_read(doc_id: str = "", kind: str = "") -> Dict[str, Any]:
@@ -108,9 +107,9 @@ def narrative_read(doc_id: str = "", kind: str = "") -> Dict[str, Any]:
         return core
     note_self_fetch(1, str(core.get("doc_id") or ""), tool="narrative_read")
     external = _is_external_source()
-    cur_chat = _current_chat_id()
-    chat_ids = core.get("chat_ids") or []
-    cross = bool(external and cur_chat and cur_chat not in chat_ids)
+    cur_chat = _current_context_key()
+    context_keys = core.get("context_keys") or []
+    cross = bool(external and cur_chat and cur_chat not in context_keys)
     text = str(core.get("text") or "")
     summary = str(core.get("summary") or "")
     result: Dict[str, Any] = {"ok": True, "kind": core["kind"], "doc_id": core["doc_id"],

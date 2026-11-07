@@ -56,6 +56,8 @@ class InboundMessage:
     # ``"wave"`` = 群旁听波次升格（无人点名，开口判定放行，见 gateway/group_presence.py）。
     # 网关/日志据此区分「被动的对话」与「主动的插话」。
     origin: str = "named"
+    # 结构化说话人（``name(uid)`` 由适配层归一）；内核只存储不解析文本格式。
+    speaker: str = ""
 
 
 @runtime_checkable

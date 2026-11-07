@@ -1,7 +1,7 @@
 """NP-1 测试锁（plan personal-agent-memory §8.5 NP-1 行 / §13.6）：
 
 - N-1  >7 天前的日记可由 narrative_search 命中（R6）；
-- N-2  同 query 两个 chat_id 排序有差异、两条都可召回（INV-3，core 面已在
+- N-2  同 query 两个 context_key 排序有差异、两条都可召回（INV-3，core 面已在
        test_memory_localtime 锁过，这里锁工具返回形态）；
 - N-7  explicit 白名单含两个新工具（群聊 run 可调用）；
 - N-10 外部来源：relation 不返回正文；跨场合叙事 cross_context=True；
@@ -42,11 +42,11 @@ def _seed(brain):
     mb.upsert_narrative_index("diary-2026-10-01.md", "diary", project_id="p",
                               date_from="2026-10-01", date_to="2026-10-01",
                               summary="那天的抬杠", topics=["抬杠", "白米饭"],
-                              chat_ids=["group:a"])
+                              context_keys=["group:a"])
     mb.upsert_narrative_index("diary-2026-10-02.md", "diary", project_id="p",
                               date_from="2026-10-02", date_to="2026-10-02",
                               summary="另一天的钓鱼", topics=["钓鱼"],
-                              chat_ids=["group:b"])
+                              context_keys=["group:b"])
     rel = __import__("omni_core.local.runtime_paths", fromlist=["global_relations"]) \
         .global_relations()
     rel.mkdir(parents=True, exist_ok=True)
@@ -71,16 +71,11 @@ def test_stale_diary_hit_via_tool(brain):
 
 # ---- N-10：出口约束（外部来源） ----
 
-class _Reply:
-    def __init__(self, chat_id):
-        self.chat_id = chat_id
-
-
-def _set_external(monkeypatch, chat_id, external=True):
-    from gateway.channels import context as ch
-    monkeypatch.setattr(ch, "_SOURCE_EXTERNAL", external, raising=False)
-    monkeypatch.setattr(ch, "_CURRENT_REPLY", _Reply(chat_id) if chat_id else None,
-                        raising=False)
+def _set_external(monkeypatch, context_key, external=True):
+    """边界层写入本轮结构；build_run 把它同步进 run 级信号。"""
+    from omni_core.local.loop import context_signal as cs
+    cs.set_boundary(context_key=context_key, source_external=external)
+    cs.build_run(context_key=context_key)
 
 
 def test_external_relation_summary_only(brain, monkeypatch):
@@ -149,7 +144,7 @@ def test_quota_enforced_within_run_scope(brain):
         for i in range(4):
             mb._insert_atom(conn, f"r{i}", {"text": f"白米饭记忆第{i}条",
                                             "kind": "fact", "importance": 0.6},
-                            "", "p", "t", mb._now())
+                            "p", "t", mb._now())
         conn.commit()
     finally:
         conn.close()

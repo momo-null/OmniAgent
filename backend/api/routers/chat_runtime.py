@@ -289,7 +289,12 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # 标 chat，context_signal 据此构造 <current-context>（与 QQ 通道同一套结构）。
         try:
             from gateway.channels import context as _gwctx
+            from omni_core.local.loop import context_signal as _cs
+            from omni_core.local.task_store import TaskStore as _TS
+            _sid = str((_TS.get(task_id) or {}).get("session_id") or "")
             _gwctx.set_source_kind("chat")
+            _cs.set_boundary(context_key=f"web:{_sid}", source_kind="chat",
+                             session_id=_sid, sent_count=_gwctx.sent_count)
         except Exception:
             pass
         _debug_push("task_init", {
@@ -400,7 +405,9 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # M1：清掉本轮进料道标注（进程级单值，防残留串进下一轮）
         try:
             from gateway.channels import context as _gwctx
+            from omni_core.local.loop import context_signal as _cs
             _gwctx.set_source_kind("")
+            _cs.set_boundary()
         except Exception:
             pass
         _finish_task(task_id, agent_id)

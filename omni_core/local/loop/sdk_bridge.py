@@ -81,27 +81,19 @@ def context_signal_run_id() -> str:
         return ""
 
 
-def _peek_reply():
-    """当前回发句柄（观测面只读；异常 → None）。"""
-    try:
-        from gateway.channels import context as _ch
-        return _ch.get_current_reply()
-    except Exception:
-        return None
-
-
 def _peek_source_kind() -> str:
+    """本轮进料道：由边界层写入 context_signal，内核不读通道句柄。"""
     try:
-        from gateway.channels import context as _ch
-        return str(_ch.get_source_kind() or "")
+        from omni_core.local.loop import context_signal as _cs
+        return str(_cs.boundary().get("source_kind") or "")
     except Exception:
         return ""
 
 
 def _peek_source_external() -> bool:
     try:
-        from gateway.channels import context as _ch
-        return bool(_ch.get_source_external())
+        from omni_core.local.loop import context_signal as _cs
+        return bool(_cs.boundary().get("source_external") or False)
     except Exception:
         return False
 
@@ -664,16 +656,19 @@ class SdkBridgeMixin:
         # （零查标记由此对出；lead-in 已下线，"注入了什么"看 memory_injected 轨迹）。
         # §8.3：主键 run_id / 进料道 / 是否外部 / 注入字符 / 发话与 LLM 调用一并落行。
         if _mt is not None:
-            _sent_n = 0
+            _sent_n, _ck = 0, ""
             try:
-                from gateway.channels import context as _ch
-                _sent_n = int(_ch.sent_count() or 0)
+                from omni_core.local.loop import context_signal as _cs
+                _b = _cs.boundary()
+                _fn = _b.get("sent_count")
+                _sent_n = int(_fn() or 0) if callable(_fn) else 0
+                _ck = str((_cs.current() or {}).get("context_key")
+                          or _b.get("context_key") or "")
             except Exception:
-                _sent_n = 0
-            _reply = _peek_reply()
+                pass
             _mt.log_recall_run(
                 project=TaskStore.project_of(str(getattr(spec, "task_id", "") or "")),
-                context_key=str(getattr(_reply, "chat_id", "") or "") if _reply else "",
+                context_key=_ck,
                 source_kind=_peek_source_kind(),
                 source_external=_peek_source_external(),
                 injected_context=bool(_mem_block),

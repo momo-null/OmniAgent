@@ -6,7 +6,7 @@
   （novel/duplicate/merge/conflict）→ brain.db；``search_brain`` 融合排序
   （relevance × importance × recency，active-only，inject_floor）+ 召回即强化；
   ``inject_text_brain`` 出 ``<relevant-memories>`` 文本（仅供工具/调试；每轮自动注入
-  已下线，见 plan memory-recall-2026-11-02 P1）；
+  已下线，见 implemented/memory-architecture.md §13.1）；
 - L2 场景块：机制与触发在 ``local/scene_executor.py``（本模块只在收尾时调 ``maybe_maintain``）；
 - L3 画像：``maintain_profile`` 由巩固周期驱动，把 brain.db 新 atoms 增量重写进
   ``user_profile.md``（读取在 local/knowledge_inject.py）。
@@ -54,7 +54,13 @@ CREATE TABLE IF NOT EXISTS atoms(
   superseded_by TEXT DEFAULT '',
   version     INTEGER NOT NULL DEFAULT 0,
   created     TEXT NOT NULL,
-  updated     TEXT NOT NULL
+  updated     TEXT NOT NULL,
+  peer        TEXT NOT NULL DEFAULT '',
+  context_key TEXT NOT NULL DEFAULT '',
+  source_kind TEXT NOT NULL DEFAULT 'dialogue',
+  observed_at TEXT DEFAULT '',
+  provenance  TEXT DEFAULT '',
+  review_after TEXT DEFAULT ''
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS atoms_fts USING fts5(
   content, record_id UNINDEXED, tokenize='{tokenizer}');
@@ -65,21 +71,23 @@ CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
 # P2（2026-11-02，plan memory-recall §P2）：L0 逐字检索副本，对齐原仓库 ``l0_conversations``
 # ——「写入时同步插一行到主库」，不是独立索引库。原会话 jsonl 继续作为文件真相，本表只是
 # 检索副本（可重建）；``kind`` 区分通道消息与任务输入（两者同为 role=user，防检索串味）。
-# 与原仓库的两处有意差异：① 多一列 ``session_id``——Web/API 会话没有 IM 的 chat_id，
+# 与原仓库的两处有意差异：① 多一列 ``session_id``——Web/API 会话没有 IM 群号，
 # 靠它定位「当前会话」；② 不建 ``timestamp``（消息原始时间戳）——我们只把消息落盘一次，
 # ``recorded_at`` 就是那个时间，再存一份空列是死字段。
 _L0_SCHEMA = """
 CREATE TABLE IF NOT EXISTS l0_messages(
   record_id   TEXT PRIMARY KEY,
-  chat_id     TEXT NOT NULL DEFAULT '',
+  context_key     TEXT NOT NULL DEFAULT '',
   session_id  TEXT NOT NULL DEFAULT '',
   kind        TEXT NOT NULL DEFAULT 'chat',
   role        TEXT NOT NULL DEFAULT 'user',
   speaker     TEXT NOT NULL DEFAULT '',
   text        TEXT NOT NULL,
-  recorded_at TEXT NOT NULL
+  recorded_at TEXT NOT NULL,
+  source_kind TEXT NOT NULL DEFAULT 'chat',
+  provenance  TEXT DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS idx_l0_chat_time ON l0_messages(chat_id, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_l0_context_time ON l0_messages(context_key, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_l0_session ON l0_messages(session_id, recorded_at);
 CREATE VIRTUAL TABLE IF NOT EXISTS l0_fts USING fts5(
   text, record_id UNINDEXED, tokenize='{tokenizer}');
@@ -100,8 +108,9 @@ CREATE TABLE IF NOT EXISTS narrative_index(
   time_to    TEXT DEFAULT '',
   summary    TEXT DEFAULT '',
   topics     TEXT DEFAULT '',
-  chat_ids   TEXT DEFAULT '',
+  context_keys   TEXT DEFAULT '',
   peers      TEXT DEFAULT '',
+  atmosphere TEXT DEFAULT '',
   date_basis TEXT DEFAULT '',
   updated    TEXT DEFAULT '',
   PRIMARY KEY(doc_id, kind)
@@ -111,18 +120,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS narrative_fts USING fts5(
 CREATE INDEX IF NOT EXISTS idx_narr_kind_date ON narrative_index(kind, date_from);
 """
 
-# 圈层语境链（plan §4.2 / §5.2，M3）：context_buffer 按 chat_id 累积通用信号（覆盖不
+# 圈层语境链（plan §4.2 / §5.2，M3）：context_buffer 按 context_key 累积通用信号（覆盖不
 # 追加）；circle_note 一行一场合（**索引键，非物理分区**，INV-2）——语境预期（聊什么/
 # 什么分寸/共同话题词面），不是可引用事实：永不进 atoms、不参与四态（INV-5）。
 _CONTEXT_SCHEMA = """
 CREATE TABLE IF NOT EXISTS context_buffer(
-  chat_id   TEXT PRIMARY KEY,
+  context_key   TEXT PRIMARY KEY,
   buffer    TEXT DEFAULT '',
   msg_count INTEGER DEFAULT 0,
   updated   TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS circle_note(
-  chat_id        TEXT PRIMARY KEY,
+  context_key        TEXT PRIMARY KEY,
   summary        TEXT DEFAULT '',
   topics         TEXT DEFAULT '',
   tone           TEXT DEFAULT '',
@@ -137,7 +146,6 @@ CREATE TABLE IF NOT EXISTS circle_note(
 """
 
 _LTM_DEFAULTS: Dict[str, Any] = {
-    "persona": "",
     "top_k": 5,          # P1（2026-11-02）：8→5，对齐原仓库 maxResults；工具返回同受此约束
     "inject_floor": 0.30,
     "rank_weights": {"relevance": 0.55, "salience": 0.30, "recency": 0.15},
@@ -362,17 +370,17 @@ _buffers: Dict[str, List[Dict[str, str]]] = {}  # pid -> [{role, content}]
 _buf_dropped: Dict[str, int] = {}               # pid -> 被切掉的消息条数
 
 
-def capture(project_id: str, role: str, content: str, chat_id: str = "") -> None:
+def capture(project_id: str, role: str, content: str, context_key: str = "") -> None:
     """会话消息入 buffer(不提炼;提炼在任务收尾 flush_brain 时批量做)。
 
-    ``chat_id``（§4.3）：这条消息来自哪个聊天窗口——只作 atoms 的**来源标注**
+    ``context_key``（§4.3）：这条消息属于哪个场合——只作 atoms 的**来源标注**
     （「在哪儿听来的」线索，供加权与共同背景召回），不参与过滤（INV-3）。
     """
     if not enabled() or not project_id:
         return
     with _buf_lock:
         buf = _buffers.setdefault(project_id, [])
-        buf.append({"role": role, "content": content, "chat_id": str(chat_id or "")})
+        buf.append({"role": role, "content": content, "context_key": str(context_key or "")})
         # 滚动切段：先按条数裁，再按字符裁（单条超长也吃得下，只要它在最新窗口里）
         dropped = 0
         while len(buf) > _CAPTURE_MAX_MSGS:
@@ -406,23 +414,7 @@ def pop_capture(project_id: str) -> List[Dict[str, str]]:
 # 表。jsonl 仍是文件真相，表只是检索副本（删表重跑 backfill 即还原，无数据损失）。
 
 _L0_TEXT_MAX = 600          # 单条索引文本上限（过程长文截断——检索要的是可定位，不是全文归档）
-_L0_SPEAKER_RE = None       # 惰性编译（见 _l0_speaker）
-_L0_CONN: Dict[str, Any] = {"path": "", "conn": None}   # 读写复用连接（见 _l0_conn）
-
-
-def _l0_speaker(text: str, role: str) -> str:
-    """群消息行首的「名片(uid)」「谁(1234): …」说话人标注 → speaker；其余为空。
-
-    assistant 不打 speaker（那是她自己）；私聊/任务输入也没有行首标注。
-    """
-    global _L0_SPEAKER_RE
-    if role != "user" or not text:
-        return ""
-    import re
-    if _L0_SPEAKER_RE is None:
-        _L0_SPEAKER_RE = re.compile(r"^\s*[「]?([^「」():\n]{1,32})[」]?\((\d{4,})\)\s*[:：]")
-    m = _L0_SPEAKER_RE.match(text)
-    return f"{m.group(1)}({m.group(2)})" if m else ""
+_L0_CONN: Dict[str, Any] = {"path": "", "conn": None}   # 进程级连接缓存（见 _l0_conn）
 
 
 def _l0_id(session_id: str, recorded_at: str, role: str, text: str) -> str:
@@ -449,9 +441,10 @@ def _l0_conn() -> sqlite3.Connection:
     return _L0_CONN["conn"]
 
 
-def index_l0_message(session_id: str, role: str, text: str, *, chat_id: str = "",
+def index_l0_message(session_id: str, role: str, text: str, *, context_key: str = "",
                      kind: str = "chat", recorded_at: str = "",
-                     source_kind: str = "", provenance: str = "") -> str:
+                     source_kind: str = "", provenance: str = "",
+                     speaker: str = "") -> str:
     """会话消息入 L0 检索表（写入即入表；任何异常静默——索引不打断主流程）。
 
     ``kind``：``chat``=通道消息，``task``=任务输入（cron/手动派发写进会话的那条 user 气泡）。
@@ -461,24 +454,26 @@ def index_l0_message(session_id: str, role: str, text: str, *, chat_id: str = ""
     返回 record_id；未启用/空文本/失败返回空串。
     """
     text = str(text or "").strip()
-    if not text or not enabled() or not (session_id or chat_id):
+    if not text or not enabled() or not (session_id or context_key):
         return ""
     kind = kind if kind in ("chat", "task") else "chat"
     if source_kind not in ("chat", "observation", "task"):
         source_kind = "task" if kind == "task" else "chat"
     role = role if role in ("user", "assistant", "system") else "user"
     now = recorded_at or _now()
+    # H-7：任何入口都不留空场合键；内核不假设渠道前缀，未给时以会话标识兜底。
+    context_key = str(context_key or "").strip() or str(session_id)
     body = text[:_L0_TEXT_MAX]
     rid = _l0_id(str(session_id or ""), now, role, body)
     try:
         with _lock:
             conn = _l0_conn()
             cur = conn.execute(
-                "INSERT OR IGNORE INTO l0_messages(record_id, chat_id, session_id, kind, "
+                "INSERT OR IGNORE INTO l0_messages(record_id, context_key, session_id, kind, "
                 "role, speaker, text, recorded_at, source_kind, provenance) "
                 "VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (rid, str(chat_id or ""), str(session_id or ""), kind, role,
-                 _l0_speaker(body, role), body, now,
+                (rid, str(context_key or ""), str(session_id or ""), kind, role,
+                 str(speaker or ""), body, now,
                  source_kind, str(provenance or "")[:200]))
             if cur.rowcount:
                 conn.execute("INSERT OR IGNORE INTO l0_fts(record_id, text) VALUES(?,?)",
@@ -489,27 +484,39 @@ def index_l0_message(session_id: str, role: str, text: str, *, chat_id: str = ""
         return ""
 
 
-def capture_observation(context_key: str, text: str, provenance: str = "",
+def _format_provenance(value: Any) -> str:
+    """结构化出处 → ``k=v|k=v`` 哈希串（不含真实账号 / URL 明文，由采集器填）。"""
+    if isinstance(value, dict):
+        return "|".join(f"{k}={value[k]}" for k in sorted(value)
+                        if value[k] not in (None, ""))
+    return str(value or "").strip()
+
+
+def capture_observation(context_key: str, text: str, provenance: Any,
                         observed_at: str = "", source_kind: str = "observation") -> str:
     """统一观察进料道**唯一入口**（§4.6 / §5.5，R8）：所有非对话来源（主动阅读 /
     检索结果 / 工具产出）都走它写入 ``l0_messages(source_kind=observation)``。
 
-    - 观察不直接写 atoms（INV-6）：升格只发生在巩固期价值判 / 四态，且写齐
-      §4.3 四字段（INV-14）；观察原文不进 ``conversation_search``（INV-13，
-      ``search_l0`` 只查 ``source_kind=chat``）。
-    - ``context_key`` 是结构化场合键（``group:<id>`` / ``private:<id>`` / 任务键），
-      内核不解析其语义（INV-4）；``provenance`` 是结构化来源指针，不含真实账号 /
-      URL 明文标识。
+    - 观察不直接写 atoms（INV-6）：见闻进叙事层；出处/时效四字段只作追溯
+      标注，不作升格门槛（INV-14 / H-5）；观察原文不进 ``conversation_search``
+      （INV-13，``search_l0`` 只查 ``source_kind=chat``）。
+    - ``context_key`` 是**一等通用场合键**（H-7）：取值由边界层归一，内核视为
+      不透明字符串、不解析其语义（INV-4）；无别名、不双写、不迁移旧列。
+    - ``provenance`` **必填**（H-7）：``platform/surface/actor/ref`` 哈希串或等价
+      字典，内核只透传不解析；缺出处不入库，避免再次出现「来源全空」。
     - 返回 record_id；未启用 / 空文本 / 失败返回空串（观察是增强项，静默）。
     """
     text = str(text or "").strip()
     if not text or not enabled() or not (context_key or "").strip():
         return ""
+    prov = _format_provenance(provenance)
+    if not prov:
+        return ""
     if source_kind not in ("observation", "task"):
         source_kind = "observation"
-    return index_l0_message("", "system", text, chat_id=str(context_key),
+    return index_l0_message("", "system", text, context_key=str(context_key),
                             kind="chat", recorded_at=observed_at or "",
-                            source_kind=source_kind, provenance=provenance)
+                            source_kind=source_kind, provenance=prov)
 
 
 def _l0_cutoff(days: Any) -> str:
@@ -520,11 +527,11 @@ def _l0_cutoff(days: Any) -> str:
     return (datetime.now(timezone.utc) - timedelta(days=d)).isoformat()
 
 
-def search_l0(keyword: str, *, chat_id: str = "", session_id: str = "",
+def search_l0(keyword: str, *, context_key: str = "", session_id: str = "",
               days: Any = 30, limit: int = 8, source_kind: str = "chat") -> List[Dict[str, Any]]:
-    """L0 逐字检索（FTS + 时间窗）→ ``[{when, who, role, text, chat_id, kind}]``，时间正序。
+    """L0 逐字检索（FTS + 时间窗）→ ``[{when, who, role, text, context_key, kind}]``，时间正序。
 
-    范围（ACL 由调用方决定，本函数只认参数）：传 ``chat_id`` / ``session_id`` = 只查该聊天窗口
+    范围（ACL 由调用方决定，本函数只认参数）：传 ``context_key`` / ``session_id`` = 只查该场合 / 会话
     （两个键取并集：实时写入行两个都有，回填行只有 session_id）；两者皆空 = 全部会话。
     ``source_kind``（INV-13）：缺省 ``chat``——「原始聊天记录」语义不含观察原文与
     任务输入；观察走 P5 的 ``observation_search``（同表按 ``source_kind=observation``）。
@@ -544,22 +551,21 @@ def search_l0(keyword: str, *, chat_id: str = "", session_id: str = "",
         except Exception:
             n = 8
         cutoff = _l0_cutoff(days)
-        # 「当前会话」有两个键：IM 的真实 chat_id（group:123/private:100）与会话文件名 session_id。
-        # 回填的老行只有 session_id、实时写入两个都有——范围条件取并集，否则回填历史查不到。
-        cid = str(chat_id or "")
+        # 范围条件：场合键与存储定位键取并集（部分来源只提供其中一个键）。
+        cid = str(context_key or "")
         sid = str(session_id or "")
         k1 = cid or sid
         k2 = sid or k1
         scope, params = "", []
         if k1:
-            scope = "AND (l.chat_id = ? OR l.session_id = ?)"
+            scope = "AND (l.context_key = ? OR l.session_id = ?)"
             params = [k1, k2]
         sk = str(source_kind or "").strip().lower()
         sk_sql, sk_params = "", []
         if sk in ("chat", "observation", "task"):
             sk_sql = "AND l.source_kind = ?"
             sk_params = [sk]
-        base = (f"SELECT l.record_id, l.chat_id, l.session_id, l.kind, l.role, l.speaker, "
+        base = (f"SELECT l.record_id, l.context_key, l.session_id, l.kind, l.role, l.speaker, "
                 f"l.text, l.recorded_at FROM l0_messages l "
                 f"JOIN l0_fts f ON f.record_id = l.record_id "
                 f"WHERE l0_fts MATCH ? AND l.recorded_at >= ? {scope} {sk_sql} "
@@ -580,13 +586,13 @@ def search_l0(keyword: str, *, chat_id: str = "", session_id: str = "",
                 return
             seen.add(rid)
             out.append({"id": rid, "when": row[7], "who": str(row[5] or ""), "role": row[4],
-                        "text": row[6], "chat_id": row[1], "kind": row[3]})
+                        "text": row[6], "context_key": row[1], "kind": row[3]})
 
         for row in rows:
             _push(row)
         # LIKE 兜底：2 字词在 trigram 降级模式下 MATCH 无结果（同 atoms 的老坑）
         for kw in like_terms:
-            lsql = ("SELECT l.record_id, l.chat_id, l.session_id, l.kind, l.role, l.speaker, "
+            lsql = ("SELECT l.record_id, l.context_key, l.session_id, l.kind, l.role, l.speaker, "
                     "l.text, l.recorded_at FROM l0_messages l WHERE l.text LIKE ? "
                     "AND l.recorded_at >= ? " + scope + " " + sk_sql
                     + " ORDER BY l.recorded_at DESC LIMIT ?")
@@ -602,97 +608,8 @@ def search_l0(keyword: str, *, chat_id: str = "", session_id: str = "",
         return []
 
 
-def backfill_l0_from_jsonl(force: bool = False) -> Dict[str, int]:
-    """一次性回填：把既有会话 jsonl 灌进 l0_messages（幂等，可重复跑）。
-
-    ``record_id`` 由 (session, ts, role, text) 派生，重复行自动忽略；跑完记 meta 标记，
-    下次调用（``force=False``）直接跳过。返回 ``{"rows": 新增数, "sessions": 会话数,
-    "skipped": 已回填过的跳过标记}``。
-    """
-    if not enabled():
-        return {"rows": 0, "sessions": 0, "skipped": 0}
-    if not force:
-        try:
-            row = _l0_conn().execute("SELECT v FROM meta WHERE k='l0_backfilled'").fetchone()
-            if row and str(row[0]) == "1":
-                return {"rows": 0, "sessions": 0, "skipped": 1}
-        except Exception:
-            pass
-    sessions = 0
-    try:
-        from omni_core.local import runtime_paths as _P
-
-        root = _P.projects_root()
-        # 会话 jsonl 的落点与 ProjectStore.list_sessions 同一口径：projects/<pid>/*.jsonl
-        sdirs = [d for d in root.glob("*/*.jsonl")] if root.is_dir() else []
-    except Exception:
-        return {"rows": 0, "sessions": 0, "skipped": 0}
-
-    def _count() -> int:
-        try:
-            return int(_l0_conn().execute("SELECT COUNT(*) FROM l0_messages").fetchone()[0])
-        except Exception:
-            return 0
-
-    n_before = _count()
-    for path in sdirs:
-        try:
-            sid = path.stem
-            for ln in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                if not ln.strip():
-                    continue
-                try:
-                    rec = json.loads(ln)
-                except Exception:
-                    continue
-                content = str(rec.get("content") or "").strip()
-                ex = rec.get("extra")
-                if not content or (isinstance(ex, dict) and ex.get("partial")):
-                    continue   # 半截增量过程记录不进索引（同一段回答会重复命中）
-                index_l0_message(sid, str(rec.get("role") or "user"), content,
-                                 recorded_at=str(rec.get("ts") or ""))
-            sessions += 1
-        except Exception:
-            continue
-    added = max(0, _count() - n_before)
-    try:
-        conn = _l0_conn()
-        conn.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('l0_backfilled','1')")
-        conn.commit()
-    except Exception:
-        pass
-    logger.info(f"backfill_l0: 会话 {sessions} 个，入表 {added} 行")
-    return {"rows": added, "sessions": sessions, "skipped": 0}
-
-
 _l0_backfill_started = threading.Lock()
 _l0_backfill_state: Dict[str, bool] = {"running": False}
-
-
-def start_l0_backfill() -> bool:
-    """后台发起一次性 L0 回填（服务启动调用；已在跑/已回填过则直接返回 False）。
-
-    MB 量级扫描不能压在启动路径上（首请求延迟），也不能压在消息路径上；
-    meta 里的 ``l0_backfilled`` 让它天然只跑一次。异常静默——索引缺失只是
-    conversation_search 查不到旧记录，不影响对话本身。
-    """
-    if not enabled():
-        return False
-    with _l0_backfill_started:
-        if _l0_backfill_state["running"]:
-            return False
-        _l0_backfill_state["running"] = True
-
-    def _go():
-        try:
-            backfill_l0_from_jsonl()
-        except Exception:
-            pass
-        finally:
-            _l0_backfill_state["running"] = False
-
-    threading.Thread(target=_go, name="l0-backfill", daemon=True).start()
-    return True
 
 
 _EXTRACT_SYSTEM = (
@@ -780,11 +697,46 @@ def _days_since(ts: str) -> float:
         return 0.0
 
 
+#: H-7 schema 闸门：版本不符 = 旧库，直接重建（数据全丢弃，不迁移 / 不双写 / 不留别名）。
+#: 这不是兼容层——不读旧行、不 ALTER 补列、不提供转换脚本，只做「丢掉重来」。
+_SCHEMA_VERSION = "h8"
+_BRAIN_TABLES = ("atoms_fts", "atoms", "l0_fts", "l0_messages",
+                 "narrative_fts", "narrative_index", "context_buffer",
+                 "circle_note", "meta")
+
+
+def _brain_schema_is_current(conn: sqlite3.Connection) -> bool:
+    try:
+        row = conn.execute("SELECT v FROM meta WHERE k='schema_version'").fetchone()
+        return bool(row) and str(row[0]) == _SCHEMA_VERSION
+    except Exception:
+        return False
+
+
+def _rebuild_brain_schema(conn: sqlite3.Connection) -> None:
+    """旧库一律丢弃重建；同时让 L0 的进程级连接缓存失效，避免继续用旧句柄。"""
+    for table in _BRAIN_TABLES:
+        try:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        except Exception:
+            pass
+    conn.commit()
+    old = _L0_CONN.get("conn")
+    if old is not None and old is not conn:
+        try:
+            old.close()
+        except Exception:
+            pass
+    _L0_CONN.update({"path": "", "conn": None})
+
+
 def open_brain() -> sqlite3.Connection:
-    """打开/初始化 brain.db（schema v2，分词器随全局配置；重建自动回填）。"""
+    """打开/初始化 brain.db（H-8：列全在 DDL，版本不符即重建空库，零兼容）。"""
     os.makedirs(os.path.dirname(_BRAIN_PATH), exist_ok=True)
     conn = sqlite3.connect(_BRAIN_PATH, check_same_thread=False)
     conn.executescript("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;")
+    if not _brain_schema_is_current(conn):
+        _rebuild_brain_schema(conn)
     tok = _fts_tokenizer()
     if tok == "simple":
         _ensure_simple_ext(conn)
@@ -792,73 +744,15 @@ def open_brain() -> sqlite3.Connection:
     conn.executescript(_L0_SCHEMA.format(tokenizer=tok))
     conn.executescript(_NARRATIVE_SCHEMA.format(tokenizer=tok))
     conn.executescript(_CONTEXT_SCHEMA)
-    _ensure_peer_column(conn)
-    _ensure_atom_source_columns(conn)
-    _ensure_l0_source_columns(conn)
-    _ensure_dead_dims_cleaned(conn)
     _l0_fts_ok(conn)
     _narr_fts_ok(conn)
+    _meta_set(conn, "schema_version", _SCHEMA_VERSION)
     conn.commit()
     return conn
 
 
-def _ensure_dead_dims_cleaned(conn: sqlite3.Connection) -> None:
-    """P2 死维度一次性清理（plan §4.3 / §7.2-8；meta ``p2_dead_dims_cleaned`` 只跑一次）：
-
-    - ``owner`` 列：多租户遗产（三分档全写同一值且从不读）→ **整列移除**；
-    - ``persona``：生产链路恒空 → 冻结（存量值清空；列保留保 schema 稳定，写入恒空）。
-    """
-    try:
-        row = conn.execute("SELECT v FROM meta WHERE k='p2_dead_dims_cleaned'").fetchone()
-        if row and str(row[0]) == "1":
-            return
-        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(atoms)").fetchall()}
-        if "owner" in cols:
-            conn.execute("ALTER TABLE atoms DROP COLUMN owner")
-        conn.execute("UPDATE atoms SET persona='' WHERE persona != ''")
-        conn.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('p2_dead_dims_cleaned','1')")
-        conn.commit()
-    except Exception:
-        pass
 
 
-#: §4.3 出处/时效五列（NP-0 结构，P5 才有采集器来喂）：全部可空、老数据按缺省。
-#: ``chat_id`` 是来源标注列，只用于加权与共同背景召回，不用于过滤（INV-3，
-#: **禁止**写成 SQL 的 WHERE 条件）；``source_kind`` 区分知识来源（owner 显式 /
-#: dialogue 对话提炼 / observation 外部观察升格）；``observed_at``/``provenance``/
-#: ``review_after`` 是观察型事实的时效与追溯四件套（INV-14，provenance 是结构化
-#: 指针，不含真实账号 / URL 明文标识）。
-_ATOM_SOURCE_COLUMNS = ("chat_id", "source_kind", "observed_at", "provenance", "review_after")
-_L0_SOURCE_COLUMNS = ("source_kind", "provenance")
-
-
-def _ensure_columns(conn: sqlite3.Connection, table: str, columns: Dict[str, str]) -> None:
-    """按需 ALTER 补列（幂等；失败静默——schema 迁移不得阻断打开路径）。"""
-    try:
-        cols = {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-        for name, decl in columns.items():
-            if name not in cols:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
-        conn.commit()
-    except Exception:
-        pass
-
-
-def _ensure_atom_source_columns(conn: sqlite3.Connection) -> None:
-    _ensure_columns(conn, "atoms", {
-        "chat_id": "TEXT NOT NULL DEFAULT ''",
-        "source_kind": "TEXT NOT NULL DEFAULT 'dialogue'",
-        "observed_at": "TEXT DEFAULT ''",
-        "provenance": "TEXT DEFAULT ''",
-        "review_after": "TEXT DEFAULT ''",
-    })
-
-
-def _ensure_l0_source_columns(conn: sqlite3.Connection) -> None:
-    _ensure_columns(conn, "l0_messages", {
-        "source_kind": "TEXT NOT NULL DEFAULT 'chat'",
-        "provenance": "TEXT DEFAULT ''",
-    })
 
 
 def _l0_fts_ok(conn: sqlite3.Connection) -> bool:
@@ -896,7 +790,7 @@ def _narr_fts_ok(conn: sqlite3.Connection) -> bool:
     """narrative_fts 就绪（分词器换版即重建 + 从 narrative_index 回填）；失败 False。
 
     与 ``_fts_ok`` 同款：FTS5 无 ALTER，只能 DROP 重建；重建不回填 = 索引恒空（老坑）。
-    search_text = summary + topics（topics 从 JSON 列解析；**不存正文**，INV-12）。
+    search_text = summary + topics + atmosphere（P6-1 可回味词面；**不存正文**，INV-12）。
     """
     try:
         tok = _fts_tokenizer()
@@ -906,7 +800,7 @@ def _narr_fts_ok(conn: sqlite3.Connection) -> bool:
             ver = row[0] if row else None
         except Exception:
             pass
-        target = f"{tok}-1"
+        target = f"{tok}-2"
         if ver != target:
             conn.execute("DROP TABLE IF EXISTS narrative_fts")
             conn.execute("CREATE VIRTUAL TABLE narrative_fts USING fts5("
@@ -914,10 +808,12 @@ def _narr_fts_ok(conn: sqlite3.Connection) -> bool:
                          "tokenize='" + tok + "')")
             try:
                 rows = conn.execute(
-                    "SELECT doc_id, kind, summary, topics FROM narrative_index").fetchall()
-                for doc_id, kind, summary, topics in rows:
+                    "SELECT doc_id, kind, summary, topics, atmosphere "
+                    "FROM narrative_index").fetchall()
+                for doc_id, kind, summary, topics, atmosphere in rows:
                     tlist = _json_list(topics)
-                    search_text = (str(summary or "") + " " + " ".join(tlist)).strip()
+                    search_text = (str(summary or "") + " " + " ".join(tlist) + " "
+                                   + str(atmosphere or "")).strip()
                     if search_text:
                         conn.execute("INSERT INTO narrative_fts(search_text, doc_id, kind) "
                                      "VALUES(?,?,?)", (search_text[:400], doc_id, kind))
@@ -931,39 +827,6 @@ def _narr_fts_ok(conn: sqlite3.Connection) -> bool:
         return False
 
 
-def _ensure_peer_column(conn: sqlite3.Connection) -> None:
-    """peer 归属列（plan persona-social-memory M3）：这条记忆「关于谁」——「名片(uid)」。
-
-    空 = 无特定对象（全局事实，读链不加权）。蒸馏写链从 L0 消息自带的「名片(uid): 」
-    标注解析（judge 输出）；解析失败保守置空（= 退化为现行为）。老库 ALTER 补列。
-    """
-    try:
-        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(atoms)").fetchall()}
-        if "peer" not in cols:
-            conn.execute("ALTER TABLE atoms ADD COLUMN peer TEXT NOT NULL DEFAULT ''")
-            conn.commit()
-    except Exception:
-        pass
-
-
-_PEER_RE = None  # 惰性编译（见 extract_peer）
-
-
-def extract_peer(text: str) -> str:
-    """从文本里解析最近的「名片(uid)」来源标注（M1 格式）→ peer 键。
-
-    读链召回的 peer 线索来源：检索 query 里出现谁，关于 TA 的记忆加权。
-    解析不到返回空串（= 不加权，行为同无 peer 维度）。取**最后一个**命中——
-    消息结尾处的对象最可能是当前交流对象。
-    """
-    global _PEER_RE
-    if _PEER_RE is None:
-        import re
-        _PEER_RE = re.compile(r"[「]?([^「」():\n]{1,32})[」]?\((\d{4,})\)")
-    last = ""
-    for m in _PEER_RE.finditer(text or ""):
-        last = f"{m.group(1)}({m.group(2)})"
-    return last
 
 
 # ---- 写链：flush → 两段判 → 落库 ----
@@ -976,8 +839,8 @@ _VALUE_SYSTEM = (
     "值得跨会话保留的事实/偏好/规律/事件 → keep=true 并给 kind 与 importance。"
     "kind:fact(客观事实)|preference(用户长期偏好)|rule(规律/纪律/流程)|episode(具体事件片段)。"
     "importance:0~1(影响世界/跨会话成立/用户强偏好→高;临时性/局部细节→低)。"
-    "peer:这条事实关于谁——对话摘要里带「名片(uid): 」标注的发言人,提取该事实所指对象的"
-    "「名片(uid)」原文(如「成员甲(999)」);assistant 自己的话不打 peer;"
+    "peer:这条事实关于谁——取素材里的结构化 speaker 字段作为该事实所指对象的"
+    "结构化 speaker 原文;assistant 自己的话不打 peer;"
     "泛指多人/关于用户本人整体/无明确对象 → 留空 \"\"。"
     '只返回 JSON:{"items": [{"idx": 序号, "keep": true, "kind": "fact", "importance": 0.5, "peer": ""}]}'
 )
@@ -999,7 +862,7 @@ _CONSIST_SYSTEM = (
     "禁止项都还在 → merge(返回 target_id 与 merged_content,≤100 字);"
     "与某条矛盾且新信息更可信 → conflict(返回 target_id,旧条将作废、新条入库);"
     "是新信息 → novel。"
-    "**跨适用域不许 merge**——把「群聊里怎么说话」和「本机某个工程事实」并成一条，"
+    "**跨适用域不许 merge**——把某个场合的表达惯例和一条工程事实并成一条，"
     "等于写出谁也用不上的大话;这种情况返回 novel,让它们各自成条。"
     "并完会丢掉某一方的条件、或需要把两条改写成更笼统的一句话才装得下 → novel。"
     "拿不准 → novel。"
@@ -1008,15 +871,15 @@ _CONSIST_SYSTEM = (
 )
 
 
-def _majority_chat_id(msgs: List[Dict[str, str]]) -> str:
-    """buffer 消息的多数派 ``chat_id``（atoms 来源标注，§4.3）。
+def _majority_context_key(msgs: List[Dict[str, str]]) -> str:
+    """buffer 消息的多数派 ``context_key``（atoms 来源标注，§4.3）。
 
-    一轮 flush 的消息可能来自同一窗口（群聊/私聊）；个别消息缺标注（Web/cron）
+    一轮 flush 的消息可能来自同一场合；个别消息缺结构化标注
     不影响多数派。没有可用的返回空串（= 无场合线索，读链不加权）。
     """
     counts: Dict[str, int] = {}
     for m in msgs or []:
-        cid = str((m or {}).get("chat_id") or "").strip()
+        cid = str((m or {}).get("context_key") or "").strip()
         if cid:
             counts[cid] = counts.get(cid, 0) + 1
     if not counts:
@@ -1025,7 +888,7 @@ def _majority_chat_id(msgs: List[Dict[str, str]]) -> str:
 
 
 def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
-                source_task: str = "", persona: str = "",
+                source_task: str = "",
                 msgs: Optional[List[Dict[str, str]]] = None,
                 allow_write: bool = True,
                 allow_atoms: bool = True) -> Dict[str, int]:
@@ -1035,11 +898,10 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
         msgs: 已从 capture 缓冲取走的消息（异步写链在入队时取走，worker 后续消费）。
             ``None`` = 就地 pop（同步路径 / 测试）。
         allow_write: 本轮是否"真的干了活"（did_work），透传给 L2 维护。
-        allow_atoms: 是否允许产 L1 原子。**社交流水（群聊等）传 False**：他人可控文本
-            不进长期事实库（防闲聊淹没、玩笑被当事实、以及提示注入沉淀成记忆投毒），
-            只走叙事层沉淀（场景块 + 巩固 → 日记）。顺带省掉 3 次 LLM。
+        allow_atoms: 是否允许产 L1 原子。**经历类轮次传 False**：那些是经历、不是约定，
+            只走叙事层、不进事实层（INV-6）；不是来源可信度判断，
+            叙事层 = 场景块 + 巩固 → 日记；顺带省掉 3 次 LLM。
     """
-    persona = persona or str(_cfg("persona") or "")
     stats: Dict[str, int] = {"extracted": 0, "kept": 0, "stored": 0, "duplicated": 0,
                              "merged": 0, "merge_rejected": 0, "conflict": 0, "dropped": 0}
     msgs = pop_capture(project_id) if msgs is None else msgs
@@ -1050,7 +912,7 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
         # 只沉淀叙事层：巩固调度（日记从这里来），L1 一字不写。这一轮不产原子，
         # 所以 L2 场景维护天然没有进料——maybe_maintain 取到零增量就直接跳过，不调 LLM。
         stats["l1_skipped"] = 1
-        _flush_tail(project_id, brain_cfg, stats, persona, allow_write, msgs=msgs)
+        _flush_tail(project_id, brain_cfg, stats, allow_write, msgs=msgs)
         return stats
     try:
         atoms, _note = _extract_detail(digest, brain_cfg)
@@ -1061,7 +923,7 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
     if not atoms:
         # 白卷也是"收尾了一次"：巩固的 flush 计数与触发不能只挂在非空提炼上，
         # 否则语音/闲聊为主的会话永远攒不到巩固条件
-        _flush_tail(project_id, brain_cfg, stats, persona, allow_write, msgs=msgs)
+        _flush_tail(project_id, brain_cfg, stats, allow_write, msgs=msgs)
         return stats
 
     # 第一段：价值 / kind / importance（一次批量 LLM）
@@ -1079,7 +941,7 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
         items = [{"idx": i, "keep": True, "kind": "fact", "importance": 0.5}
                  for i in range(len(atoms))]
     kept: List[Tuple[int, Dict[str, Any]]] = []
-    _atom_chat = _majority_chat_id(msgs)   # 来源标注（INV-3：只标注不过滤）
+    _atom_chat = _majority_context_key(msgs)   # 来源标注（INV-3：只标注不过滤）
     for it in items:
         try:
             idx = int(it.get("idx"))
@@ -1099,20 +961,20 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
         peer = str(it.get("peer") or "").strip()[:80]
         kept.append((idx, {"text": str(atoms[idx].get("text", ""))[:_MAX_ATOM_CHARS],
                            "kind": kind, "importance": imp, "peer": peer,
-                           "chat_id": _atom_chat, "source_kind": "dialogue"}))
+                           "context_key": _atom_chat, "source_kind": "dialogue"}))
     stats["kept"] = len(kept)
     if not kept:
         # 一条都没留下也要走收尾：巩固的触发不该被"这轮没沉淀事实"卡住
         # （闲聊/全部被判为一次性 也是"收尾了一次"，同白卷分支口径）。
         # L2 这趟通常空转（本轮无新原子），但历史积压的增量要靠这里被带走。
-        _flush_tail(project_id, brain_cfg, stats, persona, allow_write, msgs=msgs)
+        _flush_tail(project_id, brain_cfg, stats, allow_write, msgs=msgs)
         return stats
 
     # 第二段：一致性四态（候选 = 各条 top-3 并集，一次批量 LLM）
     conn = open_brain()
     cand_pool: Dict[str, str] = {}
     for _, it in kept:
-        for h in search_brain(it["text"], persona=persona, k=3, reinforce=False, conn=conn):
+        for h in search_brain(it["text"], k=3, reinforce=False, conn=conn):
             cand_pool[str(h["record_id"])] = h["content"]
     decisions: Dict[int, Dict[str, Any]] = {}
     if cand_pool:
@@ -1151,7 +1013,7 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
             if len(raw) > _MAX_ATOM_CHARS:
                 # 超线 = 模型把两个域并成了一条大话。静默截断会砍掉后半句，所以拒并：
                 # 旧条一字不动、新条独立入库，下一轮巩固再判（2026-11-03，见 §5 不变量 6）
-                _insert_atom(conn, rid, it, persona, project_id, source_task, now)
+                _insert_atom(conn, rid, it, project_id, source_task, now)
                 stats["stored"] += 1
                 stats["merge_rejected"] += 1
             else:
@@ -1164,22 +1026,22 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
         elif action == "conflict":
             conn.execute("UPDATE atoms SET state='tombstone', superseded_by=?, updated=? "
                          "WHERE record_id=?", (rid, now, str(d.get("target_id"))))
-            _insert_atom(conn, rid, it, persona, project_id, source_task, now)
+            _insert_atom(conn, rid, it, project_id, source_task, now)
             stats["conflict"] += 1
         else:
-            _insert_atom(conn, rid, it, persona, project_id, source_task, now)
+            _insert_atom(conn, rid, it, project_id, source_task, now)
             stats["stored"] += 1
         applied += 1
     conn.commit()
     conn.close()
     stats["applied"] = applied
 
-    _flush_tail(project_id, brain_cfg, stats, persona, allow_write, msgs=msgs)
+    _flush_tail(project_id, brain_cfg, stats, allow_write, msgs=msgs)
     return stats
 
 
 def _flush_tail(project_id: str, brain_cfg: Optional[Dict[str, Any]],
-                stats: Dict[str, int], persona: str, allow_write: bool,
+                stats: Dict[str, int], allow_write: bool,
                 msgs: Optional[List[Dict[str, str]]] = None) -> None:
     """收尾公共尾段：L2 维护（受 did_work 门控）+ 巩固调度 + 语境链（M3）。
 
@@ -1199,17 +1061,17 @@ def _flush_tail(project_id: str, brain_cfg: Optional[Dict[str, Any]],
         chats: List[str] = []
         by_chat: Dict[str, List[str]] = {}
         for m in (msgs or []):
-            cid = str((m or {}).get("chat_id") or "").strip()
+            cid = str((m or {}).get("context_key") or "").strip()
             if cid:
                 by_chat.setdefault(cid, []).append(str(m.get("content") or ""))
         for cid, texts in by_chat.items():
             update_context_buffer(cid, texts, source_kind="chat")
             chats.append(cid)
         if chats:
-            run_context_reflections(brain_cfg, persona, chats=chats)
+            run_context_reflections(brain_cfg, chats=chats)
     except Exception:
         pass
-    maybe_consolidate(brain_cfg, persona)
+    maybe_consolidate(brain_cfg)
 
 
 def _new_id() -> str:
@@ -1233,25 +1095,25 @@ def _fts_upsert(conn: sqlite3.Connection, record_id: str, content: str) -> None:
 
 
 def _insert_atom(conn: sqlite3.Connection, rid: str, it: Dict[str, Any],
-                 persona: str, origin: str, source_task: str, now: str) -> None:
+                 origin: str, source_task: str, now: str) -> None:
     """落一条 atom（四态裁决后的唯一写点）。
 
-    §4.3 出处/时效列：``chat_id`` 取 buffer 多数派（来源标注，不过滤）；
-    ``source_kind`` 缺省 ``dialogue``（观察升格走 ``_insert_observation_atom``）；
-    ``observed_at``/``provenance``/``review_after`` 观察型事实才带。
-    P2（死维度清理）：``persona`` 冻结（写入恒空串；形参保留仅为调用兼容），
-    ``owner`` 列已随多租户遗产整体移除。
+    §4.3 出处/时效列：``context_key`` 取 buffer 多数派（来源标注，不过滤）；
+    ``source_kind`` 缺省 ``dialogue``；``observed_at``/``provenance``/
+    ``review_after`` 只作可选追溯标注，不参与准入与打分（INV-14 / H-5）。
+    P2/P4（死维度清理）：``persona`` 列冻结（写入恒空串、形参链已移除，
+    §8.5 待补④）；``owner`` 列已随多租户遗产整体移除。
     """
     conn.execute("INSERT OR REPLACE INTO atoms(record_id, content, kind, persona, origin, "
                  "source_task, importance, salience, access_count, last_access, state, "
-                 "version, created, updated, peer, chat_id, source_kind, "
+                 "version, created, updated, peer, context_key, source_kind, "
                  "observed_at, provenance, review_after) "
                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                  (rid, it["text"], it.get("kind", "fact"), "", origin or "",
                   source_task or "", float(it.get("importance", 0.5)),
                   float(it.get("importance", 0.5)), 0, "", "active", 1, now, now,
                   str(it.get("peer") or ""),
-                  str(it.get("chat_id") or ""), str(it.get("source_kind") or "dialogue"),
+                  str(it.get("context_key") or ""), str(it.get("source_kind") or "dialogue"),
                   str(it.get("observed_at") or ""), str(it.get("provenance") or ""),
                   str(it.get("review_after") or "")))
     _fts_upsert(conn, rid, it["text"])
@@ -1296,19 +1158,19 @@ def _query_terms(query: str) -> List[str]:
 _recent_ring: deque = deque(maxlen=64)
 
 
-def search_brain(query: str, persona: str = "", k: Optional[int] = None,
+def search_brain(query: str, k: Optional[int] = None,
                  reinforce: bool = True,
                  conn: Optional[sqlite3.Connection] = None,
-                 peer: str = "", chat_id: str = "") -> List[Dict[str, Any]]:
+                 peer: str = "", context_key: str = "") -> List[Dict[str, Any]]:
     """融合排序检索：relevance(bm25) × importance × recency，active-only，floor 过滤。
 
     salience 不再衰减（P7，2026-11-02，对齐原仓库 priority 语义）：排序中直接取
     importance 字段值；dormant/archived 状态机已删除，state 只剩 active/tombstone。
-    peer（可选，M3）：当前对话对象「名片(uid)」——关于 TA 的记忆终分加权（×1.25，
+    peer（可选，M3）：当前对话对象（结构化键）——关于 TA 的记忆终分加权（×1.25，
     **不是过滤**：全局事实照常召回）；不传 = 行为与无 peer 维度时一致。
-    chat_id（可选，M2，§6.2）：当前场合键——同场合标注的 atoms 加权 ×(1+w_ctx)、
+    context_key（可选，M2，§6.2）：当前场合键——同场合标注的 atoms 加权 ×(1+w_ctx)、
     与圈层共同话题词面相交的再加 ×(1+w_bg)。**加权不过滤**（INV-3）：跨场合记忆
-    照常召回，只是排得靠后；``chat_id`` 绝不出现在 SQL WHERE 里。
+    照常召回，只是排得靠后；``context_key`` 绝不出现在 SQL WHERE 里。
     """
     if not (query or "").strip():
         return []
@@ -1332,21 +1194,21 @@ def search_brain(query: str, persona: str = "", k: Optional[int] = None,
         w_bg = max(0.0, float(_ctx_cfg("w_bg", 0.10)))
         # 圈层共同话题词面（R8）：一次取好，逐条比对；取不到 = 无背景加权（词面为空）
         circle_topics: List[str] = []
-        if chat_id:
+        if context_key:
             try:
                 circle_topics = [str(t).lower() for t in
-                                 (get_circle_note(chat_id) or {}).get("topics") or [] if t]
+                                 (get_circle_note(context_key) or {}).get("topics") or [] if t]
             except Exception:
                 circle_topics = []
         states = "('active')"
-        # P2：persona 过滤已移除（死维度——生产链路恒空，过滤路径从未生效）；
-        # ``persona`` 形参保留仅为调用兼容，不再参与任何 SQL。
+        # P2/P4：persona 过滤已移除（死维度——生产链路恒空，过滤路径从未生效，
+        # 形参链亦已移除）；单库单人格（INV-1）。
         rows: List[Any] = []
         if match:
             params: List[Any] = [match, max(k * 3, 15)]
             rows = c.execute(
                 f"SELECT f.record_id, a.content, bm25(atoms_fts) AS r, a.kind, a.importance, "
-                f"a.access_count, a.updated, a.last_access, a.peer, a.chat_id FROM atoms_fts f "
+                f"a.access_count, a.updated, a.last_access, a.peer, a.context_key FROM atoms_fts f "
                 f"JOIN atoms a ON a.record_id = f.record_id "
                 f"WHERE atoms_fts MATCH ? AND a.state IN {states} "
                 f"ORDER BY r LIMIT ?", tuple(params)).fetchall()
@@ -1381,7 +1243,7 @@ def search_brain(query: str, persona: str = "", k: Optional[int] = None,
             rec = pow(2.718281828459045, -_days_since(last_touch) / 180.0)
             final = w_r * rel + w_s * sal + w_t * rec
             ctx_hit = False
-            if chat_id and str(ach or "") == str(chat_id):
+            if context_key and str(ach or "") == str(context_key):
                 ctx_hit = True
                 final = min(final * (1.0 + w_ctx), 1.5)   # 当前场合：加权不过滤（INV-3）
                 if circle_topics and any(t in cl for t in circle_topics):
@@ -1394,7 +1256,7 @@ def search_brain(query: str, persona: str = "", k: Optional[int] = None,
                 continue
             hits.append({"record_id": rid, "content": content, "score": round(final, 6),
                          "kind": kind, "salience": round(sal, 4), "peer": str(pr or ""),
-                         "chat_id": str(ach or ""), "ctx_hit": ctx_hit})
+                         "context_key": str(ach or ""), "ctx_hit": ctx_hit})
         hits.sort(key=lambda h: h["score"], reverse=True)
         # 同主题去冗余：(kind, peer, 主题前缀 12 字) 同组只留最高分——
         # 保证「k 条是 k 个方面」，不是同一条的 k 种说法
@@ -1428,7 +1290,7 @@ def search_brain(query: str, persona: str = "", k: Optional[int] = None,
                     if all(str(rid) != str(h["record_id"]) for h in hits):
                         hits.append({"record_id": rid, "content": content, "score": 0.0,
                                      "kind": "fact", "salience": 0.0,
-                                     "chat_id": "", "ctx_hit": False})
+                                     "context_key": "", "ctx_hit": False})
         return hits[:k]
     except Exception:
         return []
@@ -1440,23 +1302,23 @@ def search_brain(query: str, persona: str = "", k: Optional[int] = None,
                 pass
 
 
-def inject_text_brain(persona: str = "", query: str = "",
-                      peer: str = "", chat_id: str = "") -> Tuple[str, Dict[str, Any]]:
+def inject_text_brain(query: str = "",
+                      peer: str = "", context_key: str = "") -> Tuple[str, Dict[str, Any]]:
     """L1 检索文本块（供工具/调试；<relevant-memories> 形态）；零命中也返回 meta（可观测）。
 
-    peer（可选，M3）：不显式传时从 query 里解析最近的「名片(uid)」标注（M1 约定）；
-    关于 TA 的记忆加权，条目带「关于 X：」前缀。chat_id（可选，M2）：场合加权同源。
+    peer（可选，M3）：由调用方给结构化对象键；
+    关于 TA 的记忆加权，条目带「关于 X：」前缀。context_key（可选，M2）：场合加权同源。
     """
     hits: List[Dict[str, Any]] = []
     try:
-        hits = search_brain(query, persona=persona,
-                            reinforce=True, peer=peer or extract_peer(query),
-                            chat_id=chat_id)
+        hits = search_brain(query,
+                            reinforce=True, peer=peer,
+                            context_key=context_key)
     except Exception:
         hits = []
     meta = {"hits": len(hits), "chars": sum(len(h["content"]) for h in hits),
             "placement": "tool", "store": "brain",
-            "peer": peer or extract_peer(query), "chat_id": chat_id,
+            "peer": peer, "context_key": context_key,
             "context_hits": sum(1 for h in hits if h.get("ctx_hit"))}
     if not hits:
         return "", meta
@@ -1539,14 +1401,16 @@ def upsert_narrative_index(doc_id: str, kind: str, project_id: str = "",
                            date_from: str = "", date_to: str = "",
                            time_from: str = "", time_to: str = "",
                            summary: str = "", topics: Optional[List[str]] = None,
-                           chat_ids: Optional[List[str]] = None,
+                           context_keys: Optional[List[str]] = None,
                            peers: Optional[List[str]] = None,
+                           atmosphere: str = "",
                            date_basis: str = "local") -> bool:
     """``narrative_index`` 的**唯一写入口**（工程侧；LLM 沙箱无权限，INV-12）。
 
     幂等键 ``doc_id + kind``、覆盖不追加（§13.2.3）；``narrative_fts`` 先删后插
-    （与 ``_fts_upsert`` 同款，恒一行）。``search_text = summary + topics``，
-    **不存正文**（INV-12）；失败静默返回 False（索引失败不阻断写块，正文仍是真相）。
+    （与 ``_fts_upsert`` 同款，恒一行）。``search_text = summary + topics +
+    atmosphere``（P6-1 可回味词面，触发物/心境可检索），**不存正文**（INV-12）；
+    失败静默返回 False（索引失败不阻断写块，正文仍是真相）。
     """
     doc_id = str(doc_id or "").strip()
     kind = str(kind or "").strip()
@@ -1561,17 +1425,19 @@ def upsert_narrative_index(doc_id: str, kind: str, project_id: str = "",
                          (doc_id, kind))
             conn.execute(
                 "INSERT INTO narrative_index(doc_id, kind, project_id, date_from, date_to, "
-                "time_from, time_to, summary, topics, chat_ids, peers, date_basis, updated) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "time_from, time_to, summary, topics, context_keys, peers, atmosphere, "
+                "date_basis, updated) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (doc_id, kind, str(project_id or ""), str(date_from or ""),
                  str(date_to or ""), str(time_from or ""), str(time_to or ""),
                  str(summary or "")[:200], json.dumps(topics, ensure_ascii=False),
-                 json.dumps([str(c) for c in (chat_ids or [])], ensure_ascii=False),
+                 json.dumps([str(c) for c in (context_keys or [])], ensure_ascii=False),
                  json.dumps([str(p) for p in (peers or [])], ensure_ascii=False),
+                 str(atmosphere or "")[:32],
                  str(date_basis or "local"), _now()))
             conn.execute("DELETE FROM narrative_fts WHERE doc_id=? AND kind=?",
                          (doc_id, kind))
-            search_text = (str(summary or "") + " " + " ".join(topics)).strip()
+            search_text = (str(summary or "") + " " + " ".join(topics) + " "
+                           + str(atmosphere or "")).strip()
             if search_text:
                 conn.execute("INSERT INTO narrative_fts(search_text, doc_id, kind) "
                              "VALUES(?,?,?)", (search_text[:400], doc_id, kind))
@@ -1586,7 +1452,7 @@ def upsert_narrative_index(doc_id: str, kind: str, project_id: str = "",
 def get_narrative_row(doc_id: str, kind: str = "") -> Optional[Dict[str, Any]]:
     """按 doc_id（可选 kind）取索引行（供 narrative_read 拿 project_id / 场合标注）。
 
-    裸文件名（不带 ``pid:`` 前缀）兼容解析：跨项目同名时不猜——返回 None，
+    裸文件名解析：跨项目同名时不猜——返回 None，
     让调用方用检索结果里带前缀的 doc_id 重试。
     """
     d = str(doc_id or "").strip()
@@ -1594,8 +1460,8 @@ def get_narrative_row(doc_id: str, kind: str = "") -> Optional[Dict[str, Any]]:
         conn = open_brain()
         try:
             sel = ("SELECT doc_id, kind, project_id, date_from, date_to, time_from, "
-                   "time_to, summary, topics, chat_ids, peers, date_basis, updated "
-                   "FROM narrative_index ")
+                   "time_to, summary, topics, context_keys, peers, atmosphere, date_basis, "
+                   "updated FROM narrative_index ")
             if kind:
                 row = conn.execute(sel + "WHERE doc_id=? AND kind=?",
                                    (d, str(kind))).fetchone()
@@ -1616,20 +1482,21 @@ def get_narrative_row(doc_id: str, kind: str = "") -> Optional[Dict[str, Any]]:
     if not row:
         return None
     keys = ("doc_id", "kind", "project_id", "date_from", "date_to", "time_from",
-            "time_to", "summary", "topics", "chat_ids", "peers", "date_basis", "updated")
+            "time_to", "summary", "topics", "context_keys", "peers", "atmosphere",
+            "date_basis", "updated")
     d = dict(zip(keys, row))
     d["topics"] = _json_list(d.get("topics"))
-    d["chat_ids"] = _json_list(d.get("chat_ids"))
+    d["context_keys"] = _json_list(d.get("context_keys"))
     d["peers"] = _json_list(d.get("peers"))
     return d
 
 
 def search_narrative(query: str = "", kind: str = "", date_from: str = "",
-                     date_to: str = "", peer: str = "", chat_id: str = "",
+                     date_to: str = "", peer: str = "", context_key: str = "",
                      limit: int = 8) -> List[Dict[str, Any]]:
     """叙事检索核心（§13.3.1）：只返回条目**不返回正文**（正文走 ``read_narrative``）。
 
-    排序 = bm25 相关性 + 时间近因 + 场合/对象加权；``chat_id`` 只加权不过滤
+    排序 = bm25 相关性 + 时间近因 + 场合/对象加权；``context_key`` 只加权不过滤
     （INV-3：跨场合叙事照样可召回，只是排得靠后）。日期按**本地日历日**与行的
     ``date_from/date_to`` 区间求交；query 为空时退化为按时间近因浏览（指定 kind /
     日期区间用）。``limit`` 1-20。
@@ -1657,8 +1524,8 @@ def search_narrative(query: str = "", kind: str = "", date_from: str = "",
             def _load_rows(where: str, params: Tuple[Any, ...]) -> List[Any]:
                 return conn.execute(
                     "SELECT n.doc_id, n.kind, n.project_id, n.date_from, n.date_to, "
-                    "n.time_from, n.time_to, n.summary, n.topics, n.chat_ids, n.peers "
-                    f"FROM narrative_index n WHERE {where}{kind_sql} "
+                    "n.time_from, n.time_to, n.summary, n.topics, n.context_keys, n.peers, "
+                    f"n.atmosphere FROM narrative_index n WHERE {where}{kind_sql} "
                     "ORDER BY n.date_from DESC LIMIT 400",
                     params + tuple(kind_params)).fetchall()
 
@@ -1676,13 +1543,13 @@ def search_narrative(query: str = "", kind: str = "", date_from: str = "",
             # 候选装载：有 query 走 FTS 命中 + LIKE 兜底；无 query 全量（日期区间过滤后按近因排）
             for row in _load_rows("1=1", ()):
                 d = dict(zip(("doc_id", "kind", "project_id", "date_from", "date_to",
-                              "time_from", "time_to", "summary", "topics", "chat_ids",
-                              "peers"), row))
+                              "time_from", "time_to", "summary", "topics", "context_keys",
+                              "peers", "atmosphere"), row))
                 key = f"{d['doc_id']}|{d['kind']}"
                 if key in seen:
                     continue
                 d["topics"] = _json_list(d.get("topics"))
-                d["chat_ids"] = _json_list(d.get("chat_ids"))
+                d["context_keys"] = _json_list(d.get("context_keys"))
                 d["peers"] = _json_list(d.get("peers"))
                 # 日期区间求交（本地日历日；空区间不设限）
                 if qf and d["date_to"] and str(d["date_to"]) < qf:
@@ -1698,13 +1565,13 @@ def search_narrative(query: str = "", kind: str = "", date_from: str = "",
                         "(" + " OR ".join("n.summary LIKE ?" for _ in like_terms) + ")",
                         tuple(f"%{kw}%" for kw in like_terms)):
                     d = dict(zip(("doc_id", "kind", "project_id", "date_from", "date_to",
-                                  "time_from", "time_to", "summary", "topics", "chat_ids",
-                                  "peers"), row))
+                                  "time_from", "time_to", "summary", "topics", "context_keys",
+                                  "peers", "atmosphere"), row))
                     key = f"{d['doc_id']}|{d['kind']}"
                     if key in seen:
                         continue
                     d["topics"] = _json_list(d.get("topics"))
-                    d["chat_ids"] = _json_list(d.get("chat_ids"))
+                    d["context_keys"] = _json_list(d.get("context_keys"))
                     d["peers"] = _json_list(d.get("peers"))
                     if qf and d["date_to"] and str(d["date_to"]) < qf:
                         continue
@@ -1719,22 +1586,23 @@ def search_narrative(query: str = "", kind: str = "", date_from: str = "",
 
     # 话题词面（共同背景）与 peer 线索来自 query/参数；加权不过滤（§6.2）
     q = str(query or "")
-    peer_key = str(peer or "").strip() or extract_peer(q)
-    cid = str(chat_id or "").strip()
+    peer_key = str(peer or "").strip()
+    cid = str(context_key or "").strip()
     qterms = set(_query_terms(q))
     scored: List[Dict[str, Any]] = []
     for d, rel in cand:
         rec_days = _days_since(d.get("time_to") or d.get("date_to") or "")
         rec = pow(2.718281828459045, -rec_days / 180.0)
         final = 0.6 * rel + 0.4 * rec
-        chat_ids = d.get("chat_ids") or []
-        if cid and cid in chat_ids:
+        context_keys = d.get("context_keys") or []
+        if cid and cid in context_keys:
             final *= (1.0 + _ctx_cfg("w_ctx", 0.25))       # 同场合标注：加权不过滤
         if peer_key and any(peer_key == str(p) for p in (d.get("peers") or [])):
             final *= 1.25                                   # 关于当前对象
         if cid and qterms:
             # 共同背景（R8，w_bg）：本场合叙事且正文/主题词面与 query 相交
-            face = " ".join([str(d.get("summary") or ""), " ".join(d.get("topics") or [])]).lower()
+            face = " ".join([str(d.get("summary") or ""), " ".join(d.get("topics") or []),
+                             str(d.get("atmosphere") or "")]).lower()
             if any(t in face for t in qterms):
                 final *= (1.0 + _ctx_cfg("w_bg", 0.10))
         if final <= 0.0:
@@ -1744,8 +1612,9 @@ def search_narrative(query: str = "", kind: str = "", date_from: str = "",
                        "date": str(d.get("date_from") or ""),
                        "summary": str(d.get("summary") or ""),
                        "topics": d.get("topics") or [],
+                       "atmosphere": str(d.get("atmosphere") or ""),
                        "score": round(min(final, 1.5), 6),
-                       "chat_ids": chat_ids, "peers": d.get("peers") or []})
+                       "context_keys": context_keys, "peers": d.get("peers") or []})
     scored.sort(key=lambda x: x["score"], reverse=True)
     return scored[:n]
 
@@ -1753,7 +1622,7 @@ def search_narrative(query: str = "", kind: str = "", date_from: str = "",
 def read_narrative(doc_id: str, kind: str = "") -> Dict[str, Any]:
     """读叙事正文（文件是唯一真相；索引只给指针）。kind 空 → 索引推断 → diary 兜底。
 
-    返回 ``{ok, kind, doc_id, project_id, chars, text, summary, chat_ids, peers}``；
+    返回 ``{ok, kind, doc_id, project_id, chars, text, summary, context_keys, peers}``；
     出口约束（外部来源只给摘要等）在工具层做——本函数是内核数据面，不做 ACL。
     """
     from omni_core.local import scene_executor
@@ -1778,8 +1647,8 @@ def read_narrative(doc_id: str, kind: str = "") -> Dict[str, Any]:
         project_id = ""
     else:
         project_id = str((row or {}).get("project_id") or "")
-        # H-4：doc_id 是裸文件名，正文在全局叙事目录；旧 ``pid:`` 行做一次性兼容剥离
-        fname = doc_id.split(":", 1)[1] if ":" in doc_id else doc_id
+        # 正文在全局叙事目录，doc_id 即文件名（无旧形态兼容）
+        fname = doc_id
         raw = scene_executor.read_scene_block(project_id, fname)
         _, body = scene_executor.parse_scene_block(raw)
     if not body:
@@ -1787,314 +1656,55 @@ def read_narrative(doc_id: str, kind: str = "") -> Dict[str, Any]:
     return {"ok": True, "kind": kind, "doc_id": doc_id, "project_id": project_id,
             "chars": len(body), "text": body,
             "summary": str((row or {}).get("summary") or ""),
-            "chat_ids": (row or {}).get("chat_ids") or [],
+            "context_keys": (row or {}).get("context_keys") or [],
             "peers": (row or {}).get("peers") or []}
-
-
-def _sid_project_map() -> Dict[str, str]:
-    """会话文件名 → 项目目录名（l0 回填「项目 + 会话文件 + 日期」的连接键）。"""
-    out: Dict[str, str] = {}
-    try:
-        for p in rp.projects_root().glob("*/*.jsonl"):
-            out[p.stem] = p.parent.name
-    except Exception:
-        pass
-    return out
-
-
-def _diary_material_facts(conn: sqlite3.Connection, sids: List[str], utc_day: str) -> Dict[str, Any]:
-    """某 UTC 日、本项目会话在 L0 里的素材事实：本地日多数派 / 时间区间 / 场合 / 对象。"""
-    out: Dict[str, Any] = {"local_days": {}, "chat_ids": set(), "peers": set(),
-                           "ts_min": "", "ts_max": ""}
-    if not sids:
-        return out
-    marks = ",".join("?" for _ in sids)
-    try:
-        rows = conn.execute(
-            f"SELECT recorded_at, chat_id, speaker FROM l0_messages "
-            f"WHERE session_id IN ({marks}) AND recorded_at >= ? AND recorded_at < ?",
-            tuple(sids) + (f"{utc_day}T00:00:00", f"{utc_day}T24:00")).fetchall()
-    except Exception:
-        return out
-    from omni_core.local import localtime
-
-    for ts, cid, spk in rows:
-        d = localtime.local_date(str(ts or ""))
-        if d:
-            out["local_days"][d] = out["local_days"].get(d, 0) + 1
-        if cid:
-            out["chat_ids"].add(str(cid))
-        if spk:
-            out["peers"].add(str(spk))
-        t = str(ts or "")
-        if t:
-            out["ts_min"] = min(out["ts_min"] or t, t)
-            out["ts_max"] = max(out["ts_max"] or t, t)
-    return out
-
-
-def migrate_narrative_once(force: bool = False) -> Dict[str, int]:
-    """一次性迁移（§13.5 第 3-5 步，幂等；meta ``narrative_index_built`` 已建即跳过）：
-
-    1. 扫各工作项目 ``diary-*.md`` 与全局关系卡，重建索引（META 缺新键按空处理）；
-    2. 老日记缺时间区间/场合标注时，从 ``l0_messages`` 按「项目 + 会话文件 + 日期」
-       best-effort 回填；``date_from/date_to`` 一律经 ``local_date()`` 折算，失败退化为
-       「文件名日期当日」与空数组并标 ``date_basis=legacy``——**不猜测、不改写正文**；
-    3. 切换日撞名：素材真实本地日 D ≠ 文件名日期 且 ``diary-D.md`` 不存在 → 重命名
-       并同步 ``scene_index``；已存在 → 保留老文件、索引标 ``legacy``，不合并不覆盖。
-
-    只在迁移期执行一次；运行期由巩固期 upsert 增量维护。
-    """
-    out = {"indexed": 0, "renamed": 0, "legacy": 0, "relations": 0}
-    if not enabled():
-        return out
-    try:
-        row = open_brain().execute(
-            "SELECT v FROM meta WHERE k='narrative_index_built'").fetchone()
-        if row and str(row[0]) == "1" and not force:
-            out["skipped"] = 1
-            return out
-    except Exception:
-        pass
-    # 全量重建：正文文件是唯一真相——先清空索引（含历史脏行/裸文件名旧行）再回填
-    try:
-        c = open_brain()
-        c.execute("DELETE FROM narrative_index")
-        c.execute("DELETE FROM narrative_fts")
-        c.commit()
-        c.close()
-    except Exception:
-        pass
-    from omni_core.local import localtime, scene_executor
-
-    sid_map = _sid_project_map()
-    pid_sids: Dict[str, List[str]] = {}
-    for sid, pid in sid_map.items():
-        pid_sids.setdefault(pid, []).append(sid)
-    conn = None
-    try:
-        conn = open_brain()
-    except Exception:
-        conn = None
-    renamed_projects: set = set()
-    # H-4：全局叙事目录优先；旧项目目录仅作迁移期兼容来源（同一 doc_id 只索引一次）
-    diary_sources = [(p, "") for p in sorted(scene_executor.diary_dir().glob("diary-2*.md"))]
-    diary_sources += [
-        (p, p.parent.parent.parent.name)
-        for p in sorted(rp.projects_root().glob("*/memory/scene_blocks/diary-2*.md"))
-    ]
-    seen_docs: set = set()
-    try:
-        for p, pid in diary_sources:
-            try:
-                name = p.name
-                if name.startswith("diary-month-"):
-                    continue
-                if name in seen_docs:
-                    continue
-                seen_docs.add(name)
-                fname_day = name[len("diary-"):-3]           # diary-YYYY-MM-DD.md
-                meta, _body = scene_executor.parse_scene_block(
-                    p.read_text(encoding="utf-8"))
-                # 全局目录由新代码按本地日写出，无需 L0 回填；旧目录才做 best-effort
-                facts = (conn and pid and _diary_material_facts(
-                    conn, pid_sids.get(pid, []), fname_day)) or {}
-                local_days: Dict[str, int] = facts.get("local_days") or {}
-                target_day = ""
-                date_basis = "local" if not pid else "legacy"
-                if local_days:
-                    target_day = max(local_days.items(), key=lambda kv: kv[1])[0]
-                if target_day and target_day != fname_day:
-                    dst = p.parent / f"diary-{target_day}.md"
-                    if not dst.exists():
-                        try:
-                            p.rename(dst)
-                            out["renamed"] += 1
-                            renamed_projects.add(pid)
-                            name, fname_day = dst.name, target_day
-                            date_basis = "local"
-                        except Exception:
-                            date_basis = "legacy"
-                    else:
-                        date_basis = "legacy"                 # 撞名：保留老文件，标降级
-                elif target_day:
-                    date_basis = "local"
-                # 索引行（文件名/日期以最终落点为准；失败退化=文件名当日 + legacy）
-                final_day = target_day if date_basis == "local" else fname_day
-                topics = _normalize_topics(_json_list(_meta_extra_keys(
-                    (p.parent / name).read_text(encoding="utf-8")).get("topics")))
-                ok = upsert_narrative_index(
-                    name, "diary", project_id="",
-                    date_from=final_day, date_to=final_day,
-                    time_from=str(facts.get("ts_min") or ""),
-                    time_to=str(facts.get("ts_max") or ""),
-                    summary=str(meta.get("summary") or ""),
-                    topics=topics,
-                    chat_ids=sorted(facts.get("chat_ids") or []),
-                    peers=sorted(facts.get("peers") or []),
-                    date_basis=date_basis)
-                if ok:
-                    out["indexed"] += 1
-                    if date_basis == "legacy":
-                        out["legacy"] += 1
-            except Exception:
-                continue
-        # 月记：月份边界由日历给出；存量项目月记标 legacy
-        month_sources = list(scene_executor.diary_dir().glob("diary-month-2*.md"))
-        month_sources += list(rp.projects_root().glob(
-            "*/memory/scene_blocks/diary-month-2*.md"))
-        seen_months: set = set()
-        for p in sorted(month_sources):
-            try:
-                if p.name in seen_months:
-                    continue
-                seen_months.add(p.name)
-                ym = p.name[len("diary-month-"):-3]
-                meta, _ = scene_executor.parse_scene_block(p.read_text(encoding="utf-8"))
-                d1, d2 = localtime.local_month_bounds(ym)
-                topics = _normalize_topics(_json_list(_meta_extra_keys(
-                    p.read_text(encoding="utf-8")).get("topics")))
-                is_global = p.parent == scene_executor.diary_dir()
-                if upsert_narrative_index(p.name, "month", project_id="",
-                                          date_from=d1, date_to=d2,
-                                          summary=str(meta.get("summary") or ""),
-                                          topics=topics,
-                                          date_basis="local" if is_global else "legacy"):
-                    out["indexed"] += 1
-                    if not is_global:
-                        out["legacy"] += 1
-            except Exception:
-                continue
-        # 关系卡：全局一份、按 uid；对象标注 = 名片(uid)（与 extract_peer 同形）
-        try:
-            reldir = rp.global_relations()
-            import re as _re
-
-            for p in sorted(reldir.glob("*.md")):
-                raw = p.read_text(encoding="utf-8")
-                m = _re.search(r"^name:\s*(.+)$", raw.split("-----META-END-----", 1)[0],
-                               _re.M)
-                uid_m = _re.search(r"^uid:\s*(.+)$", raw.split("-----META-END-----", 1)[0],
-                                   _re.M)
-                name = (m.group(1).strip() if m else "")
-                uid = (uid_m.group(1).strip() if uid_m else p.stem)
-                meta_keys = _meta_extra_keys(raw)
-                peer_label = f"{name}({uid})" if name else uid
-                if upsert_narrative_index(p.stem, "relation", project_id="",
-                                          summary="", topics=_normalize_topics(
-                                              _json_list(meta_keys.get("topics"))),
-                                          chat_ids=[], peers=[peer_label],
-                                          date_basis="local"):
-                    out["relations"] += 1
-                    out["indexed"] += 1
-        except Exception:
-            pass
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-    for pid in renamed_projects:
-        try:
-            scene_executor.sync_scene_index(pid)
-        except Exception:
-            pass
-    try:
-        c = open_brain()
-        c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('narrative_index_built','1')")
-        c.commit()
-        c.close()
-    except Exception:
-        pass
-    return out
-
-
-def _meta_extra_keys(raw: str) -> Dict[str, str]:
-    """读场景块 META 区的**全部** key: value 行（含 parse_scene_block 不认识的新键）。"""
-    import re as _re
-
-    out: Dict[str, str] = {}
-    try:
-        start = raw.find("-----META-START-----")
-        end = raw.find("-----META-END-----")
-        if start == -1 or end == -1 or end < start:
-            return out
-        for ln in raw[start + len("-----META-START-----"):end].splitlines():
-            m = _re.match(r"^([A-Za-z_]+):\s*(.*)$", ln.strip())
-            if m:
-                out[m.group(1)] = m.group(2).strip()
-    except Exception:
-        pass
-    return out
 
 
 _narr_migrate_started = threading.Lock()
 _narr_migrate_state: Dict[str, bool] = {"running": False}
 
 
-def start_narrative_migration() -> bool:
-    """后台发起一次性叙事索引迁移（服务启动调用；meta 标记让它天然只跑一次）。"""
-    if not enabled():
-        return False
-    with _narr_migrate_started:
-        if _narr_migrate_state["running"]:
-            return False
-        _narr_migrate_state["running"] = True
-
-    def _go():
-        try:
-            migrate_narrative_once()
-        except Exception:
-            pass
-        finally:
-            _narr_migrate_state["running"] = False
-
-    threading.Thread(target=_go, name="narrative-migration", daemon=True).start()
-    return True
-
-
 # ---- 圈层语境（circle_note 读取端 + 近窗词面；写链/reflection 见 §5.2，M3） ----
 
-def get_circle_note(chat_id: str) -> Dict[str, Any]:
+def get_circle_note(context_key: str) -> Dict[str, Any]:
     """读一个场合的圈层语境摘要（一行一场合；无 → 空字典）。
 
     返回 ``{summary, topics[], tone, source_count, source_kinds[], version, updated}``。
     语境预期**不是可引用事实**（INV-5）：消费端只有 ``<current-context>`` 的
     话题/语气字段与检索加权，任何工具都不得把它当返回值原文。
     """
-    if not (chat_id or "").strip() or not enabled():
+    if not (context_key or "").strip() or not enabled():
         return {}
     try:
         conn = open_brain()
         try:
             row = conn.execute(
                 "SELECT summary, topics, tone, source_count, source_kinds, version, "
-                "updated, prev_summary FROM circle_note WHERE chat_id=?", (str(chat_id),)).fetchone()
+                "updated, prev_summary FROM circle_note WHERE context_key=?", (str(context_key),)).fetchone()
         finally:
             conn.close()
     except Exception:
         return {}
     if not row:
         return {}
-    return {"chat_id": str(chat_id), "summary": str(row[0] or ""),
+    return {"context_key": str(context_key), "summary": str(row[0] or ""),
             "topics": _json_list(row[1]), "tone": str(row[2] or ""),
             "source_count": int(row[3] or 0), "source_kinds": _json_list(row[4]),
             "version": int(row[5] or 0), "updated": str(row[6] or ""),
             "prev_summary": str(row[7] or "")}
 
 
-def recent_l0_lines(chat_id: str = "", session_id: str = "",
+def recent_l0_lines(context_key: str = "", session_id: str = "",
                     limit: int = 40) -> List[str]:
     """近窗聊天原文行（词面提取/语境链取料用；时间倒序，最多 ``limit`` 条）。"""
     if not enabled():
         return []
     try:
         c = _l0_conn()
-        cid, sid = str(chat_id or ""), str(session_id or "")
+        cid, sid = str(context_key or ""), str(session_id or "")
         scope, params = "", []
         if cid or sid:
-            scope = "WHERE (l.chat_id = ? OR l.session_id = ?)"
+            scope = "WHERE (l.context_key = ? OR l.session_id = ?)"
             params = [cid or sid, sid or cid]
         rows = c.execute(
             f"SELECT l.text FROM l0_messages l {scope} "
@@ -2108,15 +1718,15 @@ def recent_l0_lines(chat_id: str = "", session_id: str = "",
 
 # ---- 语境链（§5.2，M3）：buffer 累积 → reflection → circle_note ----
 #
-# 原料只有**通用信号**（话题词面 / 条数节奏 / 称呼形态 / 长度分布 / 来源道），
+# 原料只有**通用信号**（话题词面 / 条数节奏 / 长度分布 / 来源道），
 # 不写他人原话（INV-6）、不含领域词表（INV-4）；产物是**语境预期**（这个场合大致
 # 聊什么、什么分寸），不是可引用事实——永不进 atoms、不参与四态（INV-5）。
 # 失败保留上一版、静默不阻断（§5.6）。
 
 _CIRCLE_SYSTEM = (
-    "你是圈子氛围观察器。给你某个聊天场合最近一段时间的**聚合信号**"
+    "你是语境归纳器。给你某个场合最近一段时间的**聚合信号**"
     "（高频话题词面、消息条数、说话人标注形态、消息长度分布、来源构成）——"
-    "没有任何人的原话。请提炼这个场合的「语境预期」：大家大致在聊什么话题、"
+    "没有任何人的原话。请提炼这个场合的「语境预期」：这里大致在关注什么、"
     "说话是什么分寸氛围。只依据给出的信号归纳，不臆测具体事件、不引用任何人的话。"
     "topics：2-6 个主题词或短语（名词优先，各 ≤12 字），取自词面信号；"
     "没有可靠信号就给空数组。"
@@ -2150,22 +1760,22 @@ def _surface_topics_from(texts: List[str], top: int = 8) -> List[str]:
     return [g for g, _ in cands[:max(1, top)]]
 
 
-def update_context_buffer(chat_id: str, texts: List[str],
+def update_context_buffer(context_key: str, texts: List[str],
                           source_kind: str = "chat") -> Dict[str, Any]:
     """按场合累积通用信号进 ``context_buffer``（**覆盖不追加**；INV-4/INV-6）。
 
     buffer 只存词面与计数，不存原话；``source_kinds`` 标注来源构成（INV-5）。
     返回累积后的 buffer 概要（观测用）；失败返回空字典（静默）。
     """
-    chat_id = str(chat_id or "").strip()
-    if not chat_id or not enabled():
+    context_key = str(context_key or "").strip()
+    if not context_key or not enabled():
         return {}
     now = _now()
     try:
         conn = open_brain()
         try:
-            row = conn.execute("SELECT buffer, msg_count FROM context_buffer WHERE chat_id=?",
-                               (chat_id,)).fetchone()
+            row = conn.execute("SELECT buffer, msg_count FROM context_buffer WHERE context_key=?",
+                               (context_key,)).fetchone()
             buf: Dict[str, Any] = {}
             if row:
                 try:
@@ -2184,15 +1794,11 @@ def update_context_buffer(chat_id: str, texts: List[str],
             lens = [len(t) for t in texts]
             if lens:
                 buf["avg_len"] = int(sum(lens) / len(lens))
-            import re as _re
-
-            addr = sum(1 for t in texts if _re.search(r"[「]?[^「」():\n]{1,32}[」]?\(\d{4,}\)", t))
-            buf["addr_ratio"] = round(addr / len(texts), 2) if texts else buf.get("addr_ratio", 0.0)
             buf["updated"] = now
             conn.execute(
-                "INSERT OR REPLACE INTO context_buffer(chat_id, buffer, msg_count, updated) "
+                "INSERT OR REPLACE INTO context_buffer(context_key, buffer, msg_count, updated) "
                 "VALUES(?,?,?,?)",
-                (chat_id, json.dumps(buf, ensure_ascii=False), int(buf["msg_count"]), now))
+                (context_key, json.dumps(buf, ensure_ascii=False), int(buf["msg_count"]), now))
             conn.commit()
             return buf
         finally:
@@ -2201,13 +1807,13 @@ def update_context_buffer(chat_id: str, texts: List[str],
         return {}
 
 
-def _circle_note_due(chat_id: str, buf: Dict[str, Any]) -> bool:
+def _circle_note_due(context_key: str, buf: Dict[str, Any]) -> bool:
     """触发判定（§5.2）：条数阈值或间隔阈值；每场合每巩固周期 ≤1 次（N-13）。"""
     try:
         conn = open_brain()
         try:
-            row = conn.execute("SELECT last_reflection FROM circle_note WHERE chat_id=?",
-                               (chat_id,)).fetchone()
+            row = conn.execute("SELECT last_reflection FROM circle_note WHERE context_key=?",
+                               (context_key,)).fetchone()
             last = str(row[0] or "") if row else ""
             lastc = str((conn.execute("SELECT v FROM meta WHERE k='last_consolidation'")
                          .fetchone() or [""])[0] or "")
@@ -2231,8 +1837,7 @@ def _circle_note_due(chat_id: str, buf: Dict[str, Any]) -> bool:
     return False
 
 
-def reflect_circle_note(brain_cfg: Dict[str, Any], chat_id: str,
-                        persona: str = "") -> bool:
+def reflect_circle_note(brain_cfg: Dict[str, Any], context_key: str) -> bool:
     """对一个场合跑一次 reflection，重写（不追加）``circle_note``。
 
     - 原料 = context_buffer 的聚合信号（无原话，INV-6）；一次 ``chat_json``（§13.10
@@ -2240,13 +1845,13 @@ def reflect_circle_note(brain_cfg: Dict[str, Any], chat_id: str,
     - 重写保留上一版（``prev_summary``）供回滚；失败静默保留旧版（§5.6）。
     - **不写 atoms**（INV-5）、不读叙事正文（INV-10）。
     """
-    if not enabled() or not brain_cfg or not (chat_id or "").strip():
+    if not enabled() or not brain_cfg or not (context_key or "").strip():
         return False
     try:
         conn = open_brain()
         try:
-            row = conn.execute("SELECT buffer FROM context_buffer WHERE chat_id=?",
-                               (str(chat_id),)).fetchone()
+            row = conn.execute("SELECT buffer FROM context_buffer WHERE context_key=?",
+                               (str(context_key),)).fetchone()
         finally:
             conn.close()
         buf = {}
@@ -2257,12 +1862,11 @@ def reflect_circle_note(brain_cfg: Dict[str, Any], chat_id: str,
                 buf = {}
         if not buf:
             return False
-        user = ("场合键: " + str(chat_id) + "\n"
+        user = ("场合键: " + str(context_key) + "\n"
                 + "聚合信号（无任何原话）:\n"
                 + json.dumps({"topics_词面": buf.get("topics") or [],
                               "累积条数": buf.get("msg_count") or 0,
                               "来源构成": buf.get("source_kinds") or [],
-                              "称呼形态比例": buf.get("addr_ratio"),
                               "平均长度": buf.get("avg_len")},
                              ensure_ascii=False))
         data = llm_judge.chat_json(brain_cfg, _CIRCLE_SYSTEM, user, timeout=60.0)
@@ -2276,26 +1880,26 @@ def reflect_circle_note(brain_cfg: Dict[str, Any], chat_id: str,
         # 上一版保留；source 标注（INV-5）：本版聚合了多少条、来源构成
         conn = open_brain()
         try:
-            old = conn.execute("SELECT summary, version FROM circle_note WHERE chat_id=?",
-                               (str(chat_id),)).fetchone()
+            old = conn.execute("SELECT summary, version FROM circle_note WHERE context_key=?",
+                               (str(context_key),)).fetchone()
             prev_summary = str(old[0] or "") if old else ""
             version = (int(old[1] or 0) if old else 0) + 1
             conn.execute(
-                "INSERT OR REPLACE INTO circle_note(chat_id, summary, topics, tone, "
+                "INSERT OR REPLACE INTO circle_note(context_key, summary, topics, tone, "
                 "source_count, source_kinds, prev_summary, version, msg_count, "
                 "last_reflection, updated) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (str(chat_id), summary, json.dumps(topics, ensure_ascii=False),
+                (str(context_key), summary, json.dumps(topics, ensure_ascii=False),
                  tone, int(buf.get("msg_count") or 0),
                  json.dumps([str(k) for k in (buf.get("source_kinds") or [])],
                             ensure_ascii=False),
                  prev_summary, version, 0, _now(), _now()))
-            conn.execute("UPDATE context_buffer SET msg_count=0 WHERE chat_id=?",
-                         (str(chat_id),))
+            conn.execute("UPDATE context_buffer SET msg_count=0 WHERE context_key=?",
+                         (str(context_key),))
             # buffer JSON 里的计数同步清零（下轮累积从 0 起；词面保留供下次合并）
             try:
                 buf["msg_count"] = 0
-                conn.execute("UPDATE context_buffer SET buffer=? WHERE chat_id=?",
-                             (json.dumps(buf, ensure_ascii=False), str(chat_id)))
+                conn.execute("UPDATE context_buffer SET buffer=? WHERE context_key=?",
+                             (json.dumps(buf, ensure_ascii=False), str(context_key)))
             except Exception:
                 pass
             conn.commit()
@@ -2334,7 +1938,7 @@ def _circle_reflection_budget_used() -> None:
         pass
 
 
-def run_context_reflections(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
+def run_context_reflections(brain_cfg: Optional[Dict[str, Any]],
                             chats: Optional[List[str]] = None,
                             coldstart: bool = False) -> int:
     """语境链入口（flush 尾部按批触发 / 巩固期冷启动）。
@@ -2353,15 +1957,15 @@ def run_context_reflections(brain_cfg: Optional[Dict[str, Any]], persona: str = 
             c = _l0_conn()
             min_c = max(3, int(_circle_cfg("min_msgs", 12) or 12))
             rows = c.execute(
-                "SELECT chat_id, COUNT(*) FROM l0_messages "
-                "WHERE chat_id != '' AND source_kind='chat' "
-                "GROUP BY chat_id HAVING COUNT(*) >= ? ORDER BY 2 DESC LIMIT 12",
+                "SELECT context_key, COUNT(*) FROM l0_messages "
+                "WHERE context_key != '' AND source_kind='chat' "
+                "GROUP BY context_key HAVING COUNT(*) >= ? ORDER BY 2 DESC LIMIT 12",
                 (min_c,)).fetchall()
             have: set = set()
             try:
                 conn = open_brain()
                 have = {str(r[0]) for r in
-                        conn.execute("SELECT chat_id FROM circle_note").fetchall()}
+                        conn.execute("SELECT context_key FROM circle_note").fetchall()}
                 conn.close()
             except Exception:
                 pass
@@ -2370,16 +1974,16 @@ def run_context_reflections(brain_cfg: Optional[Dict[str, Any]], persona: str = 
             targets = []
     elif chats:
         targets = [str(c) for c in chats if str(c).strip()]
-    for chat_id in targets:
+    for context_key in targets:
         if _circle_reflection_budget_left() <= 0:
             break
         try:
             if coldstart:
                 # 冷启动直接跑（无 buffer 时先从近窗攒一份信号）
-                if not update_context_buffer(chat_id, recent_l0_lines(chat_id=chat_id,
+                if not update_context_buffer(context_key, recent_l0_lines(context_key=context_key,
                                                                       limit=60)):
                     continue
-                if reflect_circle_note(brain_cfg, chat_id, persona):
+                if reflect_circle_note(brain_cfg, context_key):
                     done += 1
                     _circle_reflection_budget_used()
             else:
@@ -2387,17 +1991,17 @@ def run_context_reflections(brain_cfg: Optional[Dict[str, Any]], persona: str = 
                 try:
                     conn = open_brain()
                     try:
-                        r = conn.execute("SELECT buffer FROM context_buffer WHERE chat_id=?",
-                                         (str(chat_id),)).fetchone()
+                        r = conn.execute("SELECT buffer FROM context_buffer WHERE context_key=?",
+                                         (str(context_key),)).fetchone()
                         if r:
                             row = json.loads(str(r[0] or "") or "{}")
                     finally:
                         conn.close()
                 except Exception:
                     row = {}
-                if not _circle_note_due(chat_id, row or {}):
+                if not _circle_note_due(context_key, row or {}):
                     continue
-                if reflect_circle_note(brain_cfg, chat_id, persona):
+                if reflect_circle_note(brain_cfg, context_key):
                     done += 1
                     _circle_reflection_budget_used()
         except Exception:
@@ -2429,7 +2033,7 @@ def _consolidation_due() -> bool:
         return False
 
 
-def maybe_consolidate(brain_cfg: Optional[Dict[str, Any]] = None, persona: str = "") -> None:
+def maybe_consolidate(brain_cfg: Optional[Dict[str, Any]] = None) -> None:
     """任务收尾调用：满足触发条件则在后台线程跑巩固（绝不阻塞收尾）。"""
     if not enabled():
         return
@@ -2451,19 +2055,19 @@ def maybe_consolidate(brain_cfg: Optional[Dict[str, Any]] = None, persona: str =
             return
         _dispatch_state["running"] = True
     t = threading.Thread(target=_run_consolidation,
-                         args=(brain_cfg or {}, persona), daemon=True)
+                         args=(brain_cfg or {},), daemon=True)
     t.start()
 
 
-def _run_consolidation(brain_cfg: Dict[str, Any], persona: str) -> None:
+def _run_consolidation(brain_cfg: Dict[str, Any]) -> None:
     try:
-        _consolidation_worker(brain_cfg, persona)
+        _consolidation_worker(brain_cfg)
     finally:
         with _dispatch_lock:
             _dispatch_state["running"] = False
 
 
-def _consolidation_worker(brain_cfg: Dict[str, Any], persona: str) -> None:
+def _consolidation_worker(brain_cfg: Dict[str, Any]) -> None:
     with _consolidation_lock:
         stats: Dict[str, Any] = {"ts": _now()}
         # 语境链的周期预算从零计（N-13：全局单轮 ≤5 次 reflection 的"轮"= 巩固周期）
@@ -2484,7 +2088,7 @@ def _consolidation_worker(brain_cfg: Dict[str, Any], persona: str) -> None:
         except Exception:
             stats["backup"] = ""
         try:
-            stats.update(_consolidate_impl(brain_cfg, persona))
+            stats.update(_consolidate_impl(brain_cfg))
         except Exception as e:
             stats["error"] = f"{type(e).__name__}: {e}"
         try:
@@ -2501,7 +2105,7 @@ def _consolidation_worker(brain_cfg: Dict[str, Any], persona: str) -> None:
         logger.info(f"memory consolidation: {json.dumps(stats, ensure_ascii=False)[:500]}")
 
 
-def _consolidate_impl(brain_cfg: Dict[str, Any], persona: str) -> Dict[str, Any]:
+def _consolidate_impl(brain_cfg: Dict[str, Any]) -> Dict[str, Any]:
     conn = open_brain()
     out: Dict[str, Any] = {"dedup_checked": 0, "merged": 0, "merge_rejected": 0,
                            "abstracted": 0, "conflict": 0}
@@ -2584,7 +2188,7 @@ def _consolidate_impl(brain_cfg: Dict[str, Any], persona: str) -> Dict[str, Any]
         rid = _new_id()
         _insert_atom(conn, rid, {"text": rule, "kind": "rule", "importance": 0.8,
                                  "peer": key.split("|", 1)[0]},
-                     persona, "", "consolidation", now)
+                     "", "consolidation", now)
         for erid, _ in grp:
             # P7：不再 salience*0.5 衰减（salience=importance 是写链定的静态值）
             conn.execute("UPDATE atoms SET kind='episode', updated=? "
@@ -2596,19 +2200,19 @@ def _consolidate_impl(brain_cfg: Dict[str, Any], persona: str) -> Dict[str, Any]
     conn.close()
 
     # 7) 画像重写（L3）：brain.db 新 atoms → user_profile.md（带外信号强制）
-    if maintain_profile(brain_cfg, persona):
+    if maintain_profile(brain_cfg):
         out["profile_rewritten"] = 1
 
     # 8) 日记步（plan persona-social-memory M2）：她的一天 → L2 diary 块（失败静默）。
     #    补齐模式（2026-11-03）：不在线的日子由下一次巩固补写，回看 7 天，超窗放弃。
     try:
-        diary_n = maintain_diaries(brain_cfg, persona)
+        diary_n = maintain_diaries(brain_cfg)
         if diary_n:
             out["diary_written"] = diary_n
-        if maintain_month_diary(brain_cfg, persona):
+        if maintain_month_diary(brain_cfg):
             out["month_diary_written"] = 1
-        # 9) 关系卡步：按**人**把近期往来压成印象卡（全局一份，跨群/跨项目）
-        rel = maintain_relations(brain_cfg, persona)
+        # 9) 关系卡步：按**人**把近期往来压成印象卡（全局一份，跨场合/跨项目）
+        rel = maintain_relations(brain_cfg)
         if rel:
             out["relations_written"] = rel
     except Exception:
@@ -2616,7 +2220,7 @@ def _consolidate_impl(brain_cfg: Dict[str, Any], persona: str) -> Dict[str, Any]
     # 9.5) 语境链冷启动（M3）：还没有 circle_note 的老场合各跑一次首版 reflection
     # （受周期预算 ≤5 约束；原料 = L0 近窗聚合信号，无原话；失败静默）
     try:
-        cs_n = run_context_reflections(brain_cfg, persona, coldstart=True)
+        cs_n = run_context_reflections(brain_cfg, coldstart=True)
         if cs_n:
             out["circle_notes_coldstart"] = cs_n
     except Exception:
@@ -2628,30 +2232,37 @@ def _consolidate_impl(brain_cfg: Dict[str, Any], persona: str) -> Dict[str, Any]
 
 _DIARY_SYSTEM = (
     "你是助手本人，以第一人称写「这一天」的日记。"
-    "输入：这一天的对话记录与完成的任务。记录格式：[user] 行是别人对你说的话，"
-    "行首「名片(uid): 」是该行说话人；[assistant] 行是你自己说过的话；"
-    "行内出现的「[引用] X: …」是被引用消息的原话——X 不是这行的说话人，"
+    "输入：这一天的对话记录、你当天的观察见闻与完成的任务。记录格式：[user] 行是"
+    "[user] 行是别人对你说的话，结构化 speaker 字段标明说话人；[assistant] 行是你自己说过的话；"
+    "[见闻] 行是你自己当天主动看到/查到的事（你的第一人称见闻，可写进日记）；"
+    "素材里的引用原话不属于该行说话人，"
     "若引用的是你说过的话，那是对方在接你的话茬。"
     "规则：1) 只记有意义的经历——他人对你的互动（谁做了什么、你怎么应对）、与主人的交流、"
     "值得记住的任务经历；纯寒暄、纯流水账不写；若当天与多个对象/场景都有交流，"
     "各安排笔墨（详略自定），不要漏掉一整个对话对象；2) 任务经历一句话带过，不写步骤细节；"
     "3) 忠于事实，不虚构、不加评价性编造；4) 知识/规律不写（那些走记忆库，日记只收经历）；"
-    "5) 聊天对象=出现过的 [user] 行说话人——你自己不算（你的名字/群名片哪怕出现在"
+    "5) 聊天对象=出现过的 [user] 行说话人——你自己不算（你的名字哪怕出现在"
     "引用行里也不是聊天对象，别把自己写进「跟谁聊了」）；"
     "6) 这一天没什么值得记 → diary 返回空串，交白卷是正确答案。"
     # 日记归 L0-叙事（不进注入面）后不再受 450 字注入预算约束（plan memory-recall P6）。
     # topics（plan §13.10，D-3）：正文按 INV-12 不进索引，检索词面靠 summary+topics——
     # 首句往往不含正文里聊的主题词，topics 补上（钳制归一化，不是词表，INV-4）。
-    "topics：2-5 个可检索的主题词或短语，名词优先，取自本段素材；"
-    "不要整句、不要评价、不要臆测；没有则空数组。"
+    "topics：2-5 个可检索的主题词或短语，名词优先，取自本段素材，可含当时的触发物或"
+    "气氛词；不要整句、不要评价、不要臆测；没有则空数组。"
+    # P6-1（plan §16.3）经历质地：仍是同一篇、同一次调用、≤900 字——多的是现场感
+    #（触发物/心境/带说话人的原话片段），只写素材里看得出来的，不臆造。
+    "7) 经历质地：挑 1-3 处写「现场感」——当时是什么勾起了这段互动（一句话、一个物件、"
+    "一种气氛），以及你当时的心情或反应；8) 原话片段：最多 1-2 处短原话引用，"
+    "标清是谁说的（用结构化 speaker 字段）。"
+    "atmosphere：≤16 字的当天气氛/情绪底色词面（取自素材；看不出则空串）。"
     "\n只返回 JSON:{\"diary\": \"第一人称日记，≤900 字；没有则空串\", "
-    "\"topics\": [\"...\", \"...\"]}"
+    "\"topics\": [\"...\", \"...\"], \"atmosphere\": \"...\"}"
 )
 
 #: 叙事主体的已知名字（本设备运行时登记，非配置非写死）：各渠道在拿到自己账号
-#: 的昵称/群名片时调 ``note_self_names``——换账号/换渠道随连接自愈，多渠道并集
-#: 成立（同一个人格的所有表面身份）。只收高置信身份（精确昵称/名片），泛别名
-#: （如群里的撞名泛称）由渠道自行把握，登记错误的兜底是日记措辞、不是记忆结构。
+#: 已知别名时由边界调 ``note_self_names``——换身份/换渠道随连接自愈，多来源并集
+#: 成立（同一个人格的所有表面身份）。只收高置信身份，泛别名由边界自行把握，
+#: 登记错误的兜底是日记措辞、不是记忆结构。
 _SELF_NAMES: set = set()
 
 
@@ -2665,6 +2276,29 @@ def note_self_names(names) -> None:
 
 def self_names() -> List[str]:
     return sorted(_SELF_NAMES)
+
+
+def _we_participants() -> List[str]:
+    """P6-2（H-6 §16.3）共同经历参与人：**取值来自配置**，内核零词表（INV-4）。
+
+    主开关 ``knowledge.narrative.we_memory.enabled``（缺省关）+ 参与人列表
+    ``knowledge.narrative.we_memory.participants``。只做名字匹配——素材行里出现
+    参与人才标「共同经历」；不建 We 库、不做决策机制、不产主动闲聊。
+    """
+    try:
+        import config
+        if not bool(config.get_config("knowledge.narrative.we_memory.enabled", False)):
+            return []
+        raw = config.get_config("knowledge.narrative.we_memory.participants", []) or []
+        raw = raw if isinstance(raw, (list, tuple)) else [raw]
+        out: List[str] = []
+        for x in raw:
+            s = str(x or "").strip()[:24]
+            if s and s not in out:
+                out.append(s)
+        return out[:6]
+    except Exception:
+        return []
 
 _DIARY_MONTH_SYSTEM = (
     "你是助手本人，把「某个月」的多篇第一人称日记压缩成一篇月记。"
@@ -2685,7 +2319,60 @@ _DIARY_FLOOR_LINES = 10
 _DIARY_MAX_LINES = 400
 
 
-def maintain_diary(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
+def _diary_observation_lines(day: str) -> List[Tuple[str, str]]:
+    """当日观察见闻行（P6-1 / N-17，§14.2）：``[见闻] …``，与对话进**同一篇**日记素材。
+
+    来源 ``l0_messages(source_kind='observation')``（INV-13 分道，不伪装成聊天原话）；
+    ``recorded_at`` 是 UTC 存储，本地日折算在 Python 侧（D-1 口径，SQL 不认时区），
+    回看 2 天 UTC 窗口覆盖任意时区偏移；文本截 300 字与对话行同宽。
+    任何失败静默返回空（见闻是增强项，不阻断日记）。
+    """
+    out: List[Tuple[str, str]] = []
+    try:
+        from omni_core.local import localtime
+        d0 = datetime.fromisoformat(f"{str(day)}T00:00:00+00:00") - timedelta(days=2)
+        conn = _l0_conn()
+        rows = conn.execute(
+            "SELECT text, recorded_at FROM l0_messages "
+            "WHERE source_kind='observation' AND recorded_at >= ? "
+            "ORDER BY recorded_at", (d0.isoformat(),)).fetchall()
+        for text, ts in rows:
+            ts = str(ts or "")
+            if localtime.local_date(ts) != str(day or ""):
+                continue
+            body = str(text or "").strip()[:300]
+            if body:
+                out.append((ts, f"[见闻] {body}"))
+    except Exception:
+        return []
+    return out
+
+
+def _revisit_atom_lines(day: str) -> List[Tuple[str, str]]:
+    """H-5：``review_after`` 到期只用于**整理叙事**（提示重看这段见闻）。
+
+    不判定真假、不升格为事实、不改任何状态或分数（INV-14）；产出仅作为
+    ``[回看]`` 素材行并进当天日记，由叙事本身承载「后来有没有被补充/推翻」。
+    """
+    out: List[Tuple[str, str]] = []
+    try:
+        conn = open_brain()
+        try:
+            rows = conn.execute(
+                "SELECT content FROM atoms WHERE state='active' "
+                "AND review_after != '' AND review_after <= ? LIMIT 10", (day,)).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return out
+    for (content,) in rows:
+        body = str(content or "").strip()
+        if body:
+            out.append((day, f"[回看] {body[:200]}"))
+    return out
+
+
+def maintain_diary(brain_cfg: Optional[Dict[str, Any]],
                    day: str = "") -> int:
     """日记步（plan persona-social-memory M2）：巩固期把「她的一天」写成第一人称日记。
 
@@ -2721,7 +2408,7 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
     # 逐文件覆盖赋值会把同项目其它会话的素材整段丢掉——2026-11-01 实测踩过）；
     # 尾部优先扫描；同时记每文件尾部若干行（会话保底用）。
     # D-1：素材按 local_date(ts) 归日；同时收真实 ts 首尾（时间区间）与
-    # chat_id / speaker（场合与对象标注，进 META 与叙事索引）。
+    # context_key / speaker（场合与对象标注，进 META 与叙事索引）。
     by_project: Dict[str, List[Tuple[str, str]]] = {}
     file_tails: Dict[str, Dict[str, List[Tuple[str, str]]]] = {}
     span: Dict[str, Dict[str, Any]] = {}
@@ -2733,7 +2420,7 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
                 continue
             recs: List[Tuple[str, str]] = []
             meta_acc: Dict[str, Any] = {"ts_min": "", "ts_max": "",
-                                        "chat_ids": set(), "peers": set()}
+                                        "context_keys": set(), "peers": set()}
             for line in reversed(lines):
                 try:
                     rec = json.loads(line)
@@ -2749,32 +2436,36 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
                     continue
                 content = str(rec.get("content") or "").strip()[:300]
                 if content:
-                    recs.append((ts, f"[{role}] {content}"))
+                    spk = str(rec.get("speaker") or "")
+                    # P6-1：原话片段带结构化说话人，让共同回忆有「谁说的」的质感
+                    line = f"[{role}] {spk}: {content}" if spk else f"[{role}] {content}"
+                    recs.append((ts, line))
                     if ts:
                         meta_acc["ts_min"] = min(meta_acc["ts_min"] or ts, ts)
                         meta_acc["ts_max"] = max(meta_acc["ts_max"] or ts, ts)
-                    cid = str(rec.get("chat_id") or "").strip()
+                    cid = str(rec.get("context_key") or "").strip()
                     if cid:
-                        meta_acc["chat_ids"].add(cid)
-                    if role == "user":
-                        spk = extract_peer(content)
-                        if spk:
-                            meta_acc["peers"].add(spk)
+                        meta_acc["context_keys"].add(cid)
+                    if role == "user" and spk:
+                        meta_acc["peers"].add(spk)
             if recs:
                 pid = f.parent.name
                 by_project.setdefault(pid, []).extend(recs)
                 file_tails.setdefault(pid, {})[f.name] = recs[-_DIARY_FLOOR_LINES:]
                 acc = span.setdefault(pid, {"ts_min": "", "ts_max": "",
-                                            "chat_ids": set(), "peers": set()})
+                                            "context_keys": set(), "peers": set()})
                 acc["ts_min"] = min(acc["ts_min"] or meta_acc["ts_min"], meta_acc["ts_min"]) \
                     if meta_acc["ts_min"] else acc["ts_min"]
                 acc["ts_max"] = max(acc["ts_max"] or meta_acc["ts_max"], meta_acc["ts_max"]) \
                     if meta_acc["ts_max"] else acc["ts_max"]
-                acc["chat_ids"].update(meta_acc["chat_ids"])
+                acc["context_keys"].update(meta_acc["context_keys"])
                 acc["peers"].update(meta_acc["peers"])
     except Exception:
         pass
-    if not by_project:
+    # P6-1（§16.3）/ N-17（§14.2）：当日观察见闻进素材——「我今天自己去看了什么」
+    # 与对话经历同一篇、第一人称；纯观察日（没聊天但有事做）也算有素材的一天。
+    obs_items = _diary_observation_lines(day) + _revisit_atom_lines(day)
+    if not by_project and not obs_items:
         return 0
     # 该日完成任务（标题级一句话；任务明细走轨迹，日记只收经历）
     try:
@@ -2788,7 +2479,7 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
     try:
         if (scene_executor.diary_dir() / f"diary-{day}.md").exists():
             return 0                                    # 一日一篇，幂等
-        all_items = [x for items in by_project.values() for x in items]
+        all_items = [x for items in by_project.values() for x in items] + obs_items
         # 素材 v3：全局尾窗 ∪ 每会话保底（保证被看见），按 ts 排序、硬顶封 token
         chosen = set(sorted(all_items, key=lambda x: x[0])[-_DIARY_TAIL_LINES:])
         for tails in file_tails.values():
@@ -2805,7 +2496,7 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
         if len(material.strip()) < 80:
             return 0                                    # 素材太薄，白卷
         system = _DIARY_SYSTEM + (
-            "\n今天的事可能发生在几个不同场合（群聊、私聊、工作任务）。写**一篇**连贯的"
+            "\n今天的事可能发生在几个不同场合。写**一篇**连贯的"
             "第一人称日记，按场合自然分段，别写成互不相干的流水账，也不要标项目名。")
         known = self_names()
         if known:
@@ -2817,21 +2508,29 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
         if not diary:
             return 0
         topics = _normalize_topics((data or {}).get("topics"))
+        # P6-1「可回味」元数据：气氛词面（同一次调用顺带产出；非字符串按空处理，≤24 字）
+        _atm = (data or {}).get("atmosphere")
+        atmosphere = (_atm if isinstance(_atm, str) else "").strip()[:24]
         # 场合/对象/时间区间跨项目合并——索引仍是一行（键 = 日期）
-        chat_ids: set = set()
+        context_keys: set = set()
         peers: set = set()
         ts_min = ts_max = ""
         for acc0 in span.values():
-            chat_ids.update(acc0.get("chat_ids") or [])
+            context_keys.update(acc0.get("context_keys") or [])
             peers.update(acc0.get("peers") or [])
             if acc0.get("ts_min"):
                 ts_min = min(ts_min or acc0["ts_min"], acc0["ts_min"])
             if acc0.get("ts_max"):
                 ts_max = max(ts_max or acc0["ts_max"], acc0["ts_max"])
+        # P6-2：共同经历标记——素材行出现配置参与人的名字才标（取值来自配置，INV-4；
+        # 不进 atoms、不参与四态，只是叙事 META/索引标注）。
+        we_hit = sorted({n for n in _we_participants()
+                         if any(n in ln for ln in recs)})[:6]
         if scene_executor.write_diary_block(
                 "", day, diary, topics=topics,
-                chat_ids=sorted(chat_ids), peers=sorted(peers),
-                time_from=ts_min, time_to=ts_max):
+                context_keys=sorted(context_keys), peers=sorted(peers),
+                time_from=ts_min, time_to=ts_max,
+                atmosphere=atmosphere, we_participants=we_hit):
             written += 1
             # summary 与 META 同源（回读刚写的块，取 parse 出的首句摘要）
             _raw = scene_executor.read_scene_block("", f"diary-{day}.md")
@@ -2842,7 +2541,8 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
                 time_from=ts_min, time_to=ts_max,
                 summary=str(_meta.get("summary") or ""),
                 topics=topics,
-                chat_ids=sorted(chat_ids), peers=sorted(peers),
+                context_keys=sorted(context_keys), peers=sorted(peers),
+                atmosphere=atmosphere,
                 date_basis="local")
     except Exception:
         return 0
@@ -2866,7 +2566,7 @@ def _catchup_diary_days(now: Optional[datetime] = None) -> List[str]:
     return [localtime.local_days_ago(i) for i in range(1, _DIARY_CATCHUP_DAYS + 1)]
 
 
-def maintain_diaries(brain_cfg: Optional[Dict[str, Any]], persona: str = "") -> int:
+def maintain_diaries(brain_cfg: Optional[Dict[str, Any]]) -> int:
     """日记步总入口（巩固期第 8 步，补齐模式）：对窗口内每天独立尝试 ``maintain_diary``。
 
     已有日记幂等跳过、素材太薄白卷跳过（两者都不调 LLM）；只有「缺日记且有素材」的
@@ -2875,21 +2575,21 @@ def maintain_diaries(brain_cfg: Optional[Dict[str, Any]], persona: str = "") -> 
     written = 0
     for day in _catchup_diary_days():
         try:
-            written += maintain_diary(brain_cfg, persona, day=day)
+            written += maintain_diary(brain_cfg, day=day)
         except Exception:
             continue
     return written
 
 
 _REL_SYSTEM = (
-    "你是助手本人。下面这些「他说过的话」来自你与某个人的往来（可能跨群、也可能私聊）。"
+    "你是助手本人。下面这些「他说过的话」来自你与某个人的往来（可能跨多个场合）。"
     "写你对这个人的印象：第一人称、口语、三行以内；只写材料里能看出来的东西，"
     "不编造、不给 TA 的人格下判决。\n"
-    "注意：群里可能有与你同名的其他人（同名 agent），材料里出现的名字不一定指你；"
+    "注意：材料里可能出现同名对象，出现的名字不一定指你；"
     "只根据说话内容判断，别把称呼当成你自己。\n"
     "哪怕只有几轮往来也尽量写出能看出的东西；确实看不出才整卡写「还不熟」。\n"
     "格式：\n最近交手：<这段时间发生过什么，一两句>\n"
-    "他对我的态度：<试探/起哄/客气/熟络/冷淡…>\n我对他的态度：<警惕/冷淡/愿意接话/松快…>\n"
+    "他对我的态度：用你自己的话概括\n我对他的态度：用你自己的话概括\n"
     "topics：2-5 个可检索的主题词或短语（我们之间的事、共同的梗），名词优先，"
     "取自往来素材；不要整句、不要评价；没有则空数组。"
     '只返回 JSON:{"card": "...", "topics": ["...", "..."]}'
@@ -2927,45 +2627,41 @@ _REL_TAIL_LINES = 600
 
 
 def _peer_lines(limit_days: int = 7) -> Dict[str, Dict[str, Any]]:
-    """按 uid 汇总「某人说过的话」——**跨项目、跨会话合并**（人是跨场景的）。
+    """按结构化 speaker 汇总「某人说过的话」——跨场合、跨会话合并。
 
-    只认带来源标注的 user 行（``名片(uid): 文本``，通道层写入）；同一 uid 在不同群/
-    私聊的记录会并到一起，这正是「一个助手在回忆同一个人」。
+    speaker 由边界层写入 ``l0_messages``（``name(uid)`` 形式由适配层归一）；
+    内核只按 uid 分组，不解析任何文本格式（INV-4）。
     """
-    import re
-
-    pat = re.compile(r"「?([^」():：]{1,24})」?\((\d{4,12})\)[:：]\s*(.+)")
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, limit_days))
               ).strftime("%Y-%m-%d")
     out: Dict[str, Dict[str, Any]] = {}
-    for f in rp.projects_root().glob("*/s_*.jsonl"):
+    try:
+        conn = open_brain()
         try:
-            lines = f.read_text(encoding="utf-8").splitlines()[-_REL_TAIL_LINES:]
-        except Exception:
+            rows = conn.execute(
+                "SELECT speaker, text, recorded_at FROM l0_messages "
+                "WHERE role='user' AND speaker != '' AND recorded_at >= ? "
+                "ORDER BY recorded_at DESC LIMIT 400", (cutoff,)).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return out
+    for speaker, text, _ts in rows:
+        value = str(speaker or "").strip()
+        if "(" not in value or not value.endswith(")"):
             continue
-        for line in lines:
-            try:
-                rec = json.loads(line)
-            except Exception:
-                continue
-            ts = str(rec.get("ts") or "")
-            if ts and ts[:10] < cutoff:
-                continue
-            if str(rec.get("role")) != "user":
-                continue
-            m = pat.search(str(rec.get("content") or ""))
-            if not m:
-                continue
-            name, uid, text = m.group(1).strip(), m.group(2), m.group(3).strip()
-            item = out.setdefault(uid, {"name": name, "lines": []})
-            if not item.get("name"):
-                item["name"] = name
-            if text:
-                item["lines"].append(text[:160])
+        name, _, uid = value.rpartition("(")
+        uid = uid.rstrip(")")
+        if not uid or not name:
+            continue
+        item = out.setdefault(uid, {"name": name.strip(), "lines": []})
+        body = str(text or "").strip()
+        if body:
+            item["lines"].append(body[:160])
     return out
 
 
-def maintain_relations(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
+def maintain_relations(brain_cfg: Optional[Dict[str, Any]],
                        limit_days: int = 7) -> int:
     """关系卡步：按**人**把这段时间的往来压成一张印象卡（全局一份，不按群/项目拆）。
 
@@ -3004,13 +2700,18 @@ def maintain_relations(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
                           f"updated: {_now()}\n")
             if topics:
                 meta_lines += f"topics: {json.dumps(topics, ensure_ascii=False)}\n"
+            # P6-2：关系卡上的共同经历标记——素材里出现配置参与人才标（INV-4，取值
+            # 来自配置；不进 atoms，只是卡片 META 标注）。
+            we_hit = [n for n in _we_participants() if n in material][:6]
+            if we_hit:
+                meta_lines += f"we: {json.dumps(we_hit, ensure_ascii=False)}\n"
             body = ("-----META-START-----\n" + meta_lines + "-----META-END-----\n"
                     + card[:600])
             (d / f"{uid}.md").write_text(body, encoding="utf-8")
             peer_label = f"{info.get('name') or uid}({uid})"
             upsert_narrative_index(uid, "relation", project_id="",
                                    summary="", topics=topics,
-                                   chat_ids=[], peers=[peer_label],
+                                   context_keys=[], peers=[peer_label],
                                    date_basis="local")
             written += 1
         except Exception:
@@ -3018,7 +2719,7 @@ def maintain_relations(brain_cfg: Optional[Dict[str, Any]], persona: str = "",
     return written
 
 
-def maintain_month_diary(brain_cfg: Optional[Dict[str, Any]], persona: str = "") -> int:
+def maintain_month_diary(brain_cfg: Optional[Dict[str, Any]]) -> int:
     """月记步（plan persona-social-memory M2.5）：把**已结束月份**的日记压缩为月记块。
 
     月记 ``diary-month-<月份>.md`` 是消费地图（META.summary = 关键人物/事件一行式）——
@@ -3086,7 +2787,7 @@ def maintain_month_diary(brain_cfg: Optional[Dict[str, Any]], persona: str = "")
 
 
 def remember(text: str, kind: str = "fact", importance: float = 0.8,
-             persona: str = "", brain_cfg: Optional[Dict[str, Any]] = None,
+             brain_cfg: Optional[Dict[str, Any]] = None,
              origin: str = "", source_task: str = "remember") -> str:
     """显式写入一条记忆（agent/用户主动）。返回 record_id；失败返回空串。"""
     text = (text or "").strip()[:_MAX_ATOM_CHARS]
@@ -3102,7 +2803,7 @@ def remember(text: str, kind: str = "fact", importance: float = 0.8,
         now = _now()
         rid = _new_id()
         _insert_atom(conn, rid, {"text": text, "kind": kind, "importance": importance},
-                     persona or str(_cfg("persona") or ""), origin, source_task, now)
+                     origin, source_task, now)
         conn.commit()
         return rid
     except Exception:
@@ -3111,7 +2812,7 @@ def remember(text: str, kind: str = "fact", importance: float = 0.8,
         conn.close()
 
 
-def update_memory(record_id: str, new_text: str, persona: str = "") -> str:
+def update_memory(record_id: str, new_text: str) -> str:
     """更正记忆：旧条 tombstone(superseded_by=新条)，新条入库。返回新 record_id 或空串。"""
     new_text = (new_text or "").strip()[:_MAX_ATOM_CHARS]
     if not new_text or not enabled():
@@ -3125,7 +2826,7 @@ def update_memory(record_id: str, new_text: str, persona: str = "") -> str:
         now = _now()
         rid = _new_id()
         _insert_atom(conn, rid, {"text": new_text, "kind": "fact", "importance": 0.7},
-                     persona or str(_cfg("persona") or ""), "", "update", now)
+                     "", "update", now)
         conn.execute("UPDATE atoms SET state='tombstone', superseded_by=?, updated=? "
                      "WHERE record_id=?", (rid, now, record_id))
         conn.commit()
@@ -3136,7 +2837,7 @@ def update_memory(record_id: str, new_text: str, persona: str = "") -> str:
         conn.close()
 
 
-def forget(record_id: str, reason: str = "", persona: str = "") -> bool:
+def forget(record_id: str, reason: str = "") -> bool:
     """主动遗忘：state → tombstone（保留内容与原因，审计可溯）。"""
     if not enabled():
         return False
@@ -3197,7 +2898,7 @@ def atoms_since(cursor: str = "", project_id: str = "",
     """L2 进料：上次游标之后新增/被更新过的 **active** L1 原子（updated 升序）。
 
     **一池增量、不分组**（INV-9，P2 废除 ``origin`` 过滤）：L2 进料取一池原子增量，
-    场合标签（``chat_id``）只作渲染元信息，不用于过滤批次。``project_id`` 参数保留
+    场合标签（``context_key``）只作渲染元信息，不用于过滤批次。``project_id`` 参数保留
     仅作调用兼容，不再参与路由——存储是一池，路由只发生在消费端（§4.3/§11）。
 
     游标为**复合键** ``updated|record_id``（P1）：同戳批次 + LIMIT 会静默丢料——
@@ -3215,7 +2916,7 @@ def atoms_since(cursor: str = "", project_id: str = "",
     conn = open_brain()
     try:
         rows = conn.execute(
-            "SELECT record_id, content, kind, importance, created, updated, chat_id, "
+            "SELECT record_id, content, kind, importance, created, updated, context_key, "
             "source_kind FROM atoms WHERE state='active' "
             "AND (updated > ? OR (updated = ? AND record_id > ?)) "
             "ORDER BY updated ASC, record_id ASC LIMIT ?",
@@ -3226,7 +2927,7 @@ def atoms_since(cursor: str = "", project_id: str = "",
         conn.close()
     return [{"id": r[0], "content": r[1], "kind": r[2],
              "importance": r[3], "created_at": r[4], "updated_at": r[5],
-             "chat_id": r[6] or "", "source_kind": r[7] or "dialogue"} for r in rows]
+             "context_key": r[6] or "", "source_kind": r[7] or "dialogue"} for r in rows]
 
 
 def cursor_at(atom: Dict[str, Any]) -> str:
@@ -3299,7 +3000,7 @@ def request_profile_update(reason: str) -> None:
         conn.close()
 
 
-def maintain_profile(brain_cfg: Optional[Dict[str, Any]], persona: str = "") -> bool:
+def maintain_profile(brain_cfg: Optional[Dict[str, Any]]) -> bool:
     """L3 画像重写：上次水位之后的新 atoms → LLM 增量合并 → user_profile.md（旧版 .bak）。
 
     - gate ``knowledge.profile.auto_maintain``（缺省开）

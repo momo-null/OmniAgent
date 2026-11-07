@@ -192,14 +192,14 @@ function HomeView({ onNavigate }: { onNavigate: (view: DockTab) => void }) {
 }
 
 function DockBody({ view }: { view: DockTab }) {
-  const { debugLogs, clearDebugLogs, currentTaskId } = useTaskStore();
+  const { debugLogs, clearDebugLogs } = useTaskStore();
   switch (view) {
     case "files": return <FilesTab />;
     case "browser": return <BrowserTab />;
     case "git": return <GitTab />;
     case "terminal": return <TerminalTab />;
     case "debug":
-    default: return <DebugPanel logs={debugLogs} onClear={clearDebugLogs} taskId={currentTaskId} />;
+    default: return <DebugPanel logs={debugLogs} onClear={clearDebugLogs} />;
   }
 }
 

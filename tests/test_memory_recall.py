@@ -1,4 +1,4 @@
-"""记忆召回整治（plan memory-recall-2026-11-02）P0/P1/P5/P7 行为的回归锁。
+"""记忆召回整治 P0/P1/P5/P7 行为的回归锁（依据见 implemented/memory-architecture.md §13.1）。
 
 覆盖：绝对分（bm25_rank_to_score）、覆盖门槛（单命中高频词才丢，低频专名保留）、
 同主题去冗余、
@@ -60,10 +60,10 @@ def test_rel_no_longer_rank_normalized_inject_floor_gates(brain):
     conn = memory_brain.open_brain()
     now = memory_brain._now()
     memory_brain._insert_atom(conn, "r1", {"text": "盘前分析", "kind": "fact",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     memory_brain._insert_atom(conn, "r2", {"text": "另一条完全无关的持仓纪律",
                                            "kind": "rule", "importance": 0.9},
-                              "", "p", "t", now)
+                              "p", "t", now)
     conn.commit()
     h1 = memory_brain.search_brain("盘前分析", conn=conn, reinforce=False)
     conn.close()
@@ -113,7 +113,7 @@ def test_dedupe_same_kind_peer_prefix(brain):
         memory_brain._insert_atom(conn, f"d{i}",
                                   {"text": "成员甲第0次踩我语音记录" + suffix,
                                    "kind": "episode", "importance": 0.6,
-                                   "peer": "成员甲(999999)"}, "", "p", "t", now)
+                                   "peer": "成员甲(999999)"}, "p", "t", now)
     conn.commit()
     conn.close()
     hits = memory_brain.search_brain("成员甲踩我语音", k=5, reinforce=False)
@@ -126,9 +126,9 @@ def test_recency_rotation_penalizes_only(brain):
     now = memory_brain._now()
     conn = memory_brain.open_brain()
     memory_brain._insert_atom(conn, "x1", {"text": "盘前分析固定结论", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     memory_brain._insert_atom(conn, "x2", {"text": "盘前分析之补充说明", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     conn.commit()
     first = memory_brain.search_brain("盘前分析补充", k=2, conn=conn, reinforce=True)
     top1 = first[0]["record_id"]
@@ -156,7 +156,7 @@ def test_update_atom_keeps_one_fts_row(brain):
     conn = memory_brain.open_brain()
     now = memory_brain._now()
     memory_brain._insert_atom(conn, "u1", {"text": "群聊回复要短不分段", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     conn.commit()
     for text in ("群聊回复要短、不分段、不刷屏", "群聊回复格式：一句话说完、不分段"):
         conn.execute("UPDATE atoms SET content=? WHERE record_id=?", (text, "u1"))
@@ -178,7 +178,7 @@ def test_search_reads_live_text_when_index_is_stale(brain):
     conn = memory_brain.open_brain()
     now = memory_brain._now()
     memory_brain._insert_atom(conn, "v1", {"text": "白丝照片一律不给", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     assert memory_brain._fts_ok(conn)       # 先让版本迁移落定，否则脏行会被重建一起清掉
     conn.execute("INSERT INTO atoms_fts(record_id, content) VALUES(?,?)",
                  ("v1", "白丝什么的你想都别想"))
@@ -196,9 +196,9 @@ def test_consolidate_merge_leaves_no_stale_copy(brain, monkeypatch):
     now = memory_brain._now()
     conn = memory_brain.open_brain()
     memory_brain._insert_atom(conn, "g1", {"text": "提醒：以主人身份只在飞书", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     memory_brain._insert_atom(conn, "g2", {"text": "QQ 上也以主人身份说话", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     conn.commit()
     conn.close()
     for fn in ("maintain_profile", "maintain_diary", "maintain_month_diary",
@@ -212,7 +212,7 @@ def test_consolidate_merge_leaves_no_stale_copy(brain, monkeypatch):
         return {"rule": ""}
 
     monkeypatch.setattr(memory_brain.llm_judge, "chat_json", _router)
-    assert memory_brain._consolidate_impl({"base_url": "http://x"}, "tangtang")["merged"] >= 1
+    assert memory_brain._consolidate_impl({"base_url": "http://x"})["merged"] >= 1
     conn = memory_brain.open_brain()
     assert _fts_rows(conn, "g2") == 1
     n_fts = int(conn.execute("SELECT COUNT(*) FROM atoms_fts").fetchone()[0])
@@ -230,7 +230,7 @@ def test_fts_version_bump_repairs_dirty_index(brain):
     conn = memory_brain.open_brain()
     now = memory_brain._now()
     memory_brain._insert_atom(conn, "w1", {"text": "盘前分析包含一句话结论", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     tok = memory_brain._fts_tokenizer()
     conn.execute("INSERT INTO atoms_fts(record_id, content) VALUES(?,?)",
                  ("w1", "盘前分析固定包含结论"))
@@ -259,9 +259,9 @@ def test_fts_neighbors_full_text_candidates(brain):
     now = memory_brain._now()
     conn = memory_brain.open_brain()
     memory_brain._insert_atom(conn, "n1", {"text": "提醒：以主人身份只在飞书", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     memory_brain._insert_atom(conn, "n2", {"text": "QQ 上也以主人身份说话", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     conn.commit()
     cands = dict(memory_brain._fts_neighbors(conn, "QQ 上也以主人身份说话", "n2"))
     conn.close()
@@ -278,9 +278,9 @@ def test_consolidate_uses_fulltext_neighbors_and_merges(brain, monkeypatch):
     now = memory_brain._now()
     conn = memory_brain.open_brain()
     memory_brain._insert_atom(conn, "m1", {"text": "提醒：以主人身份只在飞书", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     memory_brain._insert_atom(conn, "m2", {"text": "QQ 上也以主人身份说话", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     conn.commit()
     conn.close()
     for fn in ("maintain_profile", "maintain_diary", "maintain_month_diary",
@@ -296,7 +296,7 @@ def test_consolidate_uses_fulltext_neighbors_and_merges(brain, monkeypatch):
         return {"rule": ""}
 
     monkeypatch.setattr(memory_brain.llm_judge, "chat_json", _router)
-    out = memory_brain._consolidate_impl({"base_url": "http://x"}, "tangtang")
+    out = memory_brain._consolidate_impl({"base_url": "http://x"})
     conn = memory_brain.open_brain()
     st2 = conn.execute("SELECT content, state FROM atoms WHERE record_id='m2'").fetchone()
     st1 = conn.execute("SELECT state FROM atoms WHERE record_id='m1'").fetchone()
@@ -316,9 +316,9 @@ def test_consolidate_rejects_overlong_merge(brain, monkeypatch):
     now = memory_brain._now()
     conn = memory_brain.open_brain()
     memory_brain._insert_atom(conn, "o1", {"text": "提醒：以主人身份只在飞书", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     memory_brain._insert_atom(conn, "o2", {"text": "QQ 上也以主人身份说话", "kind": "rule",
-                                           "importance": 0.9}, "", "p", "t", now)
+                                           "importance": 0.9}, "p", "t", now)
     conn.commit()
     conn.close()
     for fn in ("maintain_profile", "maintain_diary", "maintain_month_diary",
@@ -334,7 +334,7 @@ def test_consolidate_rejects_overlong_merge(brain, monkeypatch):
         return {"rule": ""}
 
     monkeypatch.setattr(memory_brain.llm_judge, "chat_json", _router)
-    out = memory_brain._consolidate_impl({"base_url": "http://x"}, "tangtang")
+    out = memory_brain._consolidate_impl({"base_url": "http://x"})
     conn = memory_brain.open_brain()
     rows = {r[0]: {"content": r[1], "state": r[2]} for r in conn.execute(
         "SELECT record_id, content, state FROM atoms WHERE record_id IN ('o1','o2')").fetchall()}
@@ -354,12 +354,12 @@ def test_states_only_active_and_tombstone(brain):
     conn = memory_brain.open_brain()
     now = memory_brain._now()
     memory_brain._insert_atom(conn, "s1", {"text": "静态显著性检查", "kind": "fact",
-                                           "importance": 0.4}, "", "p", "t", now)
+                                           "importance": 0.4}, "p", "t", now)
     conn.commit()
     conn.close()
     rid = memory_brain.remember("另一条老事实", kind="fact", importance=0.4)
     # 巩固跑一轮：salience 不再衰减（=importance），也不产生 dormant/archived
-    memory_brain._consolidate_impl({"base_url": "http://x"}, "tangtang")
+    memory_brain._consolidate_impl({"base_url": "http://x"})
     conn = memory_brain.open_brain()
     rows = conn.execute("SELECT record_id, state, salience, importance FROM atoms").fetchall()
     conn.close()
@@ -409,31 +409,31 @@ def test_recall_stats_accumulate_and_observability_line(brain):
 
 # ---- M2（plan personal-agent-memory §6.2）：场合/共同背景加权，peer 接通 ----
 
-def _mk_atom(conn, rid, text, *, peer="", chat_id="", now=None):
+def _mk_atom(conn, rid, text, *, peer="", context_key="", now=None):
     memory_brain._insert_atom(conn, rid, {"text": text, "kind": "fact",
                                           "importance": 0.6,
-                                          "peer": peer, "chat_id": chat_id},
-                              "", "p", "t", now or memory_brain._now())
+                                          "peer": peer, "context_key": context_key},
+                              "p", "t", now or memory_brain._now())
 
 
 def test_context_weighting_orders_but_never_filters(brain, monkeypatch):
-    """INV-3：同 query 在两个 chat_id 下 top-k 有差异，且两条全局事实**都仍可召回**；
-    chat_id 不进 SQL WHERE（加权不过滤）。"""
+    """INV-3：同 query 在两个 context_key 下 top-k 有差异，且两条全局事实**都仍可召回**；
+    context_key 不进 SQL WHERE（加权不过滤）。"""
     monkeypatch.setattr(memory_brain, "_ctx_cfg",
                         lambda key, default=None: {"w_ctx": 0.25, "w_bg": 0.10}.get(
                             key, default))
     conn = memory_brain.open_brain()
     try:
-        _mk_atom(conn, "r_a", "白米饭是本群的传统话题", chat_id="group:a")
-        _mk_atom(conn, "r_b", "白米饭在别的群没人提", chat_id="group:b")
+        _mk_atom(conn, "r_a", "白米饭是本群的传统话题", context_key="group:a")
+        _mk_atom(conn, "r_b", "白米饭在别的群没人提", context_key="group:b")
         _mk_atom(conn, "r_g", "白米饭的一般性事实，无场合标注")
         conn.commit()
     finally:
         conn.close()
     # reinforce=False：只读对照，不被轮换环污染（环衰减是既有语义，与本断言无关）
-    ra = [h["record_id"] for h in memory_brain.search_brain("白米饭", chat_id="group:a",
+    ra = [h["record_id"] for h in memory_brain.search_brain("白米饭", context_key="group:a",
                                                             reinforce=False)]
-    rb = [h["record_id"] for h in memory_brain.search_brain("白米饭", chat_id="group:b",
+    rb = [h["record_id"] for h in memory_brain.search_brain("白米饭", context_key="group:b",
                                                             reinforce=False)]
     # 都可召回（不过滤）
     assert "r_g" in ra and "r_g" in rb
@@ -441,7 +441,7 @@ def test_context_weighting_orders_but_never_filters(brain, monkeypatch):
     # 排序有差异：各自场合的标注条目排前
     assert ra[0] == "r_a" and rb[0] == "r_b"
     # 同场合分数高于无场合：ctx_hit 标记可见
-    hits = memory_brain.search_brain("白米饭", chat_id="group:a", reinforce=False)
+    hits = memory_brain.search_brain("白米饭", context_key="group:a", reinforce=False)
     by_id = {h["record_id"]: h for h in hits}
     assert by_id["r_a"]["ctx_hit"] is True and by_id["r_g"]["ctx_hit"] is False
     assert by_id["r_a"]["score"] > by_id["r_g"]["score"]
@@ -453,21 +453,21 @@ def test_background_weighting_via_circle_topics(brain, monkeypatch):
                         lambda key, default=None: {"w_ctx": 0.25, "w_bg": 0.10}.get(
                             key, default))
     monkeypatch.setattr(memory_brain, "get_circle_note",
-                        lambda chat_id: {"topics": ["白米饭"]} if chat_id == "group:a" else {})
+                        lambda context_key: {"topics": ["白米饭"]} if context_key == "group:a" else {})
     conn = memory_brain.open_brain()
     try:
-        _mk_atom(conn, "r_a1", "白米饭今天吵起来了", chat_id="group:a")
-        _mk_atom(conn, "r_a2", "别的圈子的事也在本库", chat_id="group:a")
+        _mk_atom(conn, "r_a1", "白米饭今天吵起来了", context_key="group:a")
+        _mk_atom(conn, "r_a2", "别的圈子的事也在本库", context_key="group:a")
         conn.commit()
     finally:
         conn.close()
-    hits = memory_brain.search_brain("白米饭", chat_id="group:a")
+    hits = memory_brain.search_brain("白米饭", context_key="group:a")
     top = hits[0]
     assert top["record_id"] == "r_a1" and top["ctx_hit"] is True
     assert not any(h["record_id"] == "r_a2" for h in hits) or True  # 未命中词面的不进 top
-    # 对照：无圈层话题（chat_id 无 note）时同一 query 的 top1 分数更低（仅 w_ctx）
-    monkeypatch.setattr(memory_brain, "get_circle_note", lambda chat_id: {})
-    hits2 = memory_brain.search_brain("白米饭", chat_id="group:a")
+    # 对照：无圈层话题（context_key 无 note）时同一 query 的 top1 分数更低（仅 w_ctx）
+    monkeypatch.setattr(memory_brain, "get_circle_note", lambda context_key: {})
+    hits2 = memory_brain.search_brain("白米饭", context_key="group:a")
     assert hits2[0]["score"] < top["score"]
 
 

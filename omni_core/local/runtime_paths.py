@@ -47,8 +47,8 @@ def global_agents_file() -> Path:
 def global_relations() -> Path:
     """全局「对人的印象卡」目录 ``memory/relations/``。
 
-    为什么不在项目层：**人是跨项目的**——同一个群友可能在群里聊、也可能私聊过来；
-    按项目/群存会让"对他的印象"分裂成几份，等于把个人助手做成了分群机器人。
+    为什么不在项目层：**人是跨项目的**——同一个对象可能出现在不同场合；
+    按项目存会让"对他的印象"分裂成几份，等于把个人助手做成了互不知情的分身。
     所以关系卡按 **uid** 存全局一份，卡内再记录"在哪儿遇到、聊过什么"。
     """
     return _GLOBAL / "memory" / "relations"
@@ -57,7 +57,7 @@ def global_relations() -> Path:
 def global_diary() -> Path:
     """全局「她的一天」目录 ``memory/diary/``（日记 / 月记，一天一篇）。
 
-    与关系卡同理：**她的一天是跨项目的**——同一天里群聊、工作任务、私聊都发生在
+    与关系卡同理：**她的一天是跨项目的**——同一天里多个场合、工作任务都发生在
     同一个人身上，按 project 各写一篇会把单一人格切成几个互不知情的分身。
     所以叙事按**日期**存全局一份（plan §3.3 空间键统一表），场合只作内容标注。
     与 project 级 ``scene_blocks/`` 物理分离，L2 主题块仍按工作项目分目录。
@@ -242,7 +242,7 @@ def channel_config_file(name: str) -> Path:
 
 
 def channel_routes_file() -> Path:
-    """聊天路由表 ``channels/routes.yaml``（msg/<channel>/<chat_id> → 项目/会话）。"""
+    """通道路由表 ``channels/routes.yaml``（字段由通道层解释，映射项目/会话）。"""
     return channels_root() / "routes.yaml"
 
 

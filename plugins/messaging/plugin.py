@@ -471,7 +471,7 @@ def msg_group_history(group_id: str = "", limit: int = 20, channel: str = "",
             sid = _resolve_route(ch_name, f"group:{gid}")[1]
         except Exception:
             sid = ""
-        rows = (memory_brain.search_l0(kw, chat_id=f"group:{gid}", session_id=sid,
+        rows = (memory_brain.search_l0(kw, context_key=f"group:{gid}", session_id=sid,
                                        limit=max(1, min(20, int(limit or 8))))
                 if memory_brain is not None else [])
         try:

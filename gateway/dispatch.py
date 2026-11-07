@@ -247,10 +247,11 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         # - auto（Web/飞书这类"直接对模型说话"）：最终回答自动回发（原行为）。
         explicit = str(item.get("reply_mode") or "auto").strip().lower() == "explicit"
         # P2 L0 检索索引（brain.db.l0_messages）用的两个参数：
-        # - chat_id：IM 来源的真实聊天窗口键（``group:123`` / ``private:100``），Web/cron 为空；
+        # - context_key：通用场合键；IM 传 ``group:123`` / ``private:100``，
+        #   Web/cron 由 task_store 按会话构造 ``web:<session_id>``（所有进料必填）；
         # - kind：通道消息 vs 任务输入——cron/手动派发的 objective 同样以 role=user 落进会话，
         #   不区分就会让 conversation_search 把机器指令当聊天命中（检索串味）。
-        _l0_chat_id = str(getattr(reply, "chat_id", "") or "")
+        _l0_context_key = str(getattr(reply, "chat_id", "") or "")
         _l0_kind = "chat" if str(item.get("source") or "").startswith("msg:") else "task"
         existing = TaskStore.find_by_session(project_id, session_id)
         if existing is not None:
@@ -301,7 +302,8 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
                 ProjectStore.append_message(
                     pid, sid, "assistant", "", task_id=real_task_id,
                     extra={"steps": turn_steps[_flushed:], "partial": True, "run_key": run_key},
-                    chat_id=_l0_chat_id, l0_kind=_l0_kind)
+                    context_key=_l0_context_key, l0_kind=_l0_kind,
+                    speaker=str(item.get("speaker") or ""))
                 _flushed = len(turn_steps)
             except Exception:
                 pass
@@ -354,7 +356,8 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             try:
                 ProjectStore.append_message(
                     pid, sid, "assistant", content, task_id=real_task_id, extra=extra,
-                    chat_id=_l0_chat_id, l0_kind=_l0_kind)
+                    context_key=_l0_context_key, l0_kind=_l0_kind,
+                    speaker=str(item.get("speaker") or ""))
             except Exception:
                 pass
 
@@ -363,7 +366,8 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
                 # 会话气泡写消息原文（display_text），场合自述只喂模型不进历史
                 ProjectStore.append_message(pid, sid, "user", display_text,
                                             task_id=real_task_id,
-                                            chat_id=_l0_chat_id, l0_kind=_l0_kind)
+                                            context_key=_l0_context_key, l0_kind=_l0_kind,
+                    speaker=str(item.get("speaker") or ""))
             except Exception:
                 pass
 
@@ -422,12 +426,28 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         # 进料道结构标注（F-4）：context_signal 与观测行的 source_kind 同源
         context.set_source_kind(_l0_kind)
         context.reset_sent()  # 清空上一轮的「已发出」记账
+        # H-8：场合键等结构在边界层归一后写入内核信号，内核不再反向读通道句柄。
+        try:
+            from omni_core.local.loop import context_signal as _cs
+            _cs.set_boundary(
+                context_key=_l0_context_key or f"web:{sid}",
+                source_kind=_l0_kind,
+                source_external=reply is not None and not bool(item.get("tools_enabled", True)),
+                session_id=sid,
+                sent_count=context.sent_count)
+        except Exception:
+            pass
         try:
             result = loop.run_task(spec)
         finally:
             context.set_current_reply(None)
             context.set_source_external(False)
             context.set_source_kind("")
+            try:
+                from omni_core.local.loop import context_signal as _cs
+                _cs.set_boundary()
+            except Exception:
+                pass
 
         summary = _extract_summary(result)
         # 最终口播（真实回答）；内部判定文案只进任务详情/日志，绝不外发
@@ -452,7 +472,6 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             if pid:
                 memory_writer.enqueue_throttled(
                     pid, brain_cfg, source_task=real_task_id,
-                    persona=getattr(loop, "persona", "") or "",
                     did_work=True)
         except Exception as e:  # noqa: BLE001 —— 写链是增强项，失败不影响本轮
             print(f"[dispatch] 记忆入队失败（忽略）: {type(e).__name__}: {e}")
@@ -555,7 +574,7 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
            origin: str = "named",
            tools_enabled: bool = True,
            attachments: Optional[List[Dict[str, Any]]] = None,
-           voice_reply: bool = False) -> str:
+           voice_reply: bool = False, speaker: str = "") -> str:
     """异步提交（网关消息/cron 用）。返回 task_id。
 
     session_id：显式指定会话（消息通道用 ``msg:<channel>:<chat_id>`` 固定会话——
@@ -597,7 +616,8 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
                 "origin": str(origin or "named").strip().lower(),
                 "tools_enabled": bool(tools_enabled),
                 "attachments": list(attachments or []),
-                "voice_reply": bool(voice_reply)})
+                "voice_reply": bool(voice_reply),
+                "speaker": str(speaker or "")})
     return task_id
 
 
@@ -608,6 +628,7 @@ def dispatch_sync(objective: str, done_when: str = "", max_steps: int = 40, *,
                   session_id: Optional[str] = None,
                   title: str = "", display_text: str = "", reply_mode: str = "auto",
                   origin: str = "named", tools_enabled: bool = True,
+                  speaker: str = "",
                   attachments: Optional[List[Dict[str, Any]]] = None) -> DispatchResult:
     """同步执行（CLI/测试/「立即运行」用）。"""
     return _run_task_once({"task_id": uuid.uuid4().hex[:16], "objective": objective,
@@ -619,7 +640,8 @@ def dispatch_sync(objective: str, done_when: str = "", max_steps: int = 40, *,
                            "reply_mode": str(reply_mode or "auto").strip().lower(),
                            "origin": str(origin or "named").strip().lower(),
                            "tools_enabled": bool(tools_enabled),
-                           "attachments": list(attachments or [])})
+                           "attachments": list(attachments or []),
+                           "speaker": str(speaker or "")})
 
 
 def queue_size() -> int:

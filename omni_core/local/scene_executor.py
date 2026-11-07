@@ -645,7 +645,7 @@ def maybe_maintain(project_id: str, brain_cfg: Optional[Dict[str, Any]],
       分组键是 ``origin``(= 落库时的 project id),``origin=''`` 的手记全局条目对各库都可见;
       存储仍是一池,路由只发生在进料这一面。零增量 → 整轮不调 LLM 直接返回
       (对齐上游 ``memRecords.length === 0 → skipped``)。本函数不再吃会话要点/世界状态,
-      所以"按设定不产 L1"的轮次(群聊、定时任务)天然喂不进场景块——叙事归日记(L0),
+      所以"不产 L1"的轮次天然喂不进场景块——叙事归日记(L0),
       知识归原子(L1),两条进料道不再交叉。这是场景块不再无限长的主闸。
     - 水位(两份,都存 ``scene_index.json``):时间节流位 ``last_maintain_ts`` 空维护不推进
       (本地既有约定);进料游标位 ``last_l2_atom_ts`` 只要本轮动过块就推进,
@@ -684,7 +684,7 @@ def maybe_maintain(project_id: str, brain_cfg: Optional[Dict[str, Any]],
             [{"id": a["id"], "content": a["content"], "kind": a["kind"],
               "created_at": a["created_at"],
               # 场合/来源标签只作**渲染元信息**（INV-9：不用于过滤批次）
-              "chat_id": str(a.get("chat_id") or ""),
+              "context_key": str(a.get("context_key") or ""),
               "source_kind": str(a.get("source_kind") or "")}
              for a in feed],
             ensure_ascii=False, indent=2)
@@ -783,9 +783,11 @@ def list_scene_blocks(project_id: str) -> List[Dict[str, Any]]:
 
 def write_diary_block(project_id: str, date_str: str, text: str, *,
                       topics: Optional[List[str]] = None,
-                      chat_ids: Optional[List[str]] = None,
+                      context_keys: Optional[List[str]] = None,
                       peers: Optional[List[str]] = None,
-                      time_from: str = "", time_to: str = "") -> bool:
+                      time_from: str = "", time_to: str = "",
+                      atmosphere: str = "",
+                      we_participants: Optional[List[str]] = None) -> bool:
     """写日记块 ``diary-<日期>.md``（内核巩固期直写；plan persona-social-memory M2）。
 
     H-4（2026-11-06）：落点是**全局叙事目录** ``rp.global_diary()``，``project_id``
@@ -794,10 +796,12 @@ def write_diary_block(project_id: str, date_str: str, text: str, *,
     - 当日一篇、幂等（已存在则跳过返回 False）；META.summary = 正文首行（导航地图用）；
     - 日记不占任务块 max_blocks 容量、维护 agent 不可读写（只读资产）；
     - 空正文拒绝（白卷不落盘）；
-    - 可选键（plan §13.2.2）：``topics`` / ``chat_ids`` / ``peers`` / ``time_from`` /
-      ``time_to`` 追加在四键之后；``parse_scene_block`` 只认原四键，新键自动忽略，
-      五字段投影不受影响。本函数**不碰叙事索引**（upsert 由巩固期调用方负责，
-      §13.10.4：写块与索引分工，索引失败静默不回滚写块）。
+    - 可选键（plan §13.2.2 / §16.3）：``topics`` / ``context_keys`` / ``peers`` /
+      ``time_from`` / ``time_to`` / ``atmosphere``（P6-1 可回味词面）/
+      ``we``（P6-2 共同经历参与人，取值来自配置）追加在四键之后；
+      ``parse_scene_block`` 只认原四键，新键自动忽略，五字段投影不受影响。
+      本函数**不碰叙事索引**（upsert 由巩固期调用方负责，§13.10.4：写块与索引分工，
+      索引失败静默不回滚写块）。
     """
     try:
         text = (text or "").strip()
@@ -820,17 +824,22 @@ def write_diary_block(project_id: str, date_str: str, text: str, *,
         summary = flat[:min(end, 60)]
         meta = (f"{_META_START}\ncreated: {now}\nupdated: {now}\n"
                 f"summary: {summary}\nheat: 0\n")
-        # 可选键（§13.2.2）：值为空/缺省不写行——老解析只认四键，行越少越干净
+        # 可选键（§13.2.2 / §16.3）：值为空/缺省不写行——老解析只认四键，行越少越干净
         if topics:
             meta += f"topics: {json.dumps(_clean_list(topics), ensure_ascii=False)}\n"
-        if chat_ids:
-            meta += f"chat_ids: {json.dumps(_clean_list(chat_ids), ensure_ascii=False)}\n"
+        if context_keys:
+            meta += f"context_keys: {json.dumps(_clean_list(context_keys), ensure_ascii=False)}\n"
         if peers:
             meta += f"peers: {json.dumps(_clean_list(peers), ensure_ascii=False)}\n"
         if time_from:
             meta += f"time_from: {str(time_from)[:32]}\n"
         if time_to:
             meta += f"time_to: {str(time_to)[:32]}\n"
+        if atmosphere:
+            meta += f"atmosphere: {str(atmosphere).strip()[:32]}\n"
+        we = _clean_list(we_participants)
+        if we:
+            meta += f"we: {json.dumps(we, ensure_ascii=False)}\n"
         meta += f"{_META_END}\n"
         p.write_text(meta + text + "\n", encoding="utf-8")
         return True

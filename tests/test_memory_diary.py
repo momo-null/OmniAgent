@@ -76,11 +76,14 @@ def test_scene_write_rejects_diary(brain_cfg):
 
 
 def test_consolidation_calls_diary_step(monkeypatch, tmp_path):
+    # H-7：隔离库建新 schema；本用例不碰真机 brain.db（不写旧列兼容）
+    monkeypatch.setattr(mb, "_BRAIN_PATH", str(tmp_path / "brain.db"))
+    mb._L0_CONN.update({"path": "", "conn": None})
     monkeypatch.setattr(mb, "_fts_ok", lambda conn: True)   # 隔离库不探 FTS，直测第 8 步挂载
     calls = []
     monkeypatch.setattr(mb, "maintain_diary",
-                        lambda cfg, persona="", day="": calls.append(day) or 0)
-    mb._consolidate_impl({"base_url": "http://x", "model": "m"}, "")
+                        lambda cfg, day="": calls.append(day) or 0)
+    mb._consolidate_impl({"base_url": "http://x", "model": "m"})
     # 补齐模式（2026-11-03）：巩固期对回看窗口内每天各调一次（昨日优先）
     assert len(calls) == mb._DIARY_CATCHUP_DAYS
     assert calls[0] == mb._catchup_diary_days()[0]
@@ -134,7 +137,7 @@ def test_catchup_backfills_within_window_only(monkeypatch, brain_cfg, tmp_path):
     monkeypatch.setattr(mb.llm_judge, "chat_json",
                         lambda *a, **k: llm_calls.append(1) or {"diary": "这天鱼缸很热闹"})
 
-    n = mb.maintain_diaries(brain_cfg, "")
+    n = mb.maintain_diaries(brain_cfg)
     assert n == 1                                    # 只有 d2 成篇
     sblocks = se.diary_dir()                          # H-4：日记落全局叙事目录
     assert (sblocks / f"diary-{d2}.md").exists()
@@ -142,7 +145,7 @@ def test_catchup_backfills_within_window_only(monkeypatch, brain_cfg, tmp_path):
     assert len(llm_calls) == 1                        # 其余日子白卷/无素材，不调 LLM
 
     # 幂等：再跑一遍不再产出、不再调 LLM
-    assert mb.maintain_diaries(brain_cfg, "") == 0
+    assert mb.maintain_diaries(brain_cfg) == 0
     assert len(llm_calls) == 1
 
 
@@ -213,7 +216,7 @@ def test_diary_unified_across_projects(monkeypatch, brain_cfg, tmp_path):
                 "topics": ["群聊", "报告"]}
 
     monkeypatch.setattr(mb.llm_judge, "chat_json", _fake_chat)
-    assert mb.maintain_diary(brain_cfg, "", day=day) == 1
+    assert mb.maintain_diary(brain_cfg, day=day) == 1
     assert len(seen) == 1                                   # 一次 LLM，不是每项目一次
     assert all(f"[{pid}]" in seen[0] for pid in pids)      # 三处经历进同一份素材
     assert "一篇" in systems[0] and "按场合自然分段" in systems[0]
@@ -245,6 +248,178 @@ def test_month_diary_unified_global(monkeypatch, brain_cfg, tmp_path):
     monkeypatch.setattr(mb.llm_judge, "chat_json",
                         lambda *a, **k: calls.append(1) or
                         {"summary": "九月总结", "month_diary": "这个月发生了不少事。"})
-    assert mb.maintain_month_diary(brain_cfg, "") == 1
+    assert mb.maintain_month_diary(brain_cfg) == 1
     assert len(calls) == 1
     assert (se.diary_dir() / "diary-month-2026-09.md").exists()
+
+
+# ---- P6-1（plan §16.3 经历质地 + §14.2 N-17 观察进料）----
+
+def _diary_cfg_stub(monkeypatch, tmp_path):
+    """日记测试公共桩：config 全真、memory_brain 启用、brain.db 隔离。"""
+    import sys
+    import types
+
+    stub = types.ModuleType("config")
+    stub.get_config = lambda k, d=None: True
+    monkeypatch.setitem(sys.modules, "config", stub)
+    monkeypatch.setattr(mb, "enabled", lambda: True)
+    monkeypatch.setattr(mb, "_BRAIN_PATH", str(tmp_path / "brain.db"))
+
+
+def _iso_for(day: str, hour: int = 12) -> str:
+    """该本地日某时刻（本地时区）的 UTC ISO——保证 local_date(ts)==day 恒成立。"""
+    from datetime import datetime, timezone
+
+    from omni_core.local import localtime
+    dt = datetime.strptime(f"{day}T{hour:02d}:00:00", "%Y-%m-%dT%H:%M:%S").replace(
+        tzinfo=localtime.local_tz())
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def test_diary_material_includes_observations(monkeypatch, brain_cfg, tmp_path):
+    """N-17（§14.2）：当日观察见闻进素材，与对话同一篇；非当日的观察不进。"""
+    from omni_core.local import localtime, runtime_paths as rp
+
+    _diary_cfg_stub(monkeypatch, tmp_path)
+    day = localtime.local_days_ago(1)
+    sdir = rp.projects_root() / "qq"
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "s_t.jsonl").write_text(
+        json.dumps({"ts": _iso_for(day, 10), "role": "user",
+                    "content": "「张三」(1): 你今天都看什么了？说来听听，我也正想找点东西看"},
+                   ensure_ascii=False) + "\n", encoding="utf-8")
+    mb.capture_observation("task:interest", "看到一篇讲注意力经济的文章，写得很有意思，"
+                           "里面说人的注意力被切成碎片是设计出来的，不是巧合",
+                           provenance="reader", observed_at=_iso_for(day, 14))
+    mb.capture_observation("task:interest", "三年前的旧闻不该混进当天的素材，"
+                           "这是一条更早日期的观察记录",
+                           provenance="reader",
+                           observed_at=_iso_for(localtime.local_days_ago(4), 9))
+
+    seen = []
+    monkeypatch.setattr(mb.llm_judge, "chat_json",
+                        lambda *a, **k: seen.append(a[2])
+                        or {"diary": "今天看了篇文章，还和人聊了聊。"})
+    assert mb.maintain_diary(brain_cfg, day=day) == 1
+    material = seen[0]
+    assert "[见闻] 看到一篇讲注意力经济的文章" in material      # 见闻行进素材
+    assert "注意力经济" not in material.split("[见闻]")[0]      # 观察不伪装成聊天原话（INV-13）
+    assert "三年前的旧闻" not in material                       # 非当日观察不进
+    assert "「张三」" in material                               # 对话与见闻同一篇
+
+
+def test_diary_pure_observation_day(monkeypatch, brain_cfg, tmp_path):
+    """纯观察日（没聊天但有事做）也算有素材的一天，能成篇。"""
+    from omni_core.local import localtime
+
+    _diary_cfg_stub(monkeypatch, tmp_path)
+    day = localtime.local_days_ago(1)
+    mb.capture_observation("task:interest", "自己读了一篇长文，讲记忆巩固的，"
+                           "读完后试着把要点复述了一遍，感觉比光看记得牢，"
+                           "隔天再复述一次的效果据说更好，打算明天试一试",
+                           provenance="reader", observed_at=_iso_for(day, 15))
+    mb.capture_observation("task:interest", "后来又顺着思路找了篇讲睡眠对记忆影响的科普，"
+                           "里面提到深睡阶段大脑会重放白天的经历，看完觉得今晚该早点睡",
+                           provenance="reader", observed_at=_iso_for(day, 16))
+    monkeypatch.setattr(mb.llm_judge, "chat_json",
+                        lambda *a, **k: {"diary": "今天自己读了篇讲记忆巩固的长文。"})
+    assert mb.maintain_diary(brain_cfg, day=day) == 1
+    assert (se.diary_dir() / f"diary-{day}.md").exists()
+
+
+def test_diary_atmosphere_metadata(monkeypatch, brain_cfg, tmp_path):
+    """P6-1：atmosphere 进 META 与索引词面（触发物/心境可检索）；脏值退化为空。"""
+    from omni_core.local import localtime
+
+    _diary_cfg_stub(monkeypatch, tmp_path)
+    body = ("「张三」(1): 下午那场雨下得人心里发闷，和你聊了会儿天才缓过来，"
+            "后来又说起上周的旧事，还约了周末一起去看新开的展，"
+            "这条素材拉长是为了稳稳超过八十字的白卷门槛")
+    d1, d2 = localtime.local_days_ago(2), localtime.local_days_ago(3)
+    for d in (d1, d2):
+        from omni_core.local import runtime_paths as rp
+        sdir = rp.projects_root() / "qq"
+        sdir.mkdir(parents=True, exist_ok=True)
+        (sdir / f"s_{d}.jsonl").write_text(
+            json.dumps({"ts": _iso_for(d, 10), "role": "user", "content": body},
+                       ensure_ascii=False) + "\n", encoding="utf-8")
+
+    replies = {
+        d1: {"diary": "下午下雨，和张三聊了会儿天，心里那点闷才散了。",
+             "topics": ["下雨", "聊天"], "atmosphere": "雨后有点闷"},
+        d2: {"diary": "又是下雨的一天。", "topics": ["下雨"],
+             "atmosphere": {"k": 1}},                       # 脏值：非字符串 → 空
+    }
+    monkeypatch.setattr(mb.llm_judge, "chat_json", lambda *a, **k: replies[d1])
+    assert mb.maintain_diary(brain_cfg, day=d1) == 1
+    monkeypatch.setattr(mb.llm_judge, "chat_json", lambda *a, **k: replies[d2])
+    assert mb.maintain_diary(brain_cfg, day=d2) == 1
+
+    r1 = mb.get_narrative_row(f"diary-{d1}.md", "diary")
+    assert r1 and r1["atmosphere"] == "雨后有点闷"
+    hits = mb.search_narrative("闷", kind="diary")
+    assert any(h["doc_id"] == f"diary-{d1}.md" for h in hits)   # 气氛词面可检索
+    r2 = mb.get_narrative_row(f"diary-{d2}.md", "diary")
+    assert r2 and r2["atmosphere"] == ""                        # 脏值退化空、不报错
+
+
+def test_write_diary_block_optional_meta_keys():
+    """P6-1/P6-2 新 META 可选键：写得出、老解析不认（投影不受影响）、空值不写行。"""
+    assert se.write_diary_block("", "2026-11-01", "正文", topics=["t"],
+                                atmosphere="有点闷", we_participants=["主人"]) is True
+    raw = se.read_scene_block("", "diary-2026-11-01.md")
+    assert "atmosphere: 有点闷" in raw and 'we: ["主人"]' in raw
+    meta, body = se.parse_scene_block(raw)
+    assert meta["summary"] and body == "正文"
+    assert "atmosphere" not in meta                             # 老解析只认四键
+    assert se.write_diary_block("", "2026-11-02", "正文二") is True
+    raw2 = se.read_scene_block("", "diary-2026-11-02.md")
+    assert "atmosphere:" not in raw2 and "\nwe:" not in raw2    # 空值不写行
+
+
+def test_diary_we_marker(monkeypatch, brain_cfg, tmp_path):
+    """P6-2：共同经历标记——素材出现配置参与人才标；开关关不标；不产 atoms。"""
+    import sys
+    import types
+
+    from omni_core.local import localtime, runtime_paths as rp
+
+    _diary_cfg_stub(monkeypatch, tmp_path)
+    body = ("「张三」(1): 周末那次展我们一起去的，你还说下次带我去吃那家馆子，"
+            "路上你还讲了个特别好笑的段子，这条素材拉长是为了稳稳超过八十字的"
+            "白卷门槛，再补两句凑长度应该就够了")
+    d1, d2 = localtime.local_days_ago(2), localtime.local_days_ago(3)
+    for d in (d1, d2):
+        sdir = rp.projects_root() / "qq"
+        sdir.mkdir(parents=True, exist_ok=True)
+        (sdir / f"s_{d}.jsonl").write_text(
+            json.dumps({"ts": _iso_for(d, 10), "role": "user", "content": body},
+                       ensure_ascii=False) + "\n", encoding="utf-8")
+
+    # 开 + 参与人「张三」→ 日记 META 带 we 标记；不产 atoms（标记只是 META）
+    table = {"knowledge.narrative.we_memory.enabled": True,
+             "knowledge.narrative.we_memory.participants": ["张三"]}
+    stub = types.ModuleType("config")
+    stub.get_config = lambda k, d=None: table.get(k, True)
+    monkeypatch.setitem(sys.modules, "config", stub)
+    monkeypatch.setattr(mb.llm_judge, "chat_json",
+                        lambda *a, **k: {"diary": "周末和张三一起看了展，约好下次去吃馆子。"})
+    assert mb.maintain_diary(brain_cfg, day=d1) == 1
+    raw = (se.diary_dir() / f"diary-{d1}.md").read_text(encoding="utf-8")
+    assert 'we: ["张三"]' in raw
+    conn = mb.open_brain()
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM atoms").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    # 关（缺省）→ 不标
+    stub2 = types.ModuleType("config")
+    stub2.get_config = lambda k, d=None: True
+    monkeypatch.setitem(sys.modules, "config", stub2)
+    monkeypatch.setattr(mb.llm_judge, "chat_json",
+                        lambda *a, **k: {"diary": "又是平静的一天。"})
+    assert mb.maintain_diary(brain_cfg, day=d2) == 1
+    raw2 = (se.diary_dir() / f"diary-{d2}.md").read_text(encoding="utf-8")
+    assert "\nwe:" not in raw2

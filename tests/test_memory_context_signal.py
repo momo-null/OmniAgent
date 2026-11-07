@@ -37,45 +37,40 @@ def _no_llm(monkeypatch):
 @pytest.fixture(autouse=True)
 def _clean_signal():
     cs._CURRENT.clear()
+    cs.set_boundary()
     yield
     cs._CURRENT.clear()
+    cs.set_boundary()
 
 
 def test_build_run_reads_structure_and_peer(brain, monkeypatch):
-    """结构来自通道句柄 / gateway 上下文；peer 沿用 extract_peer 口径。"""
-    from gateway.channels import context as ch
-
-    class _Reply:
-        chat_id = "group:42"
-
-    monkeypatch.setattr(ch, "_CURRENT_REPLY", _Reply(), raising=False)
-    monkeypatch.setattr(ch, "_SOURCE_KIND", "chat", raising=False)
-    sig = cs.build_run(task_id="t1", objective="「张三」(10086) @ 了你：在吗", run_key="rk_x")
-    assert sig["chat_id"] == "group:42"
+    """结构由边界层写入 context_signal；内核不读通道句柄、不解析名片格式。"""
+    cs.set_boundary(context_key="group:42", source_kind="chat", peer="张三(10086)")
+    sig = cs.build_run(task_id="t1", objective="跑个任务", run_key="rk_x")
+    assert sig["context_key"] == "group:42"
     assert sig["source_kind"] == "chat"
     assert sig["peer"] == "张三(10086)"
     assert sig["run_id"] == "t1:rk_x"
     assert cs.run_id() == "t1:rk_x"
-    # 无句柄（cron）→ task
-    monkeypatch.setattr(ch, "_CURRENT_REPLY", None, raising=False)
-    monkeypatch.setattr(ch, "_SOURCE_KIND", "", raising=False)
+    # 边界未给结构（cron）→ task
+    cs.set_boundary()
     sig2 = cs.build_run(task_id="t2", objective="跑个任务", run_key="rk_y")
-    assert sig2["source_kind"] == "task" and sig2["chat_id"] == ""
+    assert sig2["source_kind"] == "task" and sig2["context_key"] == ""
     assert cs.run_id() == "t2:rk_y"
 
 
 def test_render_budget_and_shape(brain, monkeypatch):
-    cs._CURRENT.update({"chat_id": "group:7", "source_kind": "chat",
+    cs._CURRENT.update({"context_key": "group:7", "source_kind": "chat",
                         "peer": "成员甲(9999)", "project_id": "qq",
                         "recent_topics": ["白米饭", "剑网3", "抬杠", "复读机"],
                         "run_id": "t:rk"})
     block = cs.render()
     assert block.startswith("<current-context>") and block.endswith("</current-context>")
     assert len(block) <= 200                                   # ≤200 字符（N-12）
-    assert "chat=group:7" in block and "topics=白米饭、剑网3、抬杠、复读机" in block
+    assert "context=group:7" in block and "topics=白米饭、剑网3、抬杠、复读机" in block
     # 超预算 → 逐级丢 topics 而不是硬塞
     monkeypatch.setattr(mb, "get_circle_note",
-                        lambda chat_id: {"topics": ["话题" + str(i) for i in range(4)]})
+                        lambda context_key: {"topics": ["话题" + str(i) for i in range(4)]})
     cs._CURRENT["peer"] = "这是一个非常非常长的名片名字啊(1234567890)"
     block2 = cs.render(max_chars=60)
     assert len(block2) <= 60
@@ -87,13 +82,13 @@ def test_render_budget_and_shape(brain, monkeypatch):
 def test_recent_topics_no_llm_circle_note_first(brain, monkeypatch):
     """circle_note.topics 优先；缺笔记时走 L0 词面兜底且零 LLM（N-12）。"""
     monkeypatch.setattr(mb, "get_circle_note",
-                        lambda chat_id: {"topics": ["白米饭"]})
+                        lambda context_key: {"topics": ["白米饭"]})
     assert cs._recent_topics("group:1", "") == ["白米饭"]
     # 兜底：写几条 L0 消息（一个高频词 + 噪声），词面来自频次、不调 LLM
-    monkeypatch.setattr(mb, "get_circle_note", lambda chat_id: {})
+    monkeypatch.setattr(mb, "get_circle_note", lambda context_key: {})
     for i in range(5):
         mb.index_l0_message(f"s{i}", "user", f"今天白米饭吵起来了，剑网3也有人聊",
-                            chat_id="group:9", recorded_at=f"2026-11-05T0{i}:00:00+00:00")
+                            context_key="group:9", recorded_at=f"2026-11-05T0{i}:00:00+00:00")
     topics = cs._recent_topics("group:9", "")
     assert "白米饭" in topics or "米饭" in topics
     assert all(len(t) <= 12 for t in topics) and len(topics) <= 4
@@ -101,7 +96,7 @@ def test_recent_topics_no_llm_circle_note_first(brain, monkeypatch):
 
 def test_stable_block_injects_context_once(brain):
     """稳定段含 <current-context> 且只出现一次（M1 验收：每 run 只注入一次）。"""
-    cs._CURRENT.update({"chat_id": "group:7", "source_kind": "chat",
+    cs._CURRENT.update({"context_key": "group:7", "source_kind": "chat",
                         "peer": "甲(1)", "project_id": "qq",
                         "recent_topics": ["白米饭"], "run_id": "t:rk"})
 

@@ -33,6 +33,7 @@ from omni_core.tools.scene_tool import read_scene, set_scene_task_context
 from omni_core.tools.task_digest_tool import read_task_digest, set_task_digest_context
 from omni_core.tools import memory_tool  # noqa: F401  (导入即注册记忆自管工具)
 from omni_core.tools import narrative_tool  # noqa: F401  (导入即注册叙事检索/读取工具，NP-1)
+from omni_core.tools import observation_tool  # noqa: F401  (导入即注册见闻检索工具，P5)
 from omni_core.tools.loader import (
     PluginContext,
     LoadReport,

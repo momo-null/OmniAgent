@@ -111,18 +111,17 @@ def test_project_session_roundtrip():
     assert "sid1" in ProjectStore.list_sessions(pid)
 
 
-def test_append_message_records_chat_id():
-    """N-8（plan personal-agent-memory §13.4）：会话记录带 chat_id（场合标注的来源）；
-    老记录缺该字段按空处理不报错。"""
+def test_append_message_records_context_key():
+    """H-7：所有进料必填通用场合键；IM 由调用方给，其余按 web:<sid> 构造。"""
     pid = "d-chatid"
     ProjectStore.append_message(pid, "sidc", "user", "在吗",
-                                chat_id="group:777", l0_kind="chat")
+                                context_key="group:777", l0_kind="chat")
     msgs = ProjectStore.read_session(pid, "sidc")
-    assert msgs[0].get("chat_id") == "group:777"
-    # 老记录形态（无 chat_id 字段）：读取按空处理，不报错
+    assert msgs[0].get("context_key") == "group:777"
+    # 未显式给场合键：按会话构造 web:<session_id>，绝不再留空来源
     ProjectStore.append_message(pid, "sidc", "assistant", "嗯")
     msgs = ProjectStore.read_session(pid, "sidc")
-    assert msgs[1].get("chat_id", "") in ("", None) or msgs[1].get("chat_id") == ""
+    assert msgs[1].get("context_key") == "sidc"
 
 
 def test_project_display_name_and_list():

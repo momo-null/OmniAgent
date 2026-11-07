@@ -30,13 +30,6 @@ def _brain_cfg() -> Dict[str, Any]:
         return {}
 
 
-def _persona() -> str:
-    try:
-        return str(_brain()._cfg("persona") or "")
-    except Exception:
-        return ""
-
-
 #: P1 观测（2026-11-02）：本 run 的记忆自取行为簿记。dispatch 是单 worker 串行
 #: 执行、网关回发句柄同款进程级单值——run 开始由 sdk_bridge 清零，run 收尾取走
 #: 并落 memory_recall.jsonl（「该查而没查」由此对出）。
@@ -87,7 +80,7 @@ def note_self_fetch(hits: int = 0, top1_id: str = "", tool: str = "") -> None:
     """把一次「自取过往」的工具调用并入本 run 账本。
 
     P2 起《记忆使用规则》的 ≤3 次合计口径覆盖 memory_recall / conversation_search /
-    msg_group_history(keyword)——观测口径与规则口径必须同一个数，否则「检索使用率」
+    自取类工具（以实际注册表为准）——观测口径与规则口径必须同一个数，否则「检索使用率」
     指标只统计其中一条通道，读起来像模型不查。§8.3：``tool`` 分工具计数（by_tool），
     覆盖全部七个自取工具。
     """
@@ -102,22 +95,13 @@ def note_self_fetch(hits: int = 0, top1_id: str = "", tool: str = "") -> None:
 
 
 def _run_source() -> str:
-    """本轮来源（观测字段 T0/T1/private/api）：读网关回发句柄，与进程级单值同机制。"""
+    """本轮进料道（通用枚举）；结构由边界层写入，内核不解析通道句柄。"""
     try:
-        from gateway.channels import context as _ch
-        reply = _ch.get_current_reply()
+        from omni_core.local.loop import context_signal as _cs
+        return str(_cs.boundary().get("source_kind")
+                   or _cs.current().get("source_kind") or "unknown")
     except Exception:
-        return "api"
-    if reply is None:
-        return "api"
-    chat = str(getattr(reply, "chat_id", "") or "")
-    if chat.startswith("private"):
-        return "private"
-    if chat.startswith("group"):
-        wo = getattr(getattr(reply, "_adapter", None), "_wake_origin", None) or {}
-        hit = wo.get(chat)
-        return "T0" if hit and str(hit[0]) == "named" else "T1"
-    return str(getattr(reply, "channel_name", "") or "channel")
+        return "unknown"
 
 
 def log_recall_run(project: str = "", context_key: str = "", source_kind: str = "",
@@ -138,7 +122,7 @@ def log_recall_run(project: str = "", context_key: str = "", source_kind: str = 
         memory_brain.log_recall_observability(
             project=project, source=_run_source(),
             run_id=str(sig.get("run_id") or ""),
-            context_key=str(context_key or sig.get("chat_id") or ""),
+            context_key=str(context_key or sig.get("context_key") or ""),
             source_kind=str(source_kind or sig.get("source_kind") or ""),
             source_external=bool(source_external),
             injected_context=bool(injected_context),
@@ -175,7 +159,7 @@ def memory_remember(text: str = "", kind: str = "fact") -> Dict[str, Any]:
         kind = "fact"
     imp = 0.8  # agent 显式 remember 默认较高重要性（LLM 精调交巩固期）
     cfg = _brain_cfg()
-    rid = b.remember(text, kind=kind, importance=imp, persona=_persona(),
+    rid = b.remember(text, kind=kind, importance=imp,
                      brain_cfg=cfg if cfg else None)
     if not rid:
         return {"ok": False, "error": "写入失败"}
@@ -201,7 +185,7 @@ def memory_recall(query: str = "", k: int = 5) -> Dict[str, Any]:
     if blocked:
         return blocked
     # M2（plan §6.2）：场合与对象线索接通——peer 取本 run 的 context_signal（缺省
-    # 从 query 解析），chat_id 取当前聊天窗口；两者都只**加权不过滤**（INV-3）。
+    # 从 query 解析），context_key 取当前场合；两者都只**加权不过滤**（INV-3）。
     chat, _sid = _current_conversation()
     peer = ""
     try:
@@ -209,11 +193,9 @@ def memory_recall(query: str = "", k: int = 5) -> Dict[str, Any]:
         peer = str((_cs.current() or {}).get("peer") or "")
     except Exception:
         peer = ""
-    if not peer:
-        peer = b.extract_peer(query or "")
-    hits = b.search_brain((query or "").strip(), persona=_persona(),
+    hits = b.search_brain((query or "").strip(),
                           k=max(1, min(5, int(k or 5))),
-                          reinforce=True, peer=peer, chat_id=chat)
+                          reinforce=True, peer=peer, context_key=chat)
     note_self_fetch(len(hits), str(hits[0]["record_id"]) if hits else "",
                     tool="memory_recall")
     _run_stats["context_hits"] = int(_run_stats.get("context_hits") or 0) + \
@@ -232,13 +214,12 @@ def set_l0_task_context(task_id: str) -> None:
 
 
 def _current_conversation() -> tuple:
-    """当前聊天窗口的两个键 (chat_id, session_id)——取不到留空，由调用方决定范围。"""
+    """当前场合的两个键 (context_key, session_id)——取不到留空，由调用方决定范围。"""
     chat = ""
     try:
-        from gateway.channels import context as _ch
-        reply = _ch.get_current_reply()
-        if reply is not None:
-            chat = str(getattr(reply, "chat_id", "") or "")
+        from omni_core.local.loop import context_signal as _cs
+        chat = str((_cs.current() or {}).get("context_key")
+                   or _cs.boundary().get("context_key") or "")
     except Exception:
         chat = ""
     sid = ""
@@ -254,15 +235,15 @@ def _current_conversation() -> tuple:
 
 def _is_external_source() -> bool:
     try:
-        from gateway.channels import context as _ch
-        return bool(_ch.get_source_external())
+        from omni_core.local.loop import context_signal as _cs
+        return bool(_cs.boundary().get("source_external") or False)
     except Exception:
         return False
 
 
 @function_tool(
     name="conversation_search",
-    description=("按关键词检索原始聊天记录（逐字，含群聊/私聊/你自己说的话，不是提炼后的记忆摘要）。"
+    description=("按关键词检索原始对话记录（逐字，含各场合与你自己说的话，不是提炼后的记忆摘要）。"
                  "问到具体的人、时间、旧约定、原话时用；memory_recall 只有摘要或查不到时用。"
                  "keyword 用 2-4 字关键词最有效，scope=current 只查当前会话/群，all 查全部会话。"),
 )
@@ -272,7 +253,7 @@ def conversation_search(keyword: str = "", scope: str = "current",
 
     Args:
         keyword: 关键词（人名/昵称/数字/名词片段，2-4 字最有效）。
-        scope: current(当前会话或群) | all(全部会话；外部来源不支持)。
+        scope: current(当前场合) | all(全部会话；外部来源不支持)。
         days: 回溯天数（1-365，缺省 30）。
         limit: 最多几条（1-20，缺省 8）。
     """
@@ -294,7 +275,7 @@ def conversation_search(keyword: str = "", scope: str = "current",
         n = max(1, min(20, int(limit or 8)))
     except Exception:
         n = 8
-    rows = b.search_l0(kw, chat_id=chat if scoped else "", session_id=sid if scoped else "",
+    rows = b.search_l0(kw, context_key=chat if scoped else "", session_id=sid if scoped else "",
                        days=days, limit=n)
     note_self_fetch(len(rows), str(rows[0]["id"]) if rows else "", tool="conversation_search")
     return {"ok": True,
@@ -323,7 +304,7 @@ def memory_update(record_id: str = "", new_text: str = "") -> Dict[str, Any]:
     new_text = (new_text or "").strip()
     if not record_id or not new_text:
         return {"ok": False, "error": "record_id 与 new_text 不能为空"}
-    rid = b.update_memory(record_id, new_text, persona=_persona())
+    rid = b.update_memory(record_id, new_text)
     if not rid:
         return {"ok": False, "error": "未找到该 record_id 或更新失败"}
     return {"ok": True, "record_id": rid}
@@ -345,7 +326,7 @@ def memory_forget(record_id: str = "", reason: str = "") -> Dict[str, Any]:
         return {"ok": False, "error": "长期记忆未启用（ltm.enabled）"}
     if not record_id:
         return {"ok": False, "error": "record_id 不能为空"}
-    ok = b.forget(record_id, reason=(reason or "")[:200], persona=_persona())
+    ok = b.forget(record_id, reason=(reason or "")[:200])
     return {"ok": bool(ok)} if ok else {"ok": False, "error": "未找到该 record_id"}
 
 

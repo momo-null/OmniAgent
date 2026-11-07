@@ -133,6 +133,7 @@ def _on_message(msg) -> None:
     # 能力门透传：外部可达通道默认 allow_tools=False → 该来源任务为纯对话（无任何工具）。
     # 网关只读通道自声明，不判断"这是谁发的"——判定权在通道适配器。
     dispatch.submit(msg.text, source=f"msg:{msg.channel}", reply=msg.reply,
+                     speaker=str(getattr(msg, "speaker", "") or ""),
                     project_id=project_id or None, session_id=session_id or None,
                     # 标题/历史用通道自声明的「人话」（text 里可能带场合自述前缀，
                     # 只该喂模型，不该进侧栏标题与会话气泡）
@@ -181,14 +182,6 @@ def main() -> int:
     print("[gateway] 启动（Ctrl+C 退出）")
     dispatch.ensure_worker()
     _ensure_plugins()
-    # P2：独立跑网关（不起后端服务）时同样发起一次性 L0 检索索引回填（后台线程，只跑一次）
-    try:
-        from omni_core import memory_brain
-        memory_brain.start_l0_backfill()
-        # NP-0：叙事索引一次性迁移（重建 + 撞名处理；meta 标记只跑一次，失败静默）
-        memory_brain.start_narrative_migration()
-    except Exception:
-        pass
 
     n = 0 if no_channels else start_channels()
     if not no_channels and n == 0:

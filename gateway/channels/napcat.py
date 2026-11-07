@@ -1392,6 +1392,7 @@ class NapcatAdapter:
             # L0 来源标注（plan persona-social-memory M1）：会话记录/日记蒸馏看到
             # 「谁(uid) 说的」才能把经历记到正确对象头上；模型历史也借此分清说话人
             display_text=f"{display}: {plain}",
+            speaker=f"{nickname}({user_id})" if nickname else str(user_id),
             reply_mode="explicit",
             raw={
                 "message_id": message_id,

@@ -1,0 +1,8 @@
+{
+  "name": "collector",
+  "version": "1.0.0",
+  "title": "观察采集能力",
+  "description": "把外部来源的见闻经统一进料道写进叙事层；只提供结构化条目入口，不内置任何渠道/平台。",
+  "enabled": true,
+  "permissions": []
+}

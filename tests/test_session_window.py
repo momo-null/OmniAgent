@@ -1,4 +1,4 @@
-"""P3 · 私聊会话窗口化（plan memory-recall-2026-11-02 §P3）的回归锁。
+"""P3 · 私聊会话窗口化的回归锁（依据见 implemented/memory-architecture.md §13.1）。
 
 常驻上下文只留最近 ``_WINDOW_TURNS`` 轮且 ≤``_WINDOW_MAX_CHARS`` 字；更早的不进 messages
 （原文仍在 L0 表里，靠 conversation_search 现查）。顺带：重建上下文不再整份解析 jsonl。

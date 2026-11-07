@@ -314,7 +314,7 @@ def test_feed_is_single_pool_no_origin_grouping(iso, monkeypatch):
     # ② 读取面不过滤（一池，不变）
     assert mb.search_brain("不再路由"), "search_brain 不该按 origin 切池"
 
-    # ③ 进料进 prompt 的就是整池增量（场合标签 chat_id 只作渲染元信息）
+    # ③ 进料进 prompt 的就是整池增量（场合标签 context_key 只作渲染元信息）
     _write_block(pid, "a.md", _BLOCK_A)
     calls: list = []
     _install_fake_llm(monkeypatch, [{"tool_calls": [

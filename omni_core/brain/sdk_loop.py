@@ -1803,7 +1803,7 @@ def run_subtask_sdk(
     # T2.4（O4'）：技能目录改为固定模板 User 消息，插在历史之后、本轮 user_input 之前。
     # 只在起始 items 注入一次，后续块由 to_input_list() 自然继承，**不得**改回每步重发。
     # （2026-11-02 P1：L1 检索记忆的 run 起始自动注入已全局下线——检索结果永不自动注入，
-    #  模型经 memory_recall / conversation_search 自取，见 plan memory-recall-2026-11-02。）
+    #  模型经 memory_recall / conversation_search 自取，见 implemented/memory-architecture.md §13.1。）
     if skill_catalog:
         items.append({"role": "user", "content": skill_catalog})
     # content 可为 str 或内容块数组（多模态输入：文本 + 图片，见 sdk_bridge.build_user_content）

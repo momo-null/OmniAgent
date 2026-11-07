@@ -192,7 +192,7 @@ def test_context_signal_layer_in_stable_block(monkeypatch):
     monkeypatch.setattr(scene_executor, "load_scene_nav", lambda pid, **k: [])
     monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "")
     cs._CURRENT.clear()
-    cs._CURRENT.update({"chat_id": "group:7", "source_kind": "chat", "peer": "甲(1)",
+    cs._CURRENT.update({"context_key": "group:7", "source_kind": "chat", "peer": "甲(1)",
                         "project_id": "", "recent_topics": ["白米饭"], "tone": "",
                         "run_id": "t:rk"})
     try:
@@ -203,7 +203,7 @@ def test_context_signal_layer_in_stable_block(monkeypatch):
                           traj=traj, user_input="hi")
         instr = captured["instructions"] or ""
         assert instr.count("<current-context>") == 1      # 每 run 只注入一次
-        assert "chat=group:7" in instr
+        assert "context=group:7" in instr
         placements = {r["placement"]: r for r in traj.records("memory_injected")}
         assert "context_signal" in placements["system"]["layers"]
         assert len(instr.split("<current-context>")) - 1 <= 200  # ≤200 字符量级红线
@@ -414,3 +414,31 @@ def test_intent_gate_fail_open_and_condition_path(monkeypatch):
         plain_finish_judge=spy,
     )
     assert ran["n"] == 0, "有条件路径不应触发意图门"
+
+
+# ---- P6-2（H-6 §16.3）：表达节奏开关缺省关，关闭时稳定段逐字节不变 ----
+
+def test_we_memory_rhythm_switch_default_off(monkeypatch):
+    loop = _loop()
+    loop.knowledge_cfg["memory"] = True
+    loop.knowledge_cfg["profile"] = True
+    monkeypatch.setattr(scene_executor, "load_scene_nav", lambda pid, **k: [])
+    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "")
+    _cfg(monkeypatch)
+    base, _ = loop._memory_stable_block(False, task_id="tid")
+    assert "把话递回去" not in base                      # 缺省关：行为与现状一致
+
+    # 开关开启（enabled + rhythm）→ 多一句「自我披露 / 把话递回去」分寸
+    _cfg(monkeypatch, **{"knowledge.narrative.we_memory.enabled": True,
+                         "knowledge.narrative.we_memory.rhythm": True})
+    on, _ = loop._memory_stable_block(False, task_id="tid")
+    added = ("- 聊到你们共同经历过的事时，可以用自己的口气自然提起，也可以把"
+             "话递回去问问对方当时的感觉；不硬塞回忆、不为提起而提起。\n")
+    assert on == base.replace("不要主动提及。\n</memory-usage-rules>",
+                              "不要主动提及。\n" + added + "</memory-usage-rules>")
+
+    # enabled 但 rhythm 关 → 仍不变
+    _cfg(monkeypatch, **{"knowledge.narrative.we_memory.enabled": True,
+                         "knowledge.narrative.we_memory.rhythm": False})
+    off2, _ = loop._memory_stable_block(False, task_id="tid")
+    assert off2 == base
