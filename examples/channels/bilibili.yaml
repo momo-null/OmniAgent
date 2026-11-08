@@ -1,0 +1,92 @@
+# ============================================================================
+# B站通道模板（大肥鱼自运营）→ 拷到 ~/.omniagent/channels/bilibili.yaml
+#
+# 每通道一个文件，网关启动时扫 channels/ 目录逐个拉起；文件名（bilibili）就是
+# 代码里的通道名，也是 msg_send_* 的 channel 参数、cron 的 notify_channel。
+#
+# ⚠ 本通道与 napcat/feishu 的本质差异：入站不是「别人找她聊天」，而是「评论区的
+#   回复通知」——回不回、回什么由她按运营纪律（projects/bilibili/AGENTS.md）决定，
+#   所以 reply_mode 固定 explicit（不自动回发），触发闸门即下面四道发送闸。
+#
+# 安全定位：B站评论区任何人可触达 → allow_tools 缺省 false（纯对话+发送工具）；
+#   平台写操作只经本适配器（配额/黑名单/风控暂停在通道侧机械执行，不靠提示词）。
+# 凭证（三选一，优先级从高到低）：
+#   1. TV 扫码登录（推荐）：双击 scripts/bilibili_login.bat，或
+#      python -m gateway.channels.bilibili --login
+#      终端出二维码 → 哔哩哔哩 App 扫码确认 → 凭证自动存 state_dir 凭证文件；
+#   2. 环境变量：BILI_SESSDATA / BILI_JCT / DEDEUSERID
+#      （F12 → Application → Cookies → .bilibili.com 复制三件套）；
+#   3. 直填下面三行（不推荐，密钥落盘）。
+# 未登录行为（机械闸，不靠提示词）：connect 照常注册但不轮询；调度器就绪闸
+#   （ready()=False）跳过 notify_channel=bilibili 的 job 并记 runs.jsonl skipped；
+#   draft/live 发送返回明确「未登录」错误。登录后重启网关开始轮询。
+# 验证：python -m gateway.channels.bilibili --whoami
+# ============================================================================
+
+enabled: false                  # 出厂关：cookie 配好、联调完再置 true
+mode: dry_run                   # dry_run=只演练不真发（联调用）| draft=入待发队列 |
+                                # live=真发（先用小号！配额压到最低起步）
+
+# ── 凭证（三件套；留空则取对应环境变量——推荐只写环境变量，密钥不落盘）──────
+sessdata: ""
+bili_jct: ""
+dedeuserid: ""
+sessdata_env: BILI_SESSDATA
+bili_jct_env: BILI_JCT
+dedeuserid_env: DEDEUSERID
+
+# ── 轮询「回复我的」通知 ────────────────────────────────────────────────────
+poll_interval_sec: 90           # 间隔（秒），叠加随机抖动避免机械规律
+poll_jitter_sec: 30
+lookback_hours: 24              # 只派发此新鲜度内的通知；首次连接的历史静默基线化
+
+# ── 身份 ────────────────────────────────────────────────────────────────────
+self_uid: ""                    # 留空 = 连接时用 nav 接口自取（过滤自己的回声）
+
+# ── 每日配额账本（本地自然日；超限拒发并把原因报给模型）────────────────────
+# ⚠ 这是「她一天最多说多少话」的硬闸，冷启动期宁小勿大——被风控的号最难救
+quotas:
+  comments_per_day: 4           # 评论/回复
+  dynamics_per_day: 1           # 动态
+
+# ── 出站黑名单（子串命中即拒发；宁可误杀，人工解锁）────────────────────────
+# 政治类一律不碰（对齐 whale-panel 纪律）；按需自行增删
+blacklist:
+  - "习"
+  - "党"
+  - "政府"
+  - "台独"
+  - "翻墙"
+
+# ── 风控熔断 ────────────────────────────────────────────────────────────────
+# ── 活人感冷却（连发 N 天动态强制歇一天；0=关）──────────────────────────
+dynamic_cooldown_days: 2       # 真人不是日更机器；与每日配额并行
+
+risk_pause_minutes: 240         # 撞 -412/-352/HTTP 412/429 后全通道暂停时长；
+                                # 暂停期间轮询与发送全部拒绝，恢复后自动继续
+
+# ── 广播兜底 ────────────────────────────────────────────────────────────────
+default_chat_id: ""             # cron 的 notify_channel 指向 bilibili 时的投递目标；
+                                # "dynamic" = 把结果发成动态（过配额/黑名单闸）。
+                                # 留空 = 定时任务结果不外发（只落运行记录）——冷启动建议留空
+
+# ── 能力门 ──────────────────────────────────────────────────────────────────
+allow_tools: false              # 评论区来源的任务是纯对话：模型侧无文件/shell 工具
+timeout_sec: 10
+state_dir: ""                   # 留空 = ~/.omniagent（状态/去重/草稿队列落这里）；
+                                # 多号或测试可另指目录
+
+# ── 出站守则（§8 马甲统一注入契约）──────────────────────────────────────────
+# 马甲不是人格：identity 只是对外自称，人格统一在角色卡 character.md；
+# 运营纪律与虚构边界在 projects/bilibili/AGENTS.md；定量规矩（这条怎么发）在这里。
+# by_context 的键 = chat_id 首段：comment（评论/回复）/ dynamic（发动态）。
+outbound:
+  identity: "大肥鱼"
+  style: "短句为主、语气词多一点、偶尔自嘲胖和懒；先读完对方说的再回，说不出有内容的就不回；不评价时政；不@陌生人、不引流、不提主人"
+  max_chars: 0
+  max_sentences: 0
+  allow_multi: true
+  require_review: false         # 第二期接通用待发队列；本版本预留不执行
+  by_context:
+    comment: { max_chars: 100, max_sentences: 3 }
+    dynamic: { max_chars: 500 }

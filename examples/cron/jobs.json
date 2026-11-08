@@ -56,6 +56,24 @@
       "enabled": false,
       "max_steps": 20,
       "miss_grace_minutes": 180
+    },
+
+    // ── 大肥鱼自运营（B站通道，见 doc/worklog/xhs-bili-autonomous-ops-plan-2026-11-07.md）──
+    // 觉醒机制：多个错峰时刻近似作息窗（jitter 属网关能力，后置不急）。
+    // 她做什么由 projects/bilibili/AGENTS.md 的运营纪律决定——这里只交代「该醒一次了」。
+    // 发送走 bilibili 通道的四道闸（配额/黑名单/风控暂停/模式），模板卡不住的闸不靠提示词。
+    // notify_channel 留 bilibili 但 default_chat_id 留空时，结果只落 runs.jsonl 不外发。
+    {
+      "id": "bili-awake",
+      "name": "大肥鱼觉醒",
+      "cron": "17 10,16,21 * * *",
+      "objective": "开始这次大肥鱼的B站运营觉醒",
+      "project_id": "bilibili",
+      "notify_channel": "bilibili",
+      "enabled": false,
+      "max_steps": 30,
+      "miss_grace_minutes": 60,
+      "note": "大肥鱼觉醒：读运营纪律→看新通知→按配额决定回评/发动态；冷启动期 mode=dry_run 演练；未登录时调度闸自动跳过（runs.jsonl 记 skipped）"
     }
   ]
 }

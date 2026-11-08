@@ -1,0 +1,48 @@
+# ============================================================================
+# 小红书通道模板（大肥鱼自运营 M4）→ 拷到 ~/.omniagent/channels/xiaohongshu.yaml
+#
+# ⚠ 传输=xiaohongshu-mcp（https://github.com/xpzouying/xiaohongshu-mcp）：
+#   浏览器自动化、扫码登录、cookie 全由它承担，本适配器只翻译它的 MCP 端点。
+#   前置三步：① 本机跑起 xiaohongshu-mcp（二进制/docker，缺省端口 18060）；
+#   ② 用它自带浏览器扫码登录（**同一账号别再在其他网页端登录**，会被踢）；
+#   ③ python -m gateway.channels.xiaohongshu --login-status 确认后 enabled: true。
+#
+# 安全定位：评论区任何人可触达 → allow_tools 缺省 false；平台写路径单点收口适配器
+#   （四道闸同 bilibili；小红书风控更凶 → 配额更低、暂停更长、小号先行爬坡）。
+# ============================================================================
+
+enabled: false                  # 出厂关：xiaohongshu-mcp 登录完再置 true
+mode: dry_run                   # dry_run | draft | live（与 bilibili 同语义；先 dry_run 演练）
+mcp_url: http://127.0.0.1:18060/mcp   # xiaohongshu-mcp 的 MCP 端点
+
+# ── 每日配额（小红书侧宁小勿大）────────────────────────────────────────────
+quotas:
+  comments_per_day: 2
+  notes_per_day: 1
+
+# ── 出站黑名单（时政等一律不碰）────────────────────────────────────────────
+blacklist:
+  - "习"
+  - "党"
+  - "政府"
+  - "台独"
+  - "翻墙"
+
+risk_pause_minutes: 480         # 撞风控后暂停时长（小红书侧更保守）
+poll_interval_sec: 300          # 轮询自己已发笔记的评论区（服务无通知接口，轮详情代替）
+default_chat_id: ""             # cron 广播兜底；一般留空（结果只落运行记录）
+allow_tools: false
+timeout_sec: 20
+state_dir: ""                   # 留空 = ~/.omniagent
+
+# ── 出站守则（§8 马甲统一注入契约；键语义见 napcat.yaml 同名段）────────────
+# 小红书笔墨：标题 ≤20 字、正文短段+emoji 克制、tag 组合吃搜索流量；对外自称大肥鱼
+outbound:
+  identity: "大肥鱼"
+  style: "标题短有钩子、正文分段短句、最多两三个 emoji；先读完笔记再回评论；不冒充真人（虚拟角色大方承认）；不引流不提主人；不碰时政"
+  max_chars: 0
+  max_sentences: 0
+  allow_multi: true
+  require_review: false
+  by_context:
+    comment: { max_chars: 100, max_sentences: 3 }

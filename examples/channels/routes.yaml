@@ -38,6 +38,15 @@
 "feishu:oc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx":
   project_id: "work-report"
 
+# ── B站通道（大肥鱼自运营）───────────────────────────────────────────────────
+# chat_id 两种形态：comment:<oid>:<type>:<root>:<parent>（每条评论线程一个会话，
+# 历史按线程归档）与 "dynamic"（发动态）。整条通道统一钉到她的项目：
+# 工作目录、运营纪律与轨迹落 projects/bilibili/。
+# ⚠ 马甲不是人格（plan §8）：对外身份=channels/bilibili.yaml 的 outbound.identity，
+#   笔墨=outbound.style；人格统一在角色卡，project 只是工作目录不是身份。
+"bilibili:*":
+  project_id: "bilibili"
+
 # ── 其余规则（代码里没有配置项，写在这里也不会被读取）───────────────────────
 # · 优先级只看「精确键 vs 通道通配」，不做多条通配的层层覆盖
 # · 通配只支持 "<通道>:*" 这一种形式，不支持 "napcat:group:*" 这类前缀通配

@@ -23,3 +23,5 @@ enabled: false                  # 未实装，保持 false；true 也只是挂�
 # secret_env: WECOM_SECRET       # 与 feishu 一致：只填环境变量名
 # default_chat_id: ""            # cron notify_channel: wecom 时的投递目标
 # allow_tools: false             # 外部可达 → 缺省纯对话
+
+# 预留（实装时启用）：出站守则 outbound 块，键语义见 napcat.yaml 同名段（§8 契约）

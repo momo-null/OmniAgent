@@ -3,6 +3,7 @@ PyYAML>=6.0
 requests>=2.31.0
 numpy>=1.24.0
 Pillow>=10.0.0
+segno>=1.6.0
 
 # 屏幕截图
 mss>=9.0.1
