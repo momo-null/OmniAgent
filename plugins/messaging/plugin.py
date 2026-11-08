@@ -101,6 +101,54 @@ def _external_note(result: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def _outbound_flat(adapter: Any, chat_id: str) -> Dict[str, Any]:
+    """按 (通道, 会话) 解析出站守则（§8 统一契约：归一逻辑只在 gateway.outbound）。
+
+    发送时现解析而非线程上下文：Web 并发不串轮、cron 无来源也能命中
+    （明确 target 时按 target 解析，与外部来源锁死回来源会话的语义一致）。
+    """
+    try:
+        from gateway.outbound import resolve as _ob_resolve
+
+        return _ob_resolve(str(getattr(adapter, "name", "") or ""), chat_id or "")
+    except Exception:
+        return {}
+
+
+def _outbound_chunks(adapter: Any, chat_id: str, text: str) -> Tuple[List[str], str]:
+    """机械闸：超限拆条或拒发（fail-open：守则解析异常不拦发送，同 _external_note 宽容）。"""
+    try:
+        from gateway.outbound import enforce as _ob_enforce
+
+        return _ob_enforce(_outbound_flat(adapter, chat_id), text)
+    except Exception:
+        return [text], ""
+
+
+def _do_send_text(reply: Any, chunks: List[str], _ctx: Any) -> Dict[str, Any]:
+    """按守则拆好的 chunks 逐条发送并记账；返回聚合结果（未过 _external_note）。
+
+    记账同既有口径：duplicate 跳过不算真发送；中间条失败即止并报第几条，
+    已发出的条目不撤回（记账已留痕）。
+    """
+    result: Dict[str, Any] = {}
+    for i, chunk in enumerate(chunks):
+        result = reply.send_text(chunk)
+        if (_ctx is not None and isinstance(result, dict) and result.get("ok")
+                and not result.get("duplicate")):
+            _ctx.note_sent(chunk)
+        if not (isinstance(result, dict) and result.get("ok")):
+            if len(chunks) > 1:
+                err = result.get("error", "") if isinstance(result, dict) else repr(result)
+                return {**(result if isinstance(result, dict) else {"ok": False}),
+                        "error": f"拆条发送在第 {i + 1}/{len(chunks)} 条失败: {err}"}
+            return result if isinstance(result, dict) else {"ok": False, "error": repr(result)}
+    if len(chunks) > 1:
+        result = {**(result if isinstance(result, dict) else {"ok": True}),
+                  "note": f"按出站守则拆为 {len(chunks)} 条发送"}
+    return result
+
+
 @function_tool(
     description="明确本轮不向任何会话发出内容（保持沉默），把「发不发」的判断收口成一个"
                 "显式动作。调用后对方收不到任何消息；只写最终回答既不算发送，也不算"
@@ -141,14 +189,13 @@ def msg_send_text(text: str, channel: str = "", target: str = "") -> Dict[str, A
         _ctx = None
     try:
         reply = adapter.reply_to(chat_id)
+        # §8 出站守则机械闸（唯一执行点）：超限拆条/拒发；文风靠配置声明，闸只管长度。
         # 只发文本。要发语音走 msg_send_voice——发送方式由模型自己选，
         # 不在工具里按「入站是不是语音」偷偷改写（否则模型以为发文字、对方却收到语音）。
-        result = reply.send_text(text)
-        # 记账（dispatch 据此判断"已发送/未发送"；工具结果字符串不可靠，别事后解析）。
-        # 同文去重跳过（duplicate）不算真发送：否则「明明没发出去」会被记成已发送。
-        if (_ctx is not None and isinstance(result, dict) and result.get("ok")
-                and not result.get("duplicate")):
-            _ctx.note_sent(text)
+        chunks, gate_err = _outbound_chunks(adapter, chat_id, text)
+        if gate_err:
+            return {"ok": False, "error": gate_err}
+        result = _do_send_text(reply, chunks, _ctx)
         return _external_note(result)
     except Exception as e:
         return {"ok": False, "error": f"发送失败: {e}"}
@@ -171,6 +218,16 @@ def msg_send_voice(text: str, channel: str = "", target: str = "") -> Dict[str, 
     adapter, chat_id, err = _resolve(channel, target)
     if err:
         return {"ok": False, "error": err}
+    # §8 出站守则：语音同样受上限约束——只拒不拆（拆条朗读很怪，模型该自己精简
+    # 或改用文字拆几条短发）。
+    try:
+        from gateway.outbound import voice_error as _ob_voice_err
+
+        _verr = _ob_voice_err(_outbound_flat(adapter, chat_id), text)
+        if _verr:
+            return {"ok": False, "error": _verr}
+    except Exception:
+        pass
     try:
         reply = adapter.reply_to(chat_id)
         send_voice = getattr(reply, "send_voice", None)
@@ -190,6 +247,92 @@ def msg_send_voice(text: str, channel: str = "", target: str = "") -> Dict[str, 
         return _external_note(result)
     except Exception as e:
         return {"ok": False, "error": f"语音发送失败: {e}"}
+
+
+@function_tool(
+    description="发送一张本地图片到消息通道（当前主要用于B站带图动态：先准备本地图片文件，"
+                "再调本工具发出，可附一句文字说明。配额与出站守则同样生效）。",
+    unit="messaging",
+)
+def msg_send_image(image_path: str, text: str = "", channel: str = "", target: str = "") -> Dict[str, Any]:
+    """发本地图片。
+
+    Args:
+        image_path: 本地图片文件路径（先由文件工具生成/合成好）。
+        text: 附带的文字说明（可选）。
+        channel: 通道名（缺省=来源通道）。
+        target: 会话 ID（缺省=来源会话/通道默认会话）。
+    """
+    import os
+
+    path = str(image_path or "").strip()
+    if not path or not os.path.isfile(path):
+        return {"ok": False, "error": f"图片文件不存在: {path}"}
+    adapter, chat_id, err = _resolve(channel, target)
+    if err:
+        return {"ok": False, "error": err}
+    try:
+        reply = adapter.reply_to(chat_id)
+        send_image = getattr(reply, "send_image", None)
+        if not callable(send_image):
+            return {"ok": False,
+                    "error": f"通道 {getattr(adapter, 'name', '') or '该'} 不支持图片发送"}
+        # 出站守则：文字说明过长度闸（图片动态按动态配额计，闸在通道侧）
+        chunks, gate_err = _outbound_chunks(adapter, chat_id, text or "")
+        if gate_err:
+            return {"ok": False, "error": gate_err}
+        result = send_image(path, chunks[0] if chunks else "")
+        if not isinstance(result, dict):
+            return {"ok": False, "error": f"图片发送返回异常: {result!r}"}
+        if result.get("ok") and not result.get("duplicate") and not result.get("queued"):
+            try:
+                from gateway.channels import context as _ctx
+
+                _ctx.note_sent(f"[图片:{os.path.basename(path)}] {chunks[0] if chunks else ''}".strip())
+            except Exception:
+                pass
+        return _external_note(result)
+    except Exception as e:
+        return {"ok": False, "error": f"图片发送失败: {e}"}
+
+
+@function_tool(
+    description="发送一张表情包（通道贴纸库里的图片表情，活跃气氛的点缀）。"
+                "name=贴纸名（贴纸库文件名，不带扩展名也认）；不填 name 则随机挑一张。"
+                "偶尔点缀用，不要每条消息都发。通道未启用表情或贴纸库为空会返回明确错误，"
+                "届时改用 msg_send_text。",
+    unit="messaging",
+)
+def msg_send_sticker(name: str = "", channel: str = "", target: str = "") -> Dict[str, Any]:
+    """发表情包（图片贴纸）。
+
+    Args:
+        name: 贴纸名（贴纸库文件名；不填=随机挑一张）。
+        channel: 通道名（缺省=来源通道）。
+        target: 会话 ID（缺省=来源会话/通道默认会话）。
+    """
+    adapter, chat_id, err = _resolve(channel, target)
+    if err:
+        return {"ok": False, "error": err}
+    try:
+        reply = adapter.reply_to(chat_id)
+        send_sticker = getattr(reply, "send_sticker", None)
+        if not callable(send_sticker):
+            return {"ok": False,
+                    "error": f"通道 {getattr(adapter, 'name', '') or '该'} 不支持表情包"}
+        result = send_sticker(str(name or "").strip())
+        if not isinstance(result, dict):
+            return {"ok": False, "error": f"表情发送返回异常: {result!r}"}
+        if result.get("ok") and not result.get("duplicate"):
+            try:
+                from gateway.channels import context as _ctx
+
+                _ctx.note_sent(f"[表情:{result.get('sticker') or name}]")
+            except Exception:  # 记账失败不影响已发出的消息
+                pass
+        return _external_note(result)
+    except Exception as e:
+        return {"ok": False, "error": f"表情发送失败: {e}"}
 
 
 def _sing_manifest() -> Dict[str, Any]:
