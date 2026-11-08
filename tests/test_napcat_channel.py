@@ -2,6 +2,8 @@
 
 不连真实 NapCat：只验证事件归一、触发规则、去重、分条与出站请求体构造。
 """
+import time
+
 import pytest
 
 from gateway.channels import napcat as mod
@@ -489,3 +491,286 @@ def test_group_image_data_urls_no_image(adapter, monkeypatch):
         "message": [{"type": "text", "data": {"text": "没图"}}]}})
     urls, err = adapter.group_image_data_urls("333", "43")
     assert urls == [] and "不含图片" in err
+
+
+# === 旁听留痕（A，2026-11-08 图片盲区）===
+
+def _non_t1_adapter(monkeypatch):
+    """无 group_presence 的裸 adapter：复刻事故场景（T1 白名单之外的群）。"""
+    monkeypatch.delenv("NAPCAT_TOKEN", raising=False)
+    return NapcatAdapter({"enabled": True})
+
+
+def test_unnamed_chatter_attached_on_named_wake(monkeypatch):
+    """未点名消息（含图）不派发但留痕；下次点名时以背景块附带，图占位带 id。
+
+    事故场景：群友先发图再点名，她答得像没见过图——因为图从未到达。
+    修复后 objective 里看得到 `[图片](id=...)`，msg_group_image 就有处可取。
+    """
+    adapter = _non_t1_adapter(monkeypatch)
+    monkeypatch.setattr(adapter, "group_name", lambda gid: "")
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 10,
+        "message": [{"type": "text", "data": {"text": "没人理我"}}],
+        "sender": {"nickname": "阿伟"},
+    }, emit)
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 11,
+        "message": [{"type": "image", "data": {"url": "http://x/3.jpg"}}],
+        "sender": {"nickname": "阿伟"},
+    }, emit)
+    assert got == []                      # 未点名：不派发、不下载图
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 12,
+        "message": [{"type": "at", "data": {"qq": "111"}},
+                    {"type": "text", "data": {"text": " 过来吃饭"}}],
+        "sender": {"nickname": "阿伟"},
+    }, emit)
+    assert len(got) == 1
+    text = got[0].text
+    assert "[附：点名前几分钟群里还有这些" in text
+    assert "「阿伟」(222): 没人理我" in text
+    assert "[图片](id=11)" in text        # 占位带消息号：模型可 msg_group_image 取图
+    assert "过来吃饭" in text             # 触发正文仍在，且在背景块之后
+    assert text.index("[附：") < text.index("过来吃饭")
+    # 附带即 flush：再次点名不再重复带
+    got.clear()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 13,
+        "message": [{"type": "at", "data": {"qq": "111"}},
+                    {"type": "text", "data": {"text": " 还在吗"}}],
+    }, emit)
+    assert "[附：" not in got[0].text
+
+
+def test_listen_stale_entries_dropped(monkeypatch):
+    """窗外（>5 分钟）的留痕直接丢弃：时效过了不值得占 objective。"""
+    adapter = _non_t1_adapter(monkeypatch)
+    monkeypatch.setattr(adapter, "group_name", lambda gid: "")
+    adapter._listen_note("333", time.time() - 400, "阿伟", "222", "上午的话", "1")
+    adapter._listen_note("333", time.time() - 10, "阿伟", "222", "刚刚的话", "2")
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 3,
+        "message": [{"type": "at", "data": {"qq": "111"}},
+                    {"type": "text", "data": {"text": " 在吗"}}],
+    }, emit)
+    assert "上午的话" not in got[0].text
+    assert "刚刚的话" in got[0].text
+
+
+def test_listen_cap_keeps_newest(monkeypatch):
+    """行数上限：超出丢最旧的，只留最新的。"""
+    adapter = _non_t1_adapter(monkeypatch)
+    monkeypatch.setattr(adapter, "group_name", lambda gid: "")
+    now = time.time()
+    for i in range(15):
+        adapter._listen_note("333", now - (15 - i) * 10, "阿伟", "222",
+                             f"第{i}条", str(i))
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 99,
+        "message": [{"type": "at", "data": {"qq": "111"}},
+                    {"type": "text", "data": {"text": " 说说"}}],
+    }, emit)
+    text = got[0].text
+    body = [ln for ln in text.splitlines()
+            if any(f"第{i}条" in ln for i in range(15))]
+    assert len(body) == 10                # 上限 10 行
+    assert "第14条" in text               # 最新的在
+    assert "第4条" not in text            # 最旧的被丢
+    assert "第5条" in text                # 边界：恰好留下的最旧一条
+
+
+def test_wave_promotion_forgets_buffered(monkeypatch):
+    """T1 去重边界：波次升格已入史的消息从留痕抹除，named 唤醒不再重复带。"""
+    from gateway.group_presence import GroupEvent
+
+    adapter = _non_t1_adapter(monkeypatch)
+    monkeypatch.setattr(adapter, "group_name", lambda gid: "")
+    now = time.time()
+    adapter._listen_note("333", now, "阿伟", "222", "波次那条", "10")
+    adapter._listen_note("333", now, "阿伟", "222", "留痕那条", "11")
+    got, emit = _collector()
+    adapter._on_message_cb = emit         # 升格回调走通（正常由 connect 注入）
+    ev = lambda mid, text: GroupEvent(ts=now, group_id="333", user_id="222",
+                                      speaker="阿伟", text=text, ats=frozenset(),
+                                      message_id=mid, named=False)
+    adapter._promote_wave(ev("10", "波次那条"), [ev("10", "波次那条")])
+    assert len(got) == 1 and got[0].origin == "wave"
+    adapter._on_message_cb = None
+    got.clear()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 12,
+        "message": [{"type": "at", "data": {"qq": "111"}},
+                    {"type": "text", "data": {"text": " 在吗"}}],
+    }, emit)
+    assert "波次那条" not in got[0].text  # 已随波次入史，不重复
+    assert "留痕那条" in got[0].text      # 仍在留痕，照常附带
+
+
+# === 引用带图透传消息号（B）===
+
+def test_quote_image_annotated_with_id(adapter, monkeypatch):
+    """引用一条带图消息：引用行内 [图片] 带 id，模型能 msg_group_image 取图。"""
+    monkeypatch.setattr(adapter, "group_name", lambda gid: "")
+    monkeypatch.setattr(adapter, "_api", lambda action, payload: {"ok": True, "data": {
+        "user_id": 111, "group_id": 333, "sender": {"nickname": "我"},
+        "message": [{"type": "image", "data": {"url": "http://x/9.jpg"}}]}})
+    adapter._self_id = "111"
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 20,
+        "message": [{"type": "reply", "data": {"id": 7}},
+                    {"type": "text", "data": {"text": "这图什么意思"}}],
+        "sender": {"nickname": "阿伟"},
+    }, emit)
+    assert len(got) == 1                  # 回复她的消息 = 被点名
+    assert "[引用] 我: [图片](id=7)" in got[0].text
+
+
+def test_quote_text_not_annotated(adapter, monkeypatch):
+    """引用纯文本消息：不带 id 标注（没图可取）。"""
+    monkeypatch.setattr(adapter, "group_name", lambda gid: "")
+    monkeypatch.setattr(adapter, "_api", lambda action, payload: {"ok": True, "data": {
+        "user_id": 222, "group_id": 333, "sender": {"nickname": "阿伟"},
+        "message": [{"type": "text", "data": {"text": "纯文字"}}]}})
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "group", "self_id": 111,
+        "user_id": 222, "group_id": 333, "message_id": 21,
+        "message": [{"type": "reply", "data": {"id": 8}},
+                    {"type": "text", "data": {"text": "好的"}},
+                    {"type": "at", "data": {"qq": "111"}}],
+    }, emit)
+    assert "[引用] 阿伟: 纯文字" in got[0].text
+    assert "(id=" not in got[0].text
+
+
+def test_quote_image_private_not_annotated(monkeypatch):
+    """私聊引用带图消息不标注：msg_group_image 只认群，标了也取不到。"""
+    monkeypatch.delenv("NAPCAT_TOKEN", raising=False)
+    adapter = NapcatAdapter({"enabled": True})
+    monkeypatch.setattr(adapter, "_api", lambda action, payload: {"ok": True, "data": {
+        "user_id": 222, "sender": {"nickname": "阿伟"},
+        "message": [{"type": "image", "data": {"url": "http://x/9.jpg"}}]}})
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "private", "self_id": 111,
+        "user_id": 222, "message_id": 22,
+        "message": [{"type": "reply", "data": {"id": 9}},
+                    {"type": "text", "data": {"text": "这呢"}}],
+    }, emit)
+    assert "[引用] 阿伟: [图片]" in got[0].text
+    assert "(id=" not in got[0].text
+
+
+# === 表情包（图片贴纸）===
+
+def _sticker_adapter(monkeypatch, tmp_path, files=("a.png", "b.gif"), debug=""):
+    """开了表情的 adapter：贴纸库指向 tmp_path，可选调试定向锁。"""
+    monkeypatch.delenv("NAPCAT_TOKEN", raising=False)
+    adapter = NapcatAdapter({"enabled": True, "stickers": {
+        "enabled": True, "dir": str(tmp_path), "debug_chat_id": debug}})
+    for i, f in enumerate(files):
+        (tmp_path / f).write_bytes(b"fake-image-" + str(i).encode())
+    return adapter
+
+
+def test_send_sticker_random_pick_and_payload(monkeypatch, tmp_path):
+    """name 不填 → 随机挑一张；本机 napcat → file URI 的 image 段。"""
+    adapter = _sticker_adapter(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod.random, "choice", lambda seq: seq[0])
+    calls = []
+    monkeypatch.setattr(adapter, "_api",
+                        lambda action, payload: calls.append((action, payload))
+                        or {"ok": True, "data": {"message_id": 55}})
+    r = adapter.send_sticker("private:222", "")
+    assert r["ok"] is True and r["sticker"] == "a"
+    assert calls[0][0] == "send_private_msg"
+    assert calls[0][1]["user_id"] == 222
+    seg = calls[0][1]["message"][0]
+    assert seg["type"] == "image" and seg["data"]["file"].endswith("a.png")
+    assert seg["data"]["file"].lower().startswith("file://")
+
+
+def test_send_sticker_by_name_with_extension(monkeypatch, tmp_path):
+    """按名点选：带扩展名/不带/大小写都能命中；未知名报错并列出可选。"""
+    adapter = _sticker_adapter(monkeypatch, tmp_path)
+    path, err, picked = adapter._resolve_sticker("B.GIF")
+    assert err == "" and picked == "b" and path.endswith("b.gif")
+    path, err, picked = adapter._resolve_sticker("b")
+    assert err == "" and picked == "b"
+    _, err, _ = adapter._resolve_sticker("不存在的")
+    assert "贴纸库没有" in err and "a" in err and "b" in err
+
+
+def test_send_sticker_debug_redirect_clamps_group(monkeypatch, tmp_path):
+    """调试定向锁：群目标被钳制改发私聊，note 注明；payload 走 send_private_msg。"""
+    adapter = _sticker_adapter(monkeypatch, tmp_path, files=("s.png",),
+                               debug="private:222333444")
+    calls = []
+    monkeypatch.setattr(adapter, "_api",
+                        lambda action, payload: calls.append((action, payload))
+                        or {"ok": True, "data": {"message_id": 56}})
+    r = adapter.send_sticker("group:333", "s")
+    assert r["ok"] is True and r["sticker"] == "s"
+    assert calls[0][0] == "send_private_msg"
+    assert calls[0][1]["user_id"] == 222333444
+    assert "调试定向" in r["note"] and "group:333" in r["note"]
+
+
+def test_send_sticker_disabled_and_empty_errors(monkeypatch, tmp_path):
+    """未启用 / 贴纸库为空 → 明确报错（模型该改走 msg_send_text）。"""
+    monkeypatch.delenv("NAPCAT_TOKEN", raising=False)
+    off = NapcatAdapter({"enabled": True})
+    assert "未启用" in off.send_sticker("private:222")["error"]
+    adapter = _sticker_adapter(monkeypatch, tmp_path, files=())
+    _, err, _ = adapter._resolve_sticker("")
+    assert "贴纸库为空" in err
+
+
+def test_send_sticker_dedup_same_sticker(monkeypatch, tmp_path):
+    """同一张 5 分钟内连发 → 第二次 duplicate 跳过（防刷屏）。"""
+    adapter = _sticker_adapter(monkeypatch, tmp_path, files=("d.png",))
+    monkeypatch.setattr(adapter, "_api",
+                        lambda action, payload: {"ok": True, "data": {"message_id": 1}})
+    assert adapter.send_sticker("private:222", "d")["ok"] is True
+    dup = adapter.send_sticker("private:222", "d")
+    assert dup.get("duplicate") is True
+    other = adapter.send_sticker("private:333444", "d")
+    assert other["ok"] is True and not other.get("duplicate")   # 不同会话不去重
+
+
+def test_send_sticker_remote_uses_base64(monkeypatch, tmp_path):
+    """远端 napcat → base64:// 直传（兼容远端，与语音同款兜底）。"""
+    import base64
+
+    adapter = _sticker_adapter(monkeypatch, tmp_path, files=("r.png",))
+    monkeypatch.setattr(adapter, "_napcat_is_local", lambda: False)
+    calls = []
+    monkeypatch.setattr(adapter, "_api",
+                        lambda action, payload: calls.append(payload)
+                        or {"ok": True, "data": {"message_id": 2}})
+    assert adapter.send_sticker("private:222", "r")["ok"] is True
+    ref = calls[0]["message"][0]["data"]["file"]
+    assert ref.startswith("base64://")
+    assert base64.b64decode(ref.split("base64://", 1)[1]) == b"fake-image-0"
+
+
+def test_reply_send_sticker_passthrough(monkeypatch, tmp_path):
+    """NapcatReply.send_sticker 绑定会话转发适配器（msg_send_sticker 的入口）。"""
+    adapter = _sticker_adapter(monkeypatch, tmp_path, files=("p.png",))
+    monkeypatch.setattr(adapter, "_api",
+                        lambda action, payload: {"ok": True, "data": {"message_id": 3}})
+    r = NapcatReply(adapter, "private:222").send_sticker("p")
+    assert r["ok"] is True and r["sticker"] == "p"
