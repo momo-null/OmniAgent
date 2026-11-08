@@ -1,0 +1,8 @@
+{
+  "name": "xiaohongshu",
+  "version": "1.0.0",
+  "title": "小红书只读采集",
+  "description": "小红书只读工具集（推荐流/搜索/笔记详情+评论），供大肥鱼的小红书社区数据分析使用。传输走 xiaohongshu-mcp 的 MCP 端点（登录由它的浏览器承担）。零写操作——发布/评论单点收口在 xiaohongshu 通道适配器。",
+  "enabled": true,
+  "permissions": ["network"]
+}
