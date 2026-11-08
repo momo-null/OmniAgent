@@ -15,8 +15,8 @@ export interface DebugLog {
 
 export type MainView = "chat" | "cron";
 
-// 右侧栏（RightDock）页签：文件/产物 · 浏览器 · git 变更 · 终端 · Debug
-export type DockTab = "files" | "browser" | "git" | "terminal" | "debug";
+// 右侧栏（RightDock）页签：文件/产物 · 浏览器 · git 变更 · 终端 · Debug · 出站审批
+export type DockTab = "files" | "browser" | "git" | "terminal" | "debug" | "outbox";
 // dock 窗口内页签视图：home=主页（入口列表），其余为功能视图
 export type DockView = "home" | DockTab;
 // 浏览器式页签（每页签记住自己停在哪个视图）

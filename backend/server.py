@@ -31,6 +31,7 @@ from backend.api.router_settings import router as settings_router
 from backend.api.router_cron import router as cron_router
 from backend.api.routers.audio_api import router as audio_router
 from backend.api.routers.memory_api import router as memory_router
+from backend.api.routers.bilibili_api import router as bilibili_router
 
 # ── 服务配置 ──────────────────────────────────────────────
 _server_cfg = (config.load_config() or {}).get("server", {}) or {}
@@ -177,6 +178,7 @@ app.include_router(cron_router)
 app.include_router(audio_router)
 # ── 记忆主人入口（H-6 P6-3：查看/纠正/遗忘，本地 tombstone 软删，不新增远端）──
 app.include_router(memory_router)
+app.include_router(bilibili_router)
 # ── Debug 模块挂载（可整体删除：删本行 + backend/api/routers/debug_api.py、
 #    debug_memory_data.py + 前端 web/src/components/DebugPanel.tsx、
 #    web/src/components/debug/ 与 web/src/api/debugApi.ts） ──

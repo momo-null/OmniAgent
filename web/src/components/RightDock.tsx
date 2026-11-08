@@ -33,6 +33,7 @@ import FilesTab from "./dock/FilesTab.tsx";
 import BrowserTab from "./dock/BrowserTab.tsx";
 import GitTab from "./dock/GitTab.tsx";
 import TerminalTab from "./dock/TerminalTab.tsx";
+import OutboxTab from "./dock/OutboxTab.tsx";
 import DebugPanel from "./DebugPanel.tsx";
 import { useTaskStore, type DockTab, type DockView } from "../store/taskStore.tsx";
 import { workspaceApi } from "../api/client.ts";
@@ -81,6 +82,7 @@ const VIEWS: { key: DockView; label: string; icon: React.ReactNode }[] = [
   { key: "git", label: "查看变更", icon: <GitCompareArrowsIcon fontSize="small" /> },
   { key: "terminal", label: "打开终端", icon: <TerminalIcon fontSize="small" /> },
   { key: "debug", label: "Debug", icon: <BugIcon fontSize="small" /> },
+  { key: "outbox", label: "出站审批", icon: <ImageIcon fontSize="small" /> },
 ];
 
 function viewMeta(view: DockView) {
@@ -198,6 +200,7 @@ function DockBody({ view }: { view: DockTab }) {
     case "browser": return <BrowserTab />;
     case "git": return <GitTab />;
     case "terminal": return <TerminalTab />;
+    case "outbox": return <OutboxTab />;
     case "debug":
     default: return <DebugPanel logs={debugLogs} onClear={clearDebugLogs} />;
   }

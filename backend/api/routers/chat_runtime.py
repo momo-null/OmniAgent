@@ -280,7 +280,20 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # F2.2：收尾语义来自 task.json（task_mode，缺省 oneshot；缺省行为不变）。
         # 闲聊/文本型任务的纯文本收尾判 success 是正常语义，不强制 daemon。
         _task_mode = str((_meta or {}).get("task_mode", "oneshot") or "oneshot")
-        spec = TaskSpec(objective=last_user, done_when="",
+        # §8 出站守则（马甲统一注入契约）：Web 入口同构归一——读 channels/web.yaml 的
+        # outbound 块（缺省无此文件 → 全空零影响）；场合自述只喂模型，历史仍用
+        # last_user 原文。Web 是多并发请求，不走进程级上下文；发送闸按
+        # (通道, 会话) 在 msg_send_* 现解析。
+        _web_objective = last_user
+        try:
+            from gateway.outbound import note as _ob_note, resolve as _ob_resolve
+
+            _ob_text = _ob_note(_ob_resolve("web", f"chat:{task_id}"))
+            if _ob_text:
+                _web_objective = f"{last_user}\n{_ob_text}"
+        except Exception:
+            pass  # 守则是增强项：无配置/解析失败不阻断本轮
+        spec = TaskSpec(objective=_web_objective, done_when="",
                         task_id=task_id, project_id=None, max_steps=max_steps,
                         history=list(model_messages),
                         task_mode=_task_mode,
@@ -326,7 +339,6 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                 _dw = _did_work(turn_steps, result)
                 memory_writer.enqueue(
                     _pid, brain_cfg, source_task=task_id,
-                    persona=getattr(loop, "persona", "") or persona,
                     did_work=_dw,
                     on_done=lambda _st: _debug_push(
                         "memory_flush", {"title": "记忆沉淀(异步)", **_st}),
