@@ -399,13 +399,29 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
                         # 能自己查——memory_recall/read_scene/conversation_search 皆纯读，
                         # conversation_search 的 scope 对来源外部强制锁死在当前会话/群）
                         tool_allowlist=(["msg_send_text", "msg_send_voice", "msg_send_card",
+                                         "msg_send_sticker",
                                          "msg_stay_silent",
                                          "msg_group_history", "msg_group_image", "msg_sing",
                                          "memory_recall", "read_scene", "conversation_search",
                                          "narrative_search", "narrative_read"]
                                         if explicit else None))
+        # ── §8 出站守则（对外身份「马甲」统一注入契约，plan §8）──────────────
+        # 入站来源按 (通道, 会话) 归一 outbound 配置，场合自述只喂模型、不进历史
+        # （历史走 display_text）。cron 无固定目标不在此附加——发送闸在 msg_send_*
+        # 按 (通道, 目标) 现解析。identity 只是对外自称：人格不分身、不分记忆仓。
+        run_objective = item["objective"]
+        if reply is not None:
+            try:
+                from gateway.outbound import note as _ob_note, resolve as _ob_resolve
+
+                _ob_text = _ob_note(_ob_resolve(str(getattr(reply, "channel_name", "") or ""),
+                                                str(getattr(reply, "chat_id", "") or "")))
+                if _ob_text:
+                    run_objective = f"{run_objective}\n{_ob_text}"
+            except Exception:
+                pass  # 守则是增强项：配置缺失/解析失败不阻断派发
         spec = TaskSpec(
-            objective=item["objective"],
+            objective=run_objective,
             done_when=item.get("done_when", ""),
             max_steps=item.get("max_steps") or 40,
             task_id=real_task_id,
@@ -463,16 +479,19 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             send_info.update({"mode": "explicit", "count": len(sent_texts)})
         _record_final("\n\n".join(sent_texts) if sent_texts else answer)
         # ── 记忆写链：聊天/群聊轮次也要沉淀（Web 侧在 chat_runtime 入队，网关侧此前漏接，
-        # 导致群聊经历从未进记忆）── 口径与 Web 不同：聊天走「只沉淀叙事层」
-        # （allow_atoms=False → 不产 L1 原子，避免闲聊/玩笑/他人可控文本污染事实库），
-        # 并按条数/间隔限流入队（多轮合并），防高频轮次打爆写队列。
+        # 导致群聊经历从未进记忆）── 是否产 L1 按**进料道**区分，不按平台名分支：
+        # · chat（通道消息/群聊）→ allow_atoms=False，只沉淀叙事层，不把他人可控文本
+        #   写进事实库；
+        # · task/observation（cron、手动派发、主动观察等自主运营轮次）→
+        #   allow_atoms=True，允许产 L1（2026-11-09 先打开这两路）。
+        # 仍按条数/间隔限流入队（多轮合并），防高频轮次打爆写队列。
         try:
             from omni_core import memory_writer
 
             if pid:
                 memory_writer.enqueue_throttled(
                     pid, brain_cfg, source_task=real_task_id,
-                    did_work=True)
+                    did_work=True, allow_atoms=(_l0_kind != "chat"))
         except Exception as e:  # noqa: BLE001 —— 写链是增强项，失败不影响本轮
             print(f"[dispatch] 记忆入队失败（忽略）: {type(e).__name__}: {e}")
         # run_task 真实返回：success / escalated / steps / trajectory_file …
@@ -481,6 +500,15 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             TaskStore.update(real_task_id, state="done" if ok else "failed", success=ok)
         except Exception:
             pass
+        if pid and real_task_id:
+            # 产物收编（零内核桥）：沙箱把任务写隔离进产物区，运行结束把语料/日记
+            # 归位回项目目录（corpus|diary），下一次觉醒/采集才能读到。规则窄且只增不删。
+            try:
+                from gateway.artifact_collector import collect as _collect
+
+                _collect(str(meta.get("project_id") or ""), real_task_id)
+            except Exception as e:  # noqa: BLE001 —— 收编是增强项，失败不影响任务结果
+                print(f"[dispatch] 产物收编失败（忽略）: {type(e).__name__}: {e}")
         if temp_task:  # 临时任务：结果已记 runs.jsonl，索引即删（列表不再显示）
             try:
                 TaskStore.remove(real_task_id)

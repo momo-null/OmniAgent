@@ -312,6 +312,7 @@ def test_explicit_mode_grants_send_tool_only(monkeypatch):
     # 说话（三种方式）+ 群上下文只读 + 记忆/场景自取（P1 方案 C：检索结果永不自动注入，
     # 被点名 run 也得自己能查）——全是只读或回来源会话的动作，无写操作。
     assert set(allow) >= {"msg_send_text", "msg_send_voice", "msg_send_card",
+                          "msg_send_sticker",
                           "msg_stay_silent", "msg_group_history", "msg_group_image",
                           "memory_recall", "read_scene"}
     assert not any(x.startswith(("memory_remember", "memory_update", "tool_", "shell"))
@@ -455,6 +456,79 @@ def test_msg_send_text_no_longer_auto_switches_to_voice(monkeypatch):
         assert reply.texts == ["说点文字"] and reply.voices == []
     finally:
         ch_ctx.reset_sent()
+
+
+# ── msg_send_sticker：表情包（贴纸库图片）；调试期通道侧钳制在适配器 ────────
+class _StickerReply:
+    def __init__(self, support_sticker=True):
+        self.channel_name = "sticker_chan"
+        self.chat_id = "private:777"
+        self.stickers = []
+        self.texts = []
+        if support_sticker:
+            self.send_sticker = self._sticker
+
+    def _sticker(self, name):
+        self.stickers.append(name)
+        if name == "无这张":
+            return {"ok": False, "error": "贴纸库没有「无这张」"}
+        return {"ok": True, "sticker": name or "随机", "message_id": 9}
+
+    def send_text(self, text):
+        self.texts.append(text)
+        return {"ok": True}
+
+
+def test_msg_send_sticker_sends_and_notes_sent():
+    """支持表情的通道 → 走 send_sticker 并记进「本轮已发出」（duplicate 不记）。"""
+    from gateway.channels import context as ch_ctx
+
+    plugin = _load_msg_plugin("_msg_plugin_sticker_ok")
+    reply = _StickerReply()
+    ch_ctx.register(_VoiceAdapter("sticker_ok_chan", reply))
+    ch_ctx.reset_sent()
+    try:
+        r = plugin.msg_send_sticker("哈哈.png", channel="sticker_ok_chan")
+        assert r["ok"] is True and r["sticker"] == "哈哈.png"
+        assert reply.stickers == ["哈哈.png"]
+        assert ch_ctx.take_sent() == ["[表情:哈哈.png]"]
+        r2 = plugin.msg_send_sticker("", channel="sticker_ok_chan")
+        assert r2["ok"] is True and r2["sticker"] == "随机"
+    finally:
+        ch_ctx.reset_sent()
+
+
+def test_msg_send_sticker_duplicate_and_error_not_recorded():
+    """duplicate / 失败结果不记「已发出」；未知名错误原样透传给模型。"""
+    from gateway.channels import context as ch_ctx
+
+    plugin = _load_msg_plugin("_msg_plugin_sticker_dup")
+    reply = _StickerReply()
+    ch_ctx.register(_VoiceAdapter("sticker_dup_chan", reply))
+    ch_ctx.reset_sent()
+    try:
+        r = plugin.msg_send_sticker("无这张", channel="sticker_dup_chan")
+        assert r["ok"] is False and "贴纸库没有" in r["error"]
+        r2 = plugin.msg_send_sticker("哈哈", channel="sticker_dup_chan")
+        assert r2["ok"] is True
+        reply.send_sticker = lambda name: {"ok": True, "duplicate": True}  # type: ignore
+        r3 = plugin.msg_send_sticker("哈哈", channel="sticker_dup_chan")
+        assert r3.get("duplicate") is True
+        assert ch_ctx.take_sent() == ["[表情:哈哈]"]   # 只有成功那条记了账
+    finally:
+        ch_ctx.reset_sent()
+
+
+def test_msg_send_sticker_unsupported_channel_errors():
+    """通道无 send_sticker → 明确报错（不静默改发文字）。"""
+    from gateway.channels import context as ch_ctx
+
+    plugin = _load_msg_plugin("_msg_plugin_sticker_unsupported")
+    reply = _StickerReply(support_sticker=False)
+    ch_ctx.register(_VoiceAdapter("sticker_no_chan", reply))
+    r = plugin.msg_send_sticker("哈哈", channel="sticker_no_chan")
+    assert r["ok"] is False and "不支持表情包" in r["error"]
+    assert reply.texts == []
 
 
 # ── msg_group_history：群上下文自助查询（A 自动带少量，B 由模型按需多拉） ──

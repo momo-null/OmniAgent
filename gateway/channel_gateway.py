@@ -66,10 +66,12 @@ def _load_routes() -> Dict[str, Any]:
 
 
 def _register_factories() -> None:
-    from .channels import feishu, napcat, wecom
+    from .channels import bilibili, feishu, napcat, wecom, xiaohongshu
+    _ADAPTER_FACTORIES["bilibili"] = bilibili.build
     _ADAPTER_FACTORIES["feishu"] = feishu.build
     _ADAPTER_FACTORIES["wecom"] = wecom.build
     _ADAPTER_FACTORIES["napcat"] = napcat.build
+    _ADAPTER_FACTORIES["xiaohongshu"] = xiaohongshu.build
 
 
 def build_adapter(name: str):

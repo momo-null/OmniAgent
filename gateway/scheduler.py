@@ -302,6 +302,18 @@ class Scheduler:
                     self._fire(job, minute_key, source="cron")
 
     def _fire(self, job: Dict[str, Any], fire_key: str, source: str) -> None:
+        reason = _channel_gate(job)
+        if reason:
+            # 通道就绪闸（机械侧）：目标通道自声明未就绪（如 bilibili 未登录）→
+            # 本次不触发人设扮演；fire_key 照常记账防同一分钟重复判断。
+            print(f"[scheduler] 跳过 {job.get('name', job['id'])}（{source}）：{reason}")
+            try:
+                record_run(job["id"], "", "skipped", error=reason)
+            except Exception:
+                pass
+            self._state[job["id"]] = fire_key
+            _save_state(self._state)
+            return
         print(f"[scheduler] 触发 {job.get('name', job['id'])}（{source}）objective={job['objective'][:40]}")
         try:
             self._submit(
@@ -320,11 +332,50 @@ class Scheduler:
         self._stop.set()
 
 
+def _channel_gate(job: Dict[str, Any]) -> Optional[str]:
+    """通道就绪闸：job 指定了 notify_channel 且该通道在网关里**自声明未就绪** → 返回
+    跳过原因；否则 None 放行。
+
+    - 判定走 duck-typing 的可选 ``ready()``（通道协议不变，base.py 零改动）：
+      bilibili 用它表达「未登录」（大肥鱼人设扮演 job 没登录就不该醒）；
+      其他通道没实现 ready() 一律放行（既有 cron 行为不变，不新增惊喜）。
+    - 通道未注册（未启用/启动失败）也放行：配置问题让发送阶段显式报错，不在调度层猜。
+    """
+    ch = str(job.get("notify_channel") or "")
+    if not ch:
+        return None
+    try:
+        from .channels import context as _ctx
+
+        adapter = _ctx.get_adapter(ch)
+    except Exception:
+        return None
+    if adapter is None:
+        return None
+    ready = getattr(adapter, "ready", None)
+    if not callable(ready):
+        return None
+    try:
+        if not ready():
+            return f"通道 {ch} 未就绪（如未登录）——本次触发跳过"
+    except Exception:
+        return None
+    return None
+
+
 def run_now(job_id: str) -> Optional[str]:
     """「立即运行」（前端按钮/调试用）：绕过 cron 直接派发。返回 task_id 或 None。"""
     from . import dispatch
     job = next((j for j in load_jobs() if j["id"] == job_id), None)
     if not job:
+        return None
+    reason = _channel_gate(job)
+    if reason:
+        print(f"[scheduler] 手动运行 {job_id} 被闸拦下：{reason}")
+        try:
+            record_run(job_id, "", "skipped", error=reason)
+        except Exception:
+            pass
         return None
     return dispatch.submit(
         job["objective"], job.get("done_when", ""), int(job.get("max_steps", 40)),
