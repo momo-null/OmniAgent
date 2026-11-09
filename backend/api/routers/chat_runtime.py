@@ -280,7 +280,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # F2.2：收尾语义来自 task.json（task_mode，缺省 oneshot；缺省行为不变）。
         # 闲聊/文本型任务的纯文本收尾判 success 是正常语义，不强制 daemon。
         _task_mode = str((_meta or {}).get("task_mode", "oneshot") or "oneshot")
-        # §8 出站守则（马甲统一注入契约）：Web 入口同构归一——读 channels/web.yaml 的
+        # 出站守则：Web 入口同构归一——读 channels/web.yaml 的
         # outbound 块（缺省无此文件 → 全空零影响）；场合自述只喂模型，历史仍用
         # last_user 原文。Web 是多并发请求，不走进程级上下文；发送闸按
         # (通道, 会话) 在 msg_send_* 现解析。

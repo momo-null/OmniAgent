@@ -1,5 +1,5 @@
 # ============================================================================
-# 小红书通道模板（大肥鱼自运营 M4）→ 拷到 ~/.omniagent/channels/xiaohongshu.yaml
+# 小红书通道模板 → 拷到 ~/.omniagent/channels/xiaohongshu.yaml
 #
 # ⚠ 传输=xiaohongshu-mcp（https://github.com/xpzouying/xiaohongshu-mcp）：
 #   浏览器自动化、扫码登录、cookie 全由它承担，本适配器只翻译它的 MCP 端点。
@@ -35,11 +35,10 @@ allow_tools: false
 timeout_sec: 20
 state_dir: ""                   # 留空 = ~/.omniagent
 
-# ── 出站守则（§8 马甲统一注入契约；键语义见 napcat.yaml 同名段）────────────
-# 小红书笔墨：标题 ≤20 字、正文短段+emoji 克制、tag 组合吃搜索流量；对外自称大肥鱼
+# ── 出站守则 ──────────────────────────────────────────────────────────────
 outbound:
-  identity: "大肥鱼"
-  style: "标题短有钩子、正文分段短句、最多两三个 emoji；先读完笔记再回评论；不冒充真人（虚拟角色大方承认）；不引流不提主人；不碰时政"
+  identity: ""
+  style: ""
   max_chars: 0
   max_sentences: 0
   allow_multi: true

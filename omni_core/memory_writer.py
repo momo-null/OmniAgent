@@ -149,8 +149,13 @@ def enqueue_throttled(project_id: str, brain_cfg: Optional[Dict[str, Any]] = Non
                       did_work: bool = True,
                       min_msgs: int = _THROTTLE_MIN_MSGS,
                       min_interval: float = _THROTTLE_MIN_INTERVAL_SEC,
+                      allow_atoms: bool = False,
                       on_done: Optional[Callable[[Dict[str, Any]], None]] = None) -> bool:
-    """按条数/间隔限流入队 + 只沉淀叙事层（allow_atoms=False）。
+    """按条数/间隔限流入队；是否产 L1 由调用方按进料道决定。
+
+    ``allow_atoms=False``（缺省）= 只沉淀叙事层，通道聊天轮次用；
+    ``allow_atoms=True`` = 允许产 L1 原子，cron / 手动派发 / 主动观察等
+    非通道轮次用（2026-11-09 先对自主运营任务打开）。
 
     触发条件（任一满足）：capture 缓冲里已攒够 ``min_msgs`` 条；或距该项目上次入队
     已超过 ``min_interval`` 秒（低流量场景也要保证巩固期能被喂到，否则日记永远攒不够）。
@@ -166,7 +171,8 @@ def enqueue_throttled(project_id: str, brain_cfg: Optional[Dict[str, Any]] = Non
             return False
         _last_enqueue[project_id] = now
         return enqueue(project_id, brain_cfg, source_task=source_task,
-                       did_work=did_work, allow_atoms=False, on_done=on_done)
+                       did_work=did_work, allow_atoms=bool(allow_atoms),
+                       on_done=on_done)
     except Exception as e:  # noqa: BLE001 —— 写链是增强项，失败不影响主链路
         logger.warning("限流入队失败（忽略）：%s: %s", type(e).__name__, e)
         return False

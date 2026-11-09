@@ -193,7 +193,7 @@ circle_note:
 # 谁来读：技能装配与自动蒸馏。设置页「通用」里有 auto_distill 的开关。
 skill:
   auto_distill: false           # 结构化宏自动提取。默认关：押的是「回放省步」价值假设，
-                                # 目前负结果两次，停手状态（见 plan §8.3）
+                                # 目前负结果两次，停手状态
   replay_allow_tools:           # 硬重放白名单（确定性工具才可重放；GUI 坐标类不在列，
     - shell_exec                # 命中白名单才原样重放，否则降为「参考建议」
     - read_file

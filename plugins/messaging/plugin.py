@@ -115,12 +115,18 @@ def _outbound_flat(adapter: Any, chat_id: str) -> Dict[str, Any]:
         return {}
 
 
-def _outbound_chunks(adapter: Any, chat_id: str, text: str) -> Tuple[List[str], str]:
-    """机械闸：超限拆条或拒发（fail-open：守则解析异常不拦发送，同 _external_note 宽容）。"""
+def _outbound_chunks(adapter: Any, chat_id: str, text: str,
+                     split_blank_lines: bool = True) -> Tuple[List[str], str]:
+    """机械闸：空行分条 / 超限续拆 / 拒发（fail-open：守则解析异常不拦发送，同 _external_note 宽容）。
+
+    ``split_blank_lines=False`` 给图片说明这类「本就只该一条」的调用点用：
+    它只会取 chunks[0]，若按空行拆段就会悄悄丢掉后面的说明。
+    """
     try:
         from gateway.outbound import enforce as _ob_enforce
 
-        return _ob_enforce(_outbound_flat(adapter, chat_id), text)
+        return _ob_enforce(_outbound_flat(adapter, chat_id), text,
+                           split_blank_lines=split_blank_lines)
     except Exception:
         return [text], ""
 
@@ -277,8 +283,10 @@ def msg_send_image(image_path: str, text: str = "", channel: str = "", target: s
         if not callable(send_image):
             return {"ok": False,
                     "error": f"通道 {getattr(adapter, 'name', '') or '该'} 不支持图片发送"}
-        # 出站守则：文字说明过长度闸（图片动态按动态配额计，闸在通道侧）
-        chunks, gate_err = _outbound_chunks(adapter, chat_id, text or "")
+        # 出站守则：文字说明过长度闸（图片动态按动态配额计，闸在通道侧）。
+        # 图片说明只发一条，不按空行分条——否则 chunks[0] 会丢掉后面的内容。
+        chunks, gate_err = _outbound_chunks(adapter, chat_id, text or "",
+                                           split_blank_lines=False)
         if gate_err:
             return {"ok": False, "error": gate_err}
         result = send_image(path, chunks[0] if chunks else "")

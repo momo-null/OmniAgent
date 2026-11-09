@@ -7,10 +7,7 @@
 //   state.json  每个 job 上次触发的分钟键（防同一分钟重复触发）
 //   runs.jsonl  运行记录（页面里的历史与失败原因来自这里）
 //
-// ⚠ 防化石铁律：objective 只许一句话，且**禁止**出现路径 / 脚本名 / 数据源
-//   （校验函数会拦下含 "D:\" "D:/" "python" ".py" "/mnt/" "http" 的 objective）。
-//   理由：把流程细节写死在 cron 里就成了没人敢动的化石任务——具体怎么做由
-//   objective 里指向的 MCP server / 技能单点供给，这里只交代「做什么」。
+// objective 与普通任务的目标写同一套内容：要做什么、产出什么、放在哪，都可以写。
 // 注释：  // 只有读取端认；定时任务页保存会重写成无注释版本。
 // ============================================================================
 {
@@ -58,22 +55,69 @@
       "miss_grace_minutes": 180
     },
 
-    // ── 大肥鱼自运营（B站通道，见 doc/worklog/xhs-bili-autonomous-ops-plan-2026-11-07.md）──
+    // ── B站通道任务 ──────────────────────────────────────────────────────
     // 觉醒机制：多个错峰时刻近似作息窗（jitter 属网关能力，后置不急）。
     // 她做什么由 projects/bilibili/AGENTS.md 的运营纪律决定——这里只交代「该醒一次了」。
     // 发送走 bilibili 通道的四道闸（配额/黑名单/风控暂停/模式），模板卡不住的闸不靠提示词。
     // notify_channel 留 bilibili 但 default_chat_id 留空时，结果只落 runs.jsonl 不外发。
     {
       "id": "bili-awake",
-      "name": "大肥鱼觉醒",
+      "name": "B站通道巡检",
       "cron": "17 10,16,21 * * *",
-      "objective": "开始这次大肥鱼的B站运营觉醒",
+      "objective": "开始一次 B站通道巡检",
       "project_id": "bilibili",
       "notify_channel": "bilibili",
       "enabled": false,
       "max_steps": 30,
       "miss_grace_minutes": 60,
-      "note": "大肥鱼觉醒：读运营纪律→看新通知→按配额决定回评/发动态；冷启动期 mode=dry_run 演练；未登录时调度闸自动跳过（runs.jsonl 记 skipped）"
+      "note": "读运营纪律→看新通知→按配额决定回评/发动态；冷启动期 mode=dry_run 演练；未登录时调度闸自动跳过（runs.jsonl 记 skipped）"
+    },
+
+    // ── life 项目：加工每日轨迹 ──────────────────────────────────────────
+    // objective 与普通任务同口径：要做什么、产出什么、放在哪都可以写。
+    // 脚本属于 life 项目自身（projects/life/ 下），不在本仓库；产物 days/<date>.md
+    // 与 knowledge/<date>.jsonl 落项目目录，日记由 omni 叙事索引收进记忆。
+    // 三段错峰：早定方向 / 中采集真实条目 / 晚合成第一人称的一天。
+    // 步数留空 = 走 runtime.default_max_steps，与普通任务同源。
+    //
+    // allow_atoms：这轮任务要不要产 L1 记忆原子（她记住的事实）。
+    // **缺省 false（不写这个键 = 关）**：定时任务的 objective 是配置文本不是主人说话，
+    // 提炼器会把执行细节误当「用户规则」收进事实库（2026-11-09 实证 9 条全废，
+    // 提炼负面清单已同步收紧）。life 三任务显式开 true：行为与见闻经自然链进记忆
+    // （任务轨迹→蒸馏→L1/L2→巩固日记）；项目产物文件（days/knowledge）只给人看、
+    // 不进记忆，全局日记由巩固期自己写（D+1），不经脚本直写。
+    {
+      "id": "life-morning",
+      "name": "今天想看什么",
+      "cron": "20 8 * * *",
+      "objective": "运行项目目录下的 daytrace.py plan --root auto 生成今天的 today.json，再按课表与 interests.md 定下今天想看的几个方向",
+      "project_id": "life",
+      "allow_atoms": true,
+      "enabled": false,
+      "miss_grace_minutes": 120,
+      "note": "早段：daytrace plan → today.json"
+    },
+    {
+      "id": "life-collect",
+      "name": "记下今天看到的",
+      "cron": "40 12 * * *",
+      "objective": "用只读工具采集今天感兴趣的条目，逐条写进项目目录 knowledge 下当天日期的 .jsonl，并逐条 memory_observe 记进观察层",
+      "project_id": "life",
+      "allow_atoms": true,
+      "enabled": false,
+      "miss_grace_minutes": 120,
+      "note": "中段：只读采集真实条目 → knowledge/<日期>.jsonl + memory_observe 观察层"
+    },
+    {
+      "id": "life-diary",
+      "name": "把今天写成一天",
+      "cron": "50 23 * * *",
+      "objective": "把今天写成第一人称的一天，写到项目目录 days 下当天日期的 .md，并回填 interests.md",
+      "project_id": "life",
+      "allow_atoms": true,
+      "enabled": false,
+      "miss_grace_minutes": 180,
+      "note": "晚段：days/<日期>.md（给主人看）；omni 全局日记由巩固期自己写"
     }
   ]
 }

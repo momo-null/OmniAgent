@@ -126,7 +126,7 @@ def test_catchup_backfills_within_window_only(monkeypatch, brain_cfg, tmp_path):
 
     sdir = rp.projects_root() / "qq"
     sdir.mkdir(parents=True, exist_ok=True)
-    body = ("「张三」(1): 今天群里可热闹了，先是大肥鱼们为了一碗白米饭吵了一整个上午，"
+    body = ("「张三」(1): 今天群里可热闹了，先是几位成员为了一碗白米饭吵了一整个上午，"
             "下午又有谁踩了谁的语音被追着怼了半天，到了晚上大家还聊起剑网3梦江南的新副本，"
             "这条素材拉长是为了稳稳超过八十字的白卷门槛")
     (sdir / "s_t.jsonl").write_text(

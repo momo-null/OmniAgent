@@ -1,4 +1,4 @@
-"""B站只读采集插件（大肥鱼自运营 M1 外环语料 / M3 数据回流，plan §3 双环）。
+"""B站只读采集插件。
 
 - **零写操作**：全部工具只读。平台写路径单点收口在 gateway/channels/bilibili.py
   （四道闸），本插件永不注册任何发送/点赞/关注类工具——写纪律不靠自觉靠结构。
@@ -74,8 +74,8 @@ def _v(card: Any) -> Dict[str, Any]:
 
 
 @function_tool(
-    description="获取B站当前热门视频榜（综合热门，只读）。用于大肥鱼的社区话题采集："
-                "看现在什么在火，再挑值得用大肥鱼视角切入的内容。返回标题/简介/UP主/播放点赞等数据。",
+    description="获取B站当前热门视频榜（综合热门，只读）。用于社区话题采集："
+                "看现在什么在火，再挑值得跟进的内容。返回标题/简介/UP主/播放点赞等数据。",
     unit="bilibili",
 )
 def bili_hot(n: int = 10) -> Dict[str, Any]:
@@ -139,7 +139,7 @@ def bili_search(keyword: str, n: int = 10) -> Dict[str, Any]:
 
 @function_tool(
     description="获取B站视频的元数据（标题/简介/UP主/播放点赞评论数，只读）。"
-                "评论前先看这个了解视频讲了什么——大肥鱼纪律：先读再评。",
+                "评论前先看这个了解视频讲了什么——先读再评。",
     unit="bilibili",
 )
 def bili_video_info(bvid: str = "", aid: int = 0) -> Dict[str, Any]:

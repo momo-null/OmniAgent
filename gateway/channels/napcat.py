@@ -233,6 +233,8 @@ def group_title(group_name: str, group_id: str) -> str:
 _SEND_RULE = ("要说话必须调用 msg_send_text（文字）或 msg_send_voice（语音朗读；"
               "只会念，不能唱歌/哼唱），不填 target 即发回本会话；"
               "明确不想说话就调用 msg_stay_silent 收口，保持沉默；"
+              "想不起对面是谁、或想知道之前跟他聊过什么，查你自己的叙事记忆"
+              "（narrative_search kind=relation），别直接问对方；"
               "只写最终回答不算任何投递决定——它只给主人看，对方看不到。")
 
 #: 每 chat 滑动窗频控（防恶意刷把 agent 拖垮；点名/波次一视同仁）
@@ -619,6 +621,10 @@ class NapcatAdapter:
                 return {"ok": False, "error": result.get("error", "发送失败"),
                         "sent": len(message_ids)}
             message_ids.append((result.get("data") or {}).get("message_id"))
+        # 引用只挂一次唤醒的首条：分条是多次 send_text 调用，每次 idx 都从 0 开始，
+        # 不消费掉就会每条都带引用（2026-11-10 实测回归）。
+        if quote_id:
+            self._consume_quote_id(chat_id)
         # 出站事实回注：群里成功说了话 → presence 更新沉默基准/预算反馈（仅群）。
         # 点名回复不占主动预算（proactive=False），自发开话按线程计（presence 判续聊免费）
         self._remember_sent(chat_id, text)
@@ -1215,6 +1221,15 @@ class NapcatAdapter:
         if hit and hit[0] == "named" and time.time() - hit[1] <= 600.0:
             return str(hit[2] or "")
         return ""
+
+    def _consume_quote_id(self, chat_id: str) -> None:
+        """引用只挂在一次唤醒的**首条**消息上：成功发出后清掉 id，续条不再引用。
+
+        `_wake_origin` 本身不能清——`_proactive_speech` 还要看 origin/ts 判主动预算。
+        """
+        hit = self._wake_origin.get(chat_id)
+        if hit:
+            self._wake_origin[chat_id] = (hit[0], hit[1], "")
 
     def _group_voice_mode(self, group_id: str) -> bool:
         """本轮群回复用不用语音：热窗内粘住本轮实际用过的模式；新话头按比例掷骰。

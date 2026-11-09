@@ -21,12 +21,31 @@
 
 限流参数由 ``config.runtime.shell_exec`` 驱动（``configure`` 注入），不写死在工具里。
 """
+import os
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from omni_core.tools.base import function_tool
 from omni_core.tools.workspace import task_tmp_dir
+
+
+def _child_env() -> Dict[str, str]:
+    """子进程环境：把仓库根加进 PYTHONPATH。
+
+    任务脚本（含 project 目录里的项目脚本）因此可以 ``import omni_core``——
+    这是通用能力，不为某个项目单开分支。
+    """
+    env = dict(os.environ)
+    try:
+        root = str(Path(__file__).resolve().parents[2])
+        old = env.get("PYTHONPATH", "")
+        if root not in old.split(os.pathsep):
+            env["PYTHONPATH"] = root + (os.pathsep + old if old else "")
+    except Exception:
+        pass
+    return env
 
 
 _LIMITS = {
@@ -127,6 +146,7 @@ def shell_exec(
             shell=False,
             encoding="utf-8",
             errors="replace",
+            env=_child_env(),
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": f"执行超时（>{timeout}s）", "timeout": True}

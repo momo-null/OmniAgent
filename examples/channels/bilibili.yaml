@@ -1,5 +1,5 @@
 # ============================================================================
-# B站通道模板（大肥鱼自运营）→ 拷到 ~/.omniagent/channels/bilibili.yaml
+# B站通道模板 → 拷到 ~/.omniagent/channels/bilibili.yaml
 #
 # 每通道一个文件，网关启动时扫 channels/ 目录逐个拉起；文件名（bilibili）就是
 # 代码里的通道名，也是 msg_send_* 的 channel 参数、cron 的 notify_channel。
@@ -76,13 +76,11 @@ timeout_sec: 10
 state_dir: ""                   # 留空 = ~/.omniagent（状态/去重/草稿队列落这里）；
                                 # 多号或测试可另指目录
 
-# ── 出站守则（§8 马甲统一注入契约）──────────────────────────────────────────
-# 马甲不是人格：identity 只是对外自称，人格统一在角色卡 character.md；
-# 运营纪律与虚构边界在 projects/bilibili/AGENTS.md；定量规矩（这条怎么发）在这里。
+# ── 出站守则 ──────────────────────────────────────────────────────────────
 # by_context 的键 = chat_id 首段：comment（评论/回复）/ dynamic（发动态）。
 outbound:
-  identity: "大肥鱼"
-  style: "短句为主、语气词多一点、偶尔自嘲胖和懒；先读完对方说的再回，说不出有内容的就不回；不评价时政；不@陌生人、不引流、不提主人"
+  identity: ""
+  style: ""
   max_chars: 0
   max_sentences: 0
   allow_multi: true

@@ -168,6 +168,38 @@ def memory_remember(text: str = "", kind: str = "fact") -> Dict[str, Any]:
 
 
 @function_tool(
+    name="memory_observe",
+    description=("记一条观察见闻（客观看到的条目原文，带出处）。浏览/采集/检索时看到值得留存的"
+                 "具体内容用它逐条记——进观察层，巩固日记会引用、日后可升格；"
+                 "主观判断/约定/偏好用 memory_remember。"),
+)
+def memory_observe(text: str = "", source: str = "") -> Dict[str, Any]:
+    """观察进料道（INV-13/H-7）：原文进观察层，不伪装成聊天原话。
+
+    Args:
+        text: 见闻原文（客观转述，一句到几句）。
+        source: 出处说明（平台/帖子/栏目等）。缺出处不入库（H-7）。
+    """
+    b = _brain()
+    if not b.enabled():
+        return {"ok": False, "error": "长期记忆未启用（ltm.enabled）"}
+    text = (text or "").strip()
+    source = (source or "").strip()
+    if not text:
+        return {"ok": False, "error": "text 不能为空"}
+    if not source:
+        return {"ok": False, "error": "source 不能为空（缺出处不入库）"}
+    chat, _sid = _current_conversation()
+    rid = b.capture_observation(
+        chat, text,
+        provenance={"surface": "observe", "source": source[:160]},
+        source_kind="observation")
+    if not rid:
+        return {"ok": False, "error": "写入失败（观察是增强项，可继续当前任务）"}
+    return {"ok": True, "record_id": rid}
+
+
+@function_tool(
     name="memory_recall",
     description="主动检索长期记忆（跨会话）。适合：需要回想起之前的事实/约定/偏好的时候。",
 )

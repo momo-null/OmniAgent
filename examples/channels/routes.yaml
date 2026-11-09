@@ -38,12 +38,10 @@
 "feishu:oc_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx":
   project_id: "work-report"
 
-# ── B站通道（大肥鱼自运营）───────────────────────────────────────────────────
+# ── B站通道 ───────────────────────────────────────────────────────────────
 # chat_id 两种形态：comment:<oid>:<type>:<root>:<parent>（每条评论线程一个会话，
 # 历史按线程归档）与 "dynamic"（发动态）。整条通道统一钉到她的项目：
 # 工作目录、运营纪律与轨迹落 projects/bilibili/。
-# ⚠ 马甲不是人格（plan §8）：对外身份=channels/bilibili.yaml 的 outbound.identity，
-#   笔墨=outbound.style；人格统一在角色卡，project 只是工作目录不是身份。
 "bilibili:*":
   project_id: "bilibili"
 

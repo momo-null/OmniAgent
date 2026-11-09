@@ -1,25 +1,18 @@
-"""出站守则（对外身份「马甲」统一注入契约，plan §8，2026-11-08）。
-
-一份结构、一处归一逻辑、两处消费、零适配器特判：
+"""通道出站参数的归一与机械闸。
 
 - **键统一**：所有 ``channels/<name>.yaml`` 用同一套 ``outbound`` 通用键，
-  禁止 ``qq_*`` / ``bili_*`` 平台专属键——平台差异只是值。
-- **马甲不是人格**：``identity`` 只是对外自称，人格统一在角色卡（character.md）；
-  不写人格覆盖声明、不分记忆仓。定量规矩（这条怎么发）在通道配置，定性（什么调性）
-  在角色卡，事实（主人是谁）在画像——三层正交（§8.2 裁决）。
+  禁止平台专属键——平台差异只是值。
 - **归一**：``resolve(channel, chat_id)`` 是唯一的配置读取+拍平入口，
   三个消费方共用本模块：
     · ``gateway/dispatch.py``   —— 网关入站：拍平结果作「本轮场合自述」附到模型输入
                                   （display_text 保留原话，会话历史不污染）；
     · ``chat_runtime.py``       —— Web 入口：同构（channels/web.yaml 缺省不存在 → 全空零影响）；
     · ``plugins/messaging``     —— 机械闸（唯一执行点）：发送时按 (通道, 会话) 解析，
-                                  超限拆条/拒发。
-- **实现偏离说明（对 §8.5「写线程上下文」）**：改为发送时现解析。原因：Web 后端
-  多并发请求，进程级单值上下文会串轮；cron 又无入站来源、目标在发送时才确定。
-  解析逻辑单一来源（本模块），三场景（群/私聊/定时）语义一致。
-- **作用面**：run 级，不常驻、不进记忆；``context_key`` 只选择参数不过滤记忆（H-7/H-8）。
-- **require_review**：schema 预留，机械执行（通用待发队列）属第二期（§8.7-5），
-  本版本不读取不执行。
+                                  空行分条 / 超限续拆 / 拒发。
+- **发送时解析**：Web 后端多并发请求，进程级单值上下文会串轮；cron 又无入站来源、
+  目标在发送时才确定。解析逻辑单一来源（本模块），三场景语义一致。
+- **作用面**：run 级，不常驻、不进记忆；场合键只选择参数不过滤记忆。
+- **require_review**：schema 预留，机械执行（通用待发队列）属第二期，本版本不读取不执行。
 
 配置 schema（所有通道同构，模板见 examples/channels/*.yaml）::
 
@@ -28,11 +21,12 @@
       style: ""               # 本通道对外说话规矩（自然语言，喂模型）
       max_chars: 0            # 单条字数上限，0=不限
       max_sentences: 0        # 单条句数上限，0=不限
+      max_chunks: 0           # 一轮最多发几条，0=不限；拆条后仍超 → 拒发让模型删减
       allow_multi: true       # 允许连发多条（超限时拆条；false=拒发让模型自己精简）
       require_review: false   # 先审后发（第二期接通用待发队列；本版本预留）
       by_context:             # 场合覆写：context_key = chat_id 首段（group/private/
-        group:   { max_chars: 60,  max_sentences: 2 }   # comment/dynamic/chat…），内核不认识它
-        private: { max_chars: 200, max_sentences: 5 }
+        group:   { max_chars: 40, max_sentences: 1, max_chunks: 3 }   # comment/dynamic/chat…），内核不认识它
+        private: { max_chars: 80, max_sentences: 2, max_chunks: 4 }
 """
 from __future__ import annotations
 
@@ -40,9 +34,24 @@ import re
 from typing import Any, Dict, List, Tuple
 
 #: schema 白名单：拍平时只保留这些键（防配置里混进未知键直通模型）
-_KEYS = ("identity", "style", "max_chars", "max_sentences", "allow_multi", "require_review")
+_KEYS = ("identity", "style", "max_chars", "max_sentences", "max_chunks",
+         "allow_multi", "require_review")
 
 _SENT_RE = re.compile(r"[^。！？!?；;\n]*[。！？!?；;\n]+|[^。！？!?；;\n]+")
+
+#: 空行（含只有空白的行）= 模型在 text 里显式写出的「这几句要分成几条发」。
+#: 段内单换行只是排版，不当分条信号。
+_PARA_RE = re.compile(r"\n[ \t]*\n+")
+
+
+def split_paragraphs(text: str) -> List[str]:
+    """按空行切段：段首尾空白去掉、空段丢弃，段内单换行原样保留。
+
+    这是出口侧唯一认「分条意图」的地方：**不依赖 outbound 配置**——通道没配
+    ``max_chars`` / ``max_sentences`` 时，模型写了几段就发几条。
+    """
+    normalized = (text or "").replace("\r\n", "\n")
+    return [p.strip() for p in _PARA_RE.split(normalized) if p.strip()]
 
 
 def context_key_of(chat_id: str) -> str:
@@ -93,21 +102,21 @@ def _sentences(text: str) -> List[str]:
     return parts
 
 
-def enforce(flat: Dict[str, Any], text: str) -> Tuple[List[str], str]:
-    """机械闸：超限按句拆条（一条一个意思）或拒发。
+#: 只按句读切片段（保留句尾标点）；单换行留在片段内部，不当句子边界。
+_PIECE_RE = re.compile(r"[^。！？!?；;]*[。！？!?；;]+|[^。！？!?；;]+")
 
-    返回 (拆条列表, "") 或 ([], 错误文案)。无配置/未超限 → ([原文], "")。
-    单句本身超长拆不动 → 拒发（让模型精简，不做字符级硬切）。
-    """
-    text = (text or "").strip()
-    if not text:
-        return [], "空文本不发送"
-    max_chars = int(flat.get("max_chars") or 0)
-    max_sents = int(flat.get("max_sentences") or 0)
-    allow_multi = bool(flat.get("allow_multi", True))
-    sents = _sentences(text)
+
+def _pieces(text: str) -> List[str]:
+    """切句但保留句尾标点与段内单换行；纯空白片段丢弃。"""
+    return [p for p in _PIECE_RE.findall(text or "") if p.strip()]
+
+
+def _pack_one(text: str, max_chars: int, max_sents: int,
+              allow_multi: bool) -> Tuple[List[str], str]:
+    """单段内部：未超限原样返回；超限按句续拆或拒发（重组时保留段内换行）。"""
+    pieces = _pieces(text)
     over_chars = bool(max_chars and len(text) > max_chars)
-    over_sents = bool(max_sents and len(sents) > max_sents)
+    over_sents = bool(max_sents and len(pieces) > max_sents)
     if not over_chars and not over_sents:
         return [text], ""
     if not allow_multi:
@@ -116,18 +125,54 @@ def enforce(flat: Dict[str, Any], text: str) -> Tuple[List[str], str]:
     chunks: List[str] = []
     cur: List[str] = []
     cur_len = 0
-    for s in sents:
-        if max_chars and len(s) > max_chars:
-            return [], (f"存在单句 {len(s)} 字超过上限 {max_chars}，拆条也放不下，"
+    for p in pieces:
+        if max_chars and len(p.strip()) > max_chars:
+            return [], (f"存在单句 {len(p.strip())} 字超过上限 {max_chars}，拆条也放不下，"
                         "请把这句精简后再发")
-        if cur and ((max_chars and cur_len + len(s) > max_chars)
+        if cur and ((max_chars and cur_len + len(p) > max_chars)
                     or (max_sents and len(cur) >= max_sents)):
-            chunks.append("".join(cur))
+            chunks.append("".join(cur).strip())
             cur, cur_len = [], 0
-        cur.append(s)
-        cur_len += len(s)
+        cur.append(p)
+        cur_len += len(p)
     if cur:
-        chunks.append("".join(cur))
+        chunks.append("".join(cur).strip())
+    return [c for c in chunks if c], ""
+
+
+def enforce(flat: Dict[str, Any], text: str,
+            split_blank_lines: bool = True) -> Tuple[List[str], str]:
+    """机械闸：空行先分条，再对每条独立套上限（超限按句续拆或拒发）。
+
+    - **空行 = 模型显式写出的分条意图，不依赖配置**：写了几段就发几条，通道没配
+      ``max_chars`` / ``max_sentences`` 也照分；段内单换行只是排版，不误拆。
+    - 每段独立套上限：段内超限才按句续拆；单句本身超长拆不动 → 拒发让模型精简。
+    - ``max_chunks``：一轮最多发几条（拆条之后的最终条数）。超了拒发、提示删减，
+      不截断也不静默丢内容——模型自己重写才可能说人话。
+    - ``allow_multi=false``：多段直接拒发并要求合成一条（不静默吞掉分条意图），
+      单段超限仍按原口径拒发。
+    - ``split_blank_lines=False`` 给「本就只该一条」的调用点（图片说明）用，
+      避免分段后只取首段导致内容丢失。
+    """
+    text = (text or "").strip()
+    if not text:
+        return [], "空文本不发送"
+    max_chars = int(flat.get("max_chars") or 0)
+    max_sents = int(flat.get("max_sentences") or 0)
+    max_chunks = int(flat.get("max_chunks") or 0)
+    allow_multi = bool(flat.get("allow_multi", True))
+    paras = split_paragraphs(text) if split_blank_lines else [text]
+    if len(paras) > 1 and not allow_multi:
+        return [], (f"本场合不允许拆条（写了 {len(paras)} 段），请把想说的合成一条再发")
+    chunks: List[str] = []
+    for para in paras:
+        sub, err = _pack_one(para, max_chars, max_sents, allow_multi)
+        if err:
+            return [], err
+        chunks.extend(sub)
+    if max_chunks and len(chunks) > max_chunks:
+        return [], (f"本场合一轮最多说 {max_chunks} 条（这条拆成了 {len(chunks)} 条），"
+                    "请删减想说的内容后重发")
     return chunks, ""
 
 
@@ -141,7 +186,7 @@ def voice_error(flat: Dict[str, Any], text: str) -> str:
     if not over_chars and not over_sents:
         return ""
     return (f"超出本场合出站上限（单条≤{max_chars or '∞'}字≤{max_sents or '∞'}句），"
-            "语音不拆条：请精简，或改用文字并拆成几条短发")
+            "语音不拆条：请精简，或改用文字分条发送")
 
 
 def note(flat: Dict[str, Any]) -> str:
@@ -160,14 +205,17 @@ def note(flat: Dict[str, Any]) -> str:
         parts.append(style)
     max_chars = int(flat.get("max_chars") or 0)
     max_sents = int(flat.get("max_sentences") or 0)
+    max_chunks = int(flat.get("max_chunks") or 0)
     allow_multi = bool(flat.get("allow_multi", True))
     limits: List[str] = []
     if max_chars:
         limits.append(f"单条≤{max_chars}字")
     if max_sents:
         limits.append(f"≤{max_sents}句")
+    if max_chunks:
+        limits.append(f"一轮最多{max_chunks}条")
     if limits:
-        tail = "要说的事多就拆成几条短发，一条一个意思" if allow_multi else "不要拆条，超了就精简"
+        tail = "可拆成多条发送" if allow_multi else "不要拆条，超了就精简"
         parts.append("；".join(limits) + f"（{tail}）")
     if not parts:
         return ""

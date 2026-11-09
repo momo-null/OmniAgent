@@ -171,6 +171,11 @@ def _sent_texts(steps: List[Dict[str, Any]]) -> List[str]:
         return {}
 
     out: List[str] = []
+    try:
+        # 出口闸按空行分条：兜底解析也要按同一规则展开，send.count 才对得上真实条数。
+        from .outbound import split_paragraphs as _split_paragraphs
+    except Exception:
+        _split_paragraphs = None
     for s in steps or []:
         if s.get("type") != "tool_call" or s.get("name") != "msg_send_text":
             continue
@@ -179,7 +184,7 @@ def _sent_texts(steps: List[Dict[str, Any]]) -> List[str]:
         if isinstance(res, dict) and res.get("ok"):
             t = str(args.get("text") or "").strip()
             if t:
-                out.append(t)
+                out.extend(_split_paragraphs(t) if _split_paragraphs else [t])
     return out
 
 
@@ -405,10 +410,10 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
                                          "memory_recall", "read_scene", "conversation_search",
                                          "narrative_search", "narrative_read"]
                                         if explicit else None))
-        # ── §8 出站守则（对外身份「马甲」统一注入契约，plan §8）──────────────
+        # ── 出站守则 ─────────────────────────────────────────────────────
         # 入站来源按 (通道, 会话) 归一 outbound 配置，场合自述只喂模型、不进历史
         # （历史走 display_text）。cron 无固定目标不在此附加——发送闸在 msg_send_*
-        # 按 (通道, 目标) 现解析。identity 只是对外自称：人格不分身、不分记忆仓。
+        # 按 (通道, 目标) 现解析。
         run_objective = item["objective"]
         if reply is not None:
             try:
@@ -423,7 +428,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         spec = TaskSpec(
             objective=run_objective,
             done_when=item.get("done_when", ""),
-            max_steps=item.get("max_steps") or 40,
+            max_steps=item.get("max_steps") or int(config.get_config("runtime.default_max_steps", 40)),
             task_id=real_task_id,
             project_id=meta.get("project_id"),
             history=history_items,
@@ -449,6 +454,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
                 context_key=_l0_context_key or f"web:{sid}",
                 source_kind=_l0_kind,
                 source_external=reply is not None and not bool(item.get("tools_enabled", True)),
+                peer=str(item.get("speaker") or ""),
                 session_id=sid,
                 sent_count=context.sent_count)
         except Exception:
@@ -478,20 +484,29 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         if explicit:
             send_info.update({"mode": "explicit", "count": len(sent_texts)})
         _record_final("\n\n".join(sent_texts) if sent_texts else answer)
-        # ── 记忆写链：聊天/群聊轮次也要沉淀（Web 侧在 chat_runtime 入队，网关侧此前漏接，
-        # 导致群聊经历从未进记忆）── 是否产 L1 按**进料道**区分，不按平台名分支：
-        # · chat（通道消息/群聊）→ allow_atoms=False，只沉淀叙事层，不把他人可控文本
-        #   写进事实库；
-        # · task/observation（cron、手动派发、主动观察等自主运营轮次）→
-        #   allow_atoms=True，允许产 L1（2026-11-09 先打开这两路）。
-        # 仍按条数/间隔限流入队（多轮合并），防高频轮次打爆写队列。
+        # ── 记忆写链：按**进料道**分流，不按入口分支 ──
+        # · chat（通道消息/群聊）→ 节流合并 + allow_atoms=False：群聊量级大，且他人
+        #   可控文本不进事实库；
+        # · task/observation（cron、手动派发、主动观察）→ 与 Web 任务同一条路：
+        #   每轮入队、允许产 L1。
         try:
             from omni_core import memory_writer
 
             if pid:
-                memory_writer.enqueue_throttled(
-                    pid, brain_cfg, source_task=real_task_id,
-                    did_work=True, allow_atoms=(_l0_kind != "chat"))
+                if _l0_kind == "chat":
+                    memory_writer.enqueue_throttled(
+                        pid, brain_cfg, source_task=real_task_id,
+                        did_work=True, allow_atoms=False)
+                else:
+                    # task 进料道默认允许产原子（Web 手动派发等主人口径来源不变）；
+                    # cron / 定时任务页立即运行由 scheduler 显式传 allow_atoms=False
+                    #（objective 是配置文本不是主人说话，见 scheduler._fire）。
+                    # None = 未指定 → 允许；显式 False 才关（None 不能当 False 用）。
+                    _aa = item.get("allow_atoms")
+                    memory_writer.enqueue(
+                        pid, brain_cfg, source_task=real_task_id,
+                        did_work=True,
+                        allow_atoms=True if _aa is None else bool(_aa))
         except Exception as e:  # noqa: BLE001 —— 写链是增强项，失败不影响本轮
             print(f"[dispatch] 记忆入队失败（忽略）: {type(e).__name__}: {e}")
         # run_task 真实返回：success / escalated / steps / trajectory_file …
@@ -602,7 +617,8 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
            origin: str = "named",
            tools_enabled: bool = True,
            attachments: Optional[List[Dict[str, Any]]] = None,
-           voice_reply: bool = False, speaker: str = "") -> str:
+           voice_reply: bool = False, speaker: str = "",
+           allow_atoms: Optional[bool] = None) -> str:
     """异步提交（网关消息/cron 用）。返回 task_id。
 
     session_id：显式指定会话（消息通道用 ``msg:<channel>:<chat_id>`` 固定会话——
@@ -632,6 +648,10 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
 
     voice_reply：入站消息来自语音 → 支持 send_voice 的 ReplyChannel 用语音回发
     （语音对语音），失败自动降级纯文本。
+
+    allow_atoms：本轮是否允许产 L1 记忆原子（task 进料道）。``None``（缺省）= 允许，
+    保持既有行为；cron / 定时任务页立即运行由 scheduler 传 job 的开关（缺省 False——
+    objective 是配置文本不是主人说话，操作细节会被提炼器误当「用户规则」）。
     """
     ensure_worker()
     task_id = uuid.uuid4().hex[:16]
@@ -645,7 +665,8 @@ def submit(objective: str, done_when: str = "", max_steps: int = 40, *,
                 "tools_enabled": bool(tools_enabled),
                 "attachments": list(attachments or []),
                 "voice_reply": bool(voice_reply),
-                "speaker": str(speaker or "")})
+                "speaker": str(speaker or ""),
+                "allow_atoms": allow_atoms})
     return task_id
 
 
@@ -657,7 +678,8 @@ def dispatch_sync(objective: str, done_when: str = "", max_steps: int = 40, *,
                   title: str = "", display_text: str = "", reply_mode: str = "auto",
                   origin: str = "named", tools_enabled: bool = True,
                   speaker: str = "",
-                  attachments: Optional[List[Dict[str, Any]]] = None) -> DispatchResult:
+                  attachments: Optional[List[Dict[str, Any]]] = None,
+                  allow_atoms: Optional[bool] = None) -> DispatchResult:
     """同步执行（CLI/测试/「立即运行」用）。"""
     return _run_task_once({"task_id": uuid.uuid4().hex[:16], "objective": objective,
                            "done_when": done_when, "max_steps": max_steps, "source": source,
@@ -669,7 +691,8 @@ def dispatch_sync(objective: str, done_when: str = "", max_steps: int = 40, *,
                            "origin": str(origin or "named").strip().lower(),
                            "tools_enabled": bool(tools_enabled),
                            "attachments": list(attachments or []),
-                           "speaker": str(speaker or "")})
+                           "speaker": str(speaker or ""),
+                           "allow_atoms": allow_atoms})
 
 
 def queue_size() -> int:

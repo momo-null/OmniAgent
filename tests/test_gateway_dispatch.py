@@ -196,6 +196,14 @@ def test_sent_texts_parses_python_repr_result():
     assert dispatch._sent_texts(steps) == ["别瞎说"]
 
 
+def test_sent_texts_expands_blank_line_paragraphs():
+    """兜底解析按出口闸同一分条规则展开，send.count 才对得上真实条数。"""
+    steps = [{"type": "tool_call", "name": "msg_send_text",
+              "arguments": '{"text": "甲。\\n\\n乙。\\n\\n丙。"}',
+              "result": "{'ok': True, 'chunks': 3}"}]
+    assert dispatch._sent_texts(steps) == ["甲。", "乙。", "丙。"]
+
+
 class _LoopNoted(_FakeLoop):
     """模拟真实发送工具：成功后由工具侧记账（context.note_sent）。"""
 

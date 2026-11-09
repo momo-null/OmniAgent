@@ -4,8 +4,9 @@
 - agent 通过工具**实际写出**的文件（write_file / edit_file / 截图等）在此登记：
   ``tasks/<task_id>/artifacts.json``，条目 ``{path, name, bytes, tool, ts}``，按 path 去重（后写覆盖）；
 - ``tmp/`` 里的产物默认随任务终态清理（graph_runner），清理前 ``preserve_tmp_artifacts``
-  把登记过的 tmp 文件**抢救复制**到持久目录 ``tasks/<task_id>/artifacts/``，并回写登记表路径——
-  会话结束后前端仍能在右侧栏预览这些产物（会话结果卡展示的也是登记表）；
+  把登记过的 tmp 文件**抢救复制**到持久目录 ``tasks/<task_id>/artifacts/``（保留相对 tmp
+  的目录结构），并回写登记表路径——会话结束后前端仍能在右侧栏预览这些产物
+  （会话结果卡展示的也是登记表）；
 - 登记以「工具真实落盘」为准（不猜 shell 重定向），写失败/未落盘不登记；
 - 未绑定 task（ContextVar 无 task_id）时静默跳过，绝不影响工具主流程。
 
@@ -101,7 +102,9 @@ def preserve_tmp_artifacts(task_id: str) -> None:
     """任务终态：把登记表中落在 ``tmp/`` 里的产物复制到持久 ``artifacts/`` 并回写路径。
 
     只处理登记过的文件（登记 = agent 主动写出的产物）；tmp 里未登记的中间文件
-    仍按原语义删除。复制冲突按 ``<stem>-2<ext>`` 顺延，绝不覆盖。
+    仍按原语义删除。**保留相对 tmp 的目录结构**（``corpus/hot.md`` →
+    ``artifacts/corpus/hot.md``），落位是任务自己写的，这里不改写。
+    复制冲突按 ``<stem>-2<ext>`` 顺延，绝不覆盖。
     """
     if not task_id:
         return
@@ -123,11 +126,14 @@ def preserve_tmp_artifacts(task_id: str) -> None:
                 rp = p.resolve()
                 if rp != tmp_root and tmp_root not in rp.parents:
                     continue  # 不在 tmp/ 下的产物原样保留（登记路径即最终路径）
-                dest_root.mkdir(parents=True, exist_ok=True)
-                dest = dest_root / p.name
+                # 保留 tmp 内的相对目录结构（corpus/hot.md 仍落 artifacts/corpus/hot.md）：
+                # 目录即任务自己声明的落位意图，不在这里拍平。
+                rel = rp.relative_to(tmp_root) if rp != tmp_root else Path(p.name)
+                dest = dest_root / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
                 k = 2
                 while dest.exists():
-                    dest = dest_root / f"{p.stem}-{k}{p.suffix}"
+                    dest = dest.with_name(f"{dest.stem}-{k}{dest.suffix}")
                     k += 1
                 shutil.copy2(str(rp), str(dest))
                 e["path"] = str(dest)

@@ -157,7 +157,7 @@ def test_napcat_no_relation_card_injection(monkeypatch):
     rel.mkdir(parents=True, exist_ok=True)
     (rel / "999999.md").write_text(
         "-----META-START-----\nname: 成员甲\nuid: 999999\nupdated: x\n"
-        "-----META-END-----\n最近交手：他总拿大肥鱼起哄。", encoding="utf-8")
+        "-----META-END-----\n最近交手：他总拿测试话题起哄。", encoding="utf-8")
     got = []
     ev = {"post_type": "message", "message_type": "group", "self_id": 111,
           "user_id": 999999, "group_id": 333, "message_id": 901, "time": time.time(),

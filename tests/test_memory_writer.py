@@ -150,6 +150,23 @@ def test_enqueue_throttled_fires_on_interval_for_quiet_chat(monkeypatch):
     assert all(k.get("allow_atoms") is False for k in sent)
 
 
+def test_enqueue_throttled_allows_atoms_when_requested(monkeypatch):
+    """缺省仍只沉淀叙事层；显式打开时任务/观察轮次允许产 L1。"""
+    memory_writer.reset_throttle()
+    sent = []
+    monkeypatch.setattr(memory_writer, "enqueue", lambda *a, **k: sent.append(k) or True)
+    monkeypatch.setattr(memory_brain, "buffer_stats",
+                        lambda pid: {"msgs": 12, "chars": 300, "dropped": 0})
+    assert memory_writer.enqueue_throttled("p", {"m": "x"}, min_msgs=12,
+                                           min_interval=600.0) is True
+    assert sent[0].get("allow_atoms") is False
+    memory_writer.reset_throttle()
+    assert memory_writer.enqueue_throttled("p", {"m": "x"}, min_msgs=12,
+                                           min_interval=600.0,
+                                           allow_atoms=True) is True
+    assert sent[1].get("allow_atoms") is True
+
+
 def test_flush_brain_allow_atoms_false_skips_l1(monkeypatch, tmp_path):
     """allow_atoms=False：不提炼、不写 L1，但 L2 维护/巩固照走（日记靠它）。"""
     from omni_core.local import scene_executor

@@ -76,6 +76,21 @@ def test_preserve_moves_tmp_artifacts_to_persistent_dir(tid, _isolated_home):
     assert all(a["path"] != str(f1) for a in load_artifacts(tid))
 
 
+def test_preserve_keeps_relative_subdir(tid, _isolated_home):
+    """tmp 内的相对目录结构原样保留（corpus/hot.md 不被拍平成 hot.md）。"""
+    P.ensure_task_dirs(tid)
+    f = P.task_tmp(tid) / "corpus" / "hot.md"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("# 热点", encoding="utf-8")
+    record_artifact(str(f), tool="write_file", task_id=tid)
+
+    preserve_tmp_artifacts(tid)
+
+    dest = P.task_artifacts_dir(tid) / "corpus" / "hot.md"
+    assert dest.is_file() and dest.read_text(encoding="utf-8") == "# 热点"
+    assert not (P.task_artifacts_dir(tid) / "hot.md").exists()  # 未拍平
+
+
 def test_files_read_allowlist(tid, _isolated_home):
     """files/read 只服务登记产物 + 任务目录树；任务外文件拒绝。"""
     P.ensure_task_dirs(tid)

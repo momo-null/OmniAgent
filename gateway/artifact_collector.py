@@ -1,36 +1,33 @@
 """任务产物收编桥（零内核，plan §3 双环的落盘环节）。
 
-沙箱把任务的文件写隔离进任务产物区（``tasks/<tid>/artifacts/``，且相对路径会被
-拍平——``corpus/hot.md`` 落成 ``artifacts/hot.md``）：这是任务写隔离的设计使然。
-本模块在运行结束后把**语料类产物**归位回项目目录，让下一次觉醒/采集能读到
-（``projects/<pid>/corpus|diary/``）。规则窄且只增不删：
+沙箱把任务的文件写隔离进任务产物区（``tasks/<tid>/artifacts/``），本模块在运行
+结束后把产物按**任务自己写的相对路径**原样归位回项目目录
+（``projects/<pid>/corpus|diary|...``）。
 
-- 产物顶层 ``*.md``：
-  - 文件名以 ``YYYY-MM-DD`` 开头 → 项目 ``diary/``（运营日记）；
-  - 其余 → 项目 ``corpus/``（语料三件套等）；
-- 产物子目录 → 项目同名子目录（存在才收，不新建顶层）；
-- 非 ``.md`` 文件不收（图片等走别的通路）；永不删除、只覆盖同名。
+落位由任务决定，本模块不猜、不改写：
+- ``artifacts/corpus/hot.md`` → ``projects/<pid>/corpus/hot.md``
+- ``artifacts/diary/2026-11-09-觉醒.md`` → ``projects/<pid>/diary/2026-11-09-觉醒.md``
+- 任意新子目录（``knowledge/``、``days/``）同样按原路径创建
+
+规则只增不删：永不删除项目内既有文件、内容相同不重复写。
 
 挂点：``gateway/dispatch._run_task_once`` 收尾（有 project_id 的任务才收）。
 """
 from __future__ import annotations
 
-import re
 import shutil
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from utils import get_logger
 
 logger = get_logger("gateway.artifact_collector")
 
-_DATE_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}")
-
 
 def collect(project_id: str, task_id: str, *,
             projects_root: Optional[Path] = None,
             artifacts_root: Optional[Path] = None) -> List[str]:
-    """把任务产物区的语料归位进项目目录。返回落位的文件路径列表。"""
+    """把任务产物区的文件按相对路径归位进项目目录。返回落位的文件路径列表。"""
     from omni_core.local.runtime_paths import project_dir, task_artifacts_dir
 
     try:
@@ -43,25 +40,22 @@ def collect(project_id: str, task_id: str, *,
         return []
 
     placed: List[str] = []
+    for item in sorted(art.rglob("*")):
+        try:
+            if not item.is_file():
+                continue
+            rel = item.relative_to(art)
+            if ".." in rel.parts:  # 防御：产物区外路径一律不碰
+                continue
+            dest = proj / rel
+            if dest.exists() and dest.read_bytes() == item.read_bytes():
+                continue  # 内容没变不重复写
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, dest)
+            placed.append(str(dest))
+        except Exception as e:  # noqa: BLE001 —— 收编是增强项，单项失败不影响其余
+            logger.warning("产物归位失败 %s: %s: %s", item, type(e).__name__, e)
 
-    def _place(src: Path, target_dir: Path) -> None:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        dest = target_dir / src.name
-        if dest.exists() and dest.read_bytes() == src.read_bytes():
-            return  # 内容没变不重复写
-        shutil.copy2(src, dest)
-        placed.append(str(dest))
-
-    for item in sorted(art.iterdir()):
-        if item.is_file() and item.suffix == ".md":
-            sub = "diary" if _DATE_PREFIX.match(item.name) else "corpus"
-            _place(item, proj / sub)
-        elif item.is_dir():
-            target_dir = proj / item.name
-            if target_dir.is_dir():
-                for f in sorted(item.iterdir()):
-                    if f.is_file() and f.suffix == ".md":
-                        _place(f, target_dir)
     if placed:
-        logger.info("产物收编 %s 项 -> %s", len(placed), proj.name)
+        logger.info("产物归位 %s 项 -> %s", len(placed), proj.name)
     return placed

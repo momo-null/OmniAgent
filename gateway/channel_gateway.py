@@ -132,10 +132,16 @@ def _on_message(msg) -> None:
     print(f"[gateway] 收到消息 <{msg.channel}:{msg.chat_id}> {preview}")
     # 聊天路由：msg/<channel>/<chat_id> → 哪个项目 + 哪个会话（channels/routes.yaml 可覆盖）
     project_id, session_id = _route_chat(msg)
+    # 结构化说话人：适配层能归一就直接用；只给 user_id 的通道在边界层补成
+    # 通用的 ``标识(标识)`` 形态，使任何通道的人都能进同一套人物聚合。
+    _speaker = str(getattr(msg, "speaker", "") or "")
+    _uid = str(getattr(msg, "user_id", "") or "")
+    if not _speaker and _uid:
+        _speaker = f"{_uid}({_uid})"
     # 能力门透传：外部可达通道默认 allow_tools=False → 该来源任务为纯对话（无任何工具）。
     # 网关只读通道自声明，不判断"这是谁发的"——判定权在通道适配器。
     dispatch.submit(msg.text, source=f"msg:{msg.channel}", reply=msg.reply,
-                     speaker=str(getattr(msg, "speaker", "") or ""),
+                     speaker=_speaker,
                     project_id=project_id or None, session_id=session_id or None,
                     # 标题/历史用通道自声明的「人话」（text 里可能带场合自述前缀，
                     # 只该喂模型，不该进侧栏标题与会话气泡）

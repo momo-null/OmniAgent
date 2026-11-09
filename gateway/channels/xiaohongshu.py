@@ -1,4 +1,4 @@
-"""小红书通道适配器（大肥鱼自运营 M4，plan §5；传输=xiaohongshu-mcp 的 MCP 端点）。
+"""小红书通道适配器（传输=xiaohongshu-mcp 的 MCP 端点）。
 
 - **不自造浏览器自动化**：登录（扫码在其自带浏览器里完成）、风控环境、cookie 全部
   由 [xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp) 承担——本适配器
@@ -17,7 +17,7 @@
 - 入站（评论回复）现状：xiaohongshu-mcp 没有「我的通知」类工具——本适配器轮询
   **自己已发笔记的评论区**（state 里登记 publish 返回的 feed_id），新评论归一成
   InboundMessage。TODO_XHS_LIVE：publish 的返回结构以实盘为准。
-- 马甲不是人格（plan §8）：对外身份/笔墨 = 通道 yaml 的 outbound 块。
+- 出站参数 = 通道 yaml 的 outbound 块。
 
 配置 ``~/.omniagent/channels/xiaohongshu.yaml``（模板 examples/channels/xiaohongshu.yaml）::
 

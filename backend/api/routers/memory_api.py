@@ -4,7 +4,7 @@
 边界（plan §16.3）：只在本机（backend 默认只绑本机回环），不新增远端；查看是
 只读聚合，纠正 / 遗忘复用 ``omni_core.memory_brain`` 的既有 tombstone 软删原语——
 不物理删、不改写 ``content``、``superseded_by`` 留痕审计可溯（§7.4 运行时数据口径）。
-观测记录（memory_recall-*.jsonl）是量尺不是记忆，**不在本入口暴露**（§8.3）。
+观测记录（memory_recall-*.jsonl）是量尺不是记忆，**不在本入口暴露**。
 """
 from __future__ import annotations
 

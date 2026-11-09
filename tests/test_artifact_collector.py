@@ -1,4 +1,4 @@
-"""任务产物收编桥离线测试（零内核桥：沙箱产物 → 项目 corpus/diary 归位）。"""
+"""任务产物收编桥离线测试（零内核桥：沙箱产物按任务写入的相对路径归位）。"""
 from gateway.artifact_collector import collect
 
 
@@ -14,42 +14,50 @@ def _make(tmp_path, project="bilibili", artifacts=None):
     return proj, art
 
 
-def test_corpus_files_land_in_project_corpus(tmp_path):
+def test_relative_paths_mirror_into_project(tmp_path):
     proj, art = _make(tmp_path, artifacts={
-        "hot.md": "# 热点", "formats.md": "# 形态", "lingo.md": "# 黑话",
-        "notes.txt": "不收非 md",
+        "corpus/hot.md": "# 热点",
+        "corpus/formats.md": "# 形态",
+        "corpus/lingo.md": "# 黑话",
     })
     placed = collect("bilibili", "t1", projects_root=tmp_path / "projects",
                      artifacts_root=art)
     assert len(placed) == 3
     assert (proj / "corpus" / "hot.md").read_text(encoding="utf-8") == "# 热点"
     assert (proj / "corpus" / "lingo.md").exists()
-    assert not (proj / "corpus" / "notes.txt").exists()  # 非 md 不收
 
 
-def test_date_prefixed_goes_to_diary(tmp_path):
-    proj, art = _make(tmp_path, artifacts={"2026-11-08-觉醒.md": "今天逛了B站"})
+def test_diary_subdir_kept(tmp_path):
+    proj, art = _make(tmp_path, artifacts={"diary/2026-11-08-觉醒.md": "今天逛了B站"})
     collect("bilibili", "t1", projects_root=tmp_path / "projects", artifacts_root=art)
     assert (proj / "diary" / "2026-11-08-觉醒.md").exists()
     assert not (proj / "corpus" / "2026-11-08-觉醒.md").exists()
 
 
-def test_subdir_mirrors_only_existing(tmp_path):
-    proj, art = _make(tmp_path, artifacts={
-        "corpus/hot.md": "# 更新版",   # corpus/ 已存在 → 收
-        "random/new.md": "不建新顶层",  # random/ 不存在 → 不收
+def test_new_subdir_created(tmp_path):
+    """knowledge/、days/ 这类任务新建的子目录照原路径创建，不再要求预先存在。"""
+    proj, art = _make(tmp_path, project="life", artifacts={
+        "knowledge/2026-11-09.jsonl": '{"a":1}',
+        "days/2026-11-09.md": "# 一天",
     })
+    collect("life", "t1", projects_root=tmp_path / "projects", artifacts_root=art)
+    assert (tmp_path / "projects" / "life" / "knowledge" / "2026-11-09.jsonl").exists()
+    assert (tmp_path / "projects" / "life" / "days" / "2026-11-09.md").exists()
+
+
+def test_all_file_types_collected(tmp_path):
+    """不再按后缀筛选：任务写什么就归位什么（落位由任务决定）。"""
+    proj, art = _make(tmp_path, artifacts={"corpus/notes.txt": "非 md 也收"})
     collect("bilibili", "t1", projects_root=tmp_path / "projects", artifacts_root=art)
-    assert (proj / "corpus" / "hot.md").read_text(encoding="utf-8") == "# 更新版"
-    assert not (proj / "random").exists()
+    assert (proj / "corpus" / "notes.txt").read_text(encoding="utf-8") == "非 md 也收"
 
 
 def test_no_overwrite_when_same_content(tmp_path):
-    proj, art = _make(tmp_path, artifacts={"hot.md": "# 同内容"})
+    proj, art = _make(tmp_path, artifacts={"corpus/hot.md": "# 同内容"})
     collect("bilibili", "t1", projects_root=tmp_path / "projects", artifacts_root=art)
-    before = (proj / "corpus" / "hot.md").stat().st_mtime
+    before = (proj / "corpus" / "hot.md").stat().st_mtime_ns
     collect("bilibili", "t1", projects_root=tmp_path / "projects", artifacts_root=art)
-    assert (proj / "corpus" / "hot.md").stat().st_mtime == before  # 内容没变不重复写
+    assert (proj / "corpus" / "hot.md").stat().st_mtime_ns == before  # 内容没变不重复写
 
 
 def test_missing_dirs_noop(tmp_path):

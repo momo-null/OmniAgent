@@ -4,8 +4,6 @@
   手改可以带 ``//`` 注释，同 models.json/mcp.json 一套读取语义）
 - **project 关联**：job.project_id → dispatch → TaskSpec.project_id →
   三层 AGENTS.md 自动取 projects/<pid>/AGENTS.md，trajectory 按项目落盘
-- **防化石铁律**：objective 只许一句话；jobs.json 禁止路径/脚本名/数据源
-  （hermes 化石任务实证——细节由被调 MCP server 单点供给）
 - 错过补偿：启动时回扫最近触发点，在 miss_grace_minutes 内补跑一次
 - cron 表达式：内置 5 字段解析（分 时 日 月 周），支持 * / - , ——零第三方依赖
 """
@@ -35,6 +33,7 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "project_id": "etf-analysis",
         "notify_channel": "feishu",
         "enabled": False,   # 出厂默认关闭：jobs.json 是运行真源，装好后在 Web 定时任务页按需启用
+        "allow_atoms": False,
         "miss_grace_minutes": 60,
         "note": "P0 三段之一；启用前确认 mcp.json 已注册 etf-analysis",
     },
@@ -48,6 +47,7 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "project_id": "etf-analysis",
         "notify_channel": "feishu",
         "enabled": False,
+        "allow_atoms": False,
         "miss_grace_minutes": 45,
         "note": "",
     },
@@ -61,13 +61,11 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "project_id": "etf-analysis",
         "notify_channel": "feishu",
         "enabled": False,
+        "allow_atoms": False,
         "miss_grace_minutes": 120,
         "note": "",
     },
 ]
-
-_FOSSIL_BANNED = ("D:\\", "D:/", "python", ".py", "/mnt/", "http")
-
 
 # ─────────────────────────── jobs 存取（后端 API 共用） ───────────────────────────
 
@@ -90,13 +88,10 @@ def save_jobs(jobs: List[Dict[str, Any]]) -> None:
 
 
 def validate_job(job: Dict[str, Any]) -> Optional[str]:
-    """校验+防化石：返回错误信息或 None。"""
+    """校验必填字段与 cron 语法：返回错误信息或 None。"""
     for key in ("id", "cron", "objective"):
         if not str(job.get(key, "")).strip():
             return f"缺字段或为空: {key}"
-    hits = [b for b in _FOSSIL_BANNED if b in str(job.get("objective", ""))]
-    if hits:
-        return f"防化石铁律：objective 禁止包含路径/脚本名（命中 {hits}）——细节由 MCP/工具单点供给"
     if not cron_match(job["cron"], datetime.now()):
         pass  # 语法错误在 cron_match 内部抛 ValueError，由调用方接
     return None
@@ -319,10 +314,14 @@ class Scheduler:
             self._submit(
                 job["objective"],
                 job.get("done_when", ""),
-                int(job.get("max_steps", 40)),
+                int(job.get("max_steps") or 0),
                 source=f"cron:{job['id']}",
                 project_id=job.get("project_id") or None,
                 notify_channel=job.get("notify_channel") or None,
+                # L1 开关（INV-6）：objective 是配置文本不是主人说话，缺省不产原子——
+                # 提炼器会把操作细节（路径/命令/字段）误当「用户规则」收进事实库。
+                # 确要产原子的任务在 jobs.json / 定时任务页显式开 allow_atoms。
+                allow_atoms=bool(job.get("allow_atoms", False)),
             )
         finally:
             self._state[job["id"]] = fire_key
@@ -337,7 +336,7 @@ def _channel_gate(job: Dict[str, Any]) -> Optional[str]:
     跳过原因；否则 None 放行。
 
     - 判定走 duck-typing 的可选 ``ready()``（通道协议不变，base.py 零改动）：
-      bilibili 用它表达「未登录」（大肥鱼人设扮演 job 没登录就不该醒）；
+      bilibili 用它表达「未登录」（未登录时不派发该 job）；
       其他通道没实现 ready() 一律放行（既有 cron 行为不变，不新增惊喜）。
     - 通道未注册（未启用/启动失败）也放行：配置问题让发送阶段显式报错，不在调度层猜。
     """
@@ -378,7 +377,8 @@ def run_now(job_id: str) -> Optional[str]:
             pass
         return None
     return dispatch.submit(
-        job["objective"], job.get("done_when", ""), int(job.get("max_steps", 40)),
+        job["objective"], job.get("done_when", ""), int(job.get("max_steps") or 0),
         source=f"manual:{job_id}", project_id=job.get("project_id") or None,
         notify_channel=job.get("notify_channel") or None, job_id=job_id,
+        allow_atoms=bool(job.get("allow_atoms", False)),
     )

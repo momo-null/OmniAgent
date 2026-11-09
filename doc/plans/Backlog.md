@@ -87,7 +87,7 @@
 - 注：O7 空间层与上条「长任务优化」第 4 项为同一项，不重复列。
 
 ### 记忆系统改版（personal-agent-memory-2026-11-05）· 未完成项
-- plan：[`doc/plans/personal-agent-memory-2026-11-05.md`](personal-agent-memory-2026-11-05.md)。
+- plan：[`doc/plans/personal-agent-memory-2026-11-05.md`](../worklog/personal-agent-memory-2026-11-05.md)。
   代码实施（M0–P4 全期）已于 2026-11-06 完成；**P6 增量（H-6 §16 三项补强）与 P4 待补
   ①②④已于 2026-11-07 完成**（P6 前基线重跑留档 `.codebuddy/tmp/memory-baseline-p6*.json`；
   扩充标注 27 条 B 侧命中 1.0、A/B 交集零回退；background_rank_gain /

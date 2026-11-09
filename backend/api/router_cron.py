@@ -33,7 +33,7 @@ async def list_jobs() -> Dict[str, Any]:
 
 @router.put("/api/cron/jobs")
 async def save_jobs(body: Dict[str, Any]) -> Dict[str, Any]:
-    """整表保存（与 settings 同款简单语义）。逐条校验+防化石。"""
+    """整表保存（与 settings 同款简单语义）。逐条校验。"""
     jobs: List[Dict[str, Any]] = body.get("jobs", [])
     if not isinstance(jobs, list):
         raise HTTPException(422, "body.jobs 须为数组")

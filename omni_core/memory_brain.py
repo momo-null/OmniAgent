@@ -617,6 +617,10 @@ _EXTRACT_SYSTEM = (
     "规则:1) 1-5 条,每条一句陈述 ≤60 字;2) 只写会跨会话仍然成立的内容,"
     "一次性的操作过程/闲聊/纯主观感受不写;3) 观察不到规律就交白卷(facts 为空数组)"
     "——交白卷是正确答案,凑数写出的假规律是错误答案。"
+    "\n负面清单(一律不收):文件路径/目录结构/文件名约定、命令行与脚本用法、"
+    "字段名与数据格式、代码/去重/校验逻辑等**执行细节**——这些属于项目文件与脚本文档,"
+    "不是记忆;任务轮对话里 role=user 的话是机器下发的任务目标(objective),不是主人本人"
+    "说的话,「用户把 X 写到某处/用户用某脚本做某事」这类执行过程描述一律不收。"
     "\n类别纪律:只记「发生了什么、观察到什么事实」;禁止产出对系统内部机制的因果推断"
     "(「系统为什么这样/被拒的原因/策略如何」),禁止记录 assistant 自己的拒绝行为与应对过程"
     "(如「拒绝生成某内容/按某规则处理了某请求」——拒绝规则属场景块/角色卡层,不是记忆事实);"
@@ -835,7 +839,8 @@ _VALUE_SYSTEM = (
     "你是记忆价值评审器。给你一段对话摘要和从中初提的事实候选列表。"
     "对每条候选独立判定:"
     "keep:一次性操作过程/寒暄问候/纯主观感受/对系统内部机制的因果推断"
-    "(「系统为什么这样/被拒的原因/策略如何」) → keep=false;"
+    "(「系统为什么这样/被拒的原因/策略如何」)/执行细节(文件路径、命令行、脚本用法、"
+    "字段名与数据格式——属于项目文件与脚本文档,不是记忆) → keep=false;"
     "值得跨会话保留的事实/偏好/规律/事件 → keep=true 并给 kind 与 importance。"
     "kind:fact(客观事实)|preference(用户长期偏好)|rule(规律/纪律/流程)|episode(具体事件片段)。"
     "importance:0~1(影响世界/跨会话成立/用户强偏好→高;临时性/局部细节→低)。"
@@ -1069,6 +1074,11 @@ def _flush_tail(project_id: str, brain_cfg: Optional[Dict[str, Any]],
             chats.append(cid)
         if chats:
             run_context_reflections(brain_cfg, chats=chats)
+    except Exception:
+        pass
+    # 关系卡按 L0 直驱，与巩固周期解耦：不产 L1 的轮次同样能更新对人的印象。
+    try:
+        maybe_maintain_relations(brain_cfg)
     except Exception:
         pass
     maybe_consolidate(brain_cfg)
@@ -2211,12 +2221,9 @@ def _consolidate_impl(brain_cfg: Dict[str, Any]) -> Dict[str, Any]:
             out["diary_written"] = diary_n
         if maintain_month_diary(brain_cfg):
             out["month_diary_written"] = 1
-        # 9) 关系卡步：按**人**把近期往来压成印象卡（全局一份，跨场合/跨项目）
-        rel = maintain_relations(brain_cfg)
-        if rel:
-            out["relations_written"] = rel
     except Exception:
         pass
+    # 关系卡由 _flush_tail 按 L0 直驱（不依赖巩固周期）：空 atoms 库时仍会更新。
     # 9.5) 语境链冷启动（M3）：还没有 circle_note 的老场合各跑一次首版 reflection
     # （受周期预算 ≤5 约束；原料 = L0 近窗聚合信号，无原话；失败静默）
     try:
@@ -2709,14 +2716,74 @@ def maintain_relations(brain_cfg: Optional[Dict[str, Any]],
                     + card[:600])
             (d / f"{uid}.md").write_text(body, encoding="utf-8")
             peer_label = f"{info.get('name') or uid}({uid})"
+            # 索引摘要只放可被外部场合看到的中性信息（称呼/标识/往来量/话题），
+            # 不含印象正文：外部来源读 relation 只给 summary（N-10），摘要同时是
+            # 检索词面，让按名字/标识的 narrative_search 能命中这张卡。
+            digest = f"与 {peer_label} 的往来印象卡；近段 {len(info['lines'])} 条往来"
+            if topics:
+                digest += "；话题：" + "、".join(topics[:3])
             upsert_narrative_index(uid, "relation", project_id="",
-                                   summary="", topics=topics,
+                                   summary=digest, topics=topics,
                                    context_keys=[], peers=[peer_label],
                                    date_basis="local")
             written += 1
         except Exception:
             continue
     return written
+
+
+#: 关系卡直驱节流：与写链同款（新增带结构化 speaker 的 L0 行数 / 距上次维护的间隔）。
+#: 游标与时间戳存 meta（k/v，无新表、无迁移）；首轮只记基线，避免冷启动灌全库进 LLM。
+_REL_MIN_NEW_LINES = 12
+_REL_MIN_INTERVAL_SEC = 600.0
+_REL_META_CURSOR = "relations_l0_cursor"
+_REL_META_LAST = "last_relations_maintenance"
+
+
+def maybe_maintain_relations(brain_cfg: Optional[Dict[str, Any]]) -> int:
+    """按 L0 直驱关系卡维护，不依赖 L1 原子与巩固周期。
+
+    素材是 ``l0_messages`` 里带结构化 speaker 的 user 行（跨场合合并），
+    所以不产原子的轮次也能持续更新印象卡。节流按新增行数 + 间隔；
+    失败静默，不阻断收尾。
+    """
+    import time as _time
+
+    if not enabled() or not brain_cfg:
+        return 0
+    try:
+        conn = open_brain()
+        try:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM l0_messages WHERE role='user' AND speaker != ''"
+            ).fetchone()[0]
+            row = conn.execute("SELECT v FROM meta WHERE k=?",
+                               (_REL_META_CURSOR,)).fetchone()
+            cursor = int(row[0]) if row else None
+            row = conn.execute("SELECT v FROM meta WHERE k=?",
+                               (_REL_META_LAST,)).fetchone()
+            last = float(row[0]) if row else 0.0
+        finally:
+            conn.close()
+        now = _time.time()
+        if cursor is None:
+            written = 0
+        elif total - cursor >= _REL_MIN_NEW_LINES and now - last >= _REL_MIN_INTERVAL_SEC:
+            written = maintain_relations(brain_cfg)
+        else:
+            return 0
+        conn = open_brain()
+        try:
+            conn.execute("INSERT OR REPLACE INTO meta(k,v) VALUES(?,?)",
+                         (_REL_META_CURSOR, str(total)))
+            conn.execute("INSERT OR REPLACE INTO meta(k,v) VALUES(?,?)",
+                         (_REL_META_LAST, str(now)))
+            conn.commit()
+        finally:
+            conn.close()
+        return written
+    except Exception:
+        return 0
 
 
 def maintain_month_diary(brain_cfg: Optional[Dict[str, Any]]) -> int:

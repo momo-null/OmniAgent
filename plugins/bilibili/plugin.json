@@ -2,7 +2,7 @@
   "name": "bilibili",
   "version": "1.0.0",
   "title": "B站只读采集",
-  "description": "B站只读工具集（热门/搜索/视频信息/评论区/自己动态数据），供大肥鱼运营的外环语料采集与先读再评使用。零写操作——平台写路径单点收口在 bilibili 通道适配器。",
+  "description": "B站只读工具集（热门/搜索/视频信息/评论区/自己动态数据），供外环语料采集与先读再评使用。零写操作——平台写路径单点收口在 bilibili 通道适配器。",
   "enabled": true,
   "permissions": ["network"]
 }

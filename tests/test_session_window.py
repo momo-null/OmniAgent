@@ -46,7 +46,7 @@ def test_short_session_is_untouched():
 
 
 def test_window_keeps_cards_of_every_round():
-    """窗口按「轮」计，任务卡不被整轮切掉（plan §8-4 的缓解口径）。"""
+    """窗口按「轮」计，任务卡不被整轮切掉。"""
     out = hp._session_records_to_model_messages(_rounds(20))
     cards = [m for m in out if "【任务卡】" in str(m.get("content") or "")]
     assert len(cards) == hp._WINDOW_TURNS, "留下的每一轮都还带着自己的任务卡"

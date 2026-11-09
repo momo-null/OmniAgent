@@ -24,6 +24,7 @@ interface CronJob {
   objective: string;
   done_when?: string;
   max_steps?: number;
+  allow_atoms?: boolean;
   project_id?: string;
   notify_channel?: string;
   enabled: boolean;
@@ -45,7 +46,7 @@ interface RunRec {
 
 const EMPTY_FORM: CronJob = {
   id: "", name: "", cron: "0 9 * * 1-5", objective: "", done_when: "",
-  max_steps: 40, project_id: "default", notify_channel: "feishu", enabled: false,
+  max_steps: 40, allow_atoms: false, project_id: "default", notify_channel: "feishu", enabled: false,
   miss_grace_minutes: 60, note: "",
 };
 
@@ -290,6 +291,9 @@ export default function CronJobs() {
             </TextField>
             <TextField size="small" type="number" label="max_steps" value={editing.max_steps ?? 40}
               onChange={e => setEditing({ ...editing, max_steps: Number(e.target.value) || 40 })} />
+            <FormControlLabel control={<Checkbox size="small" checked={!!editing.allow_atoms}
+              onChange={e => setEditing({ ...editing, allow_atoms: e.target.checked })} />}
+              label="allow_atoms：产 L1 记忆原子（默认关——objective 是配置文本，非主人说话）" />
             <TextField size="small" type="number" label="错过补偿窗口（分钟）" value={editing.miss_grace_minutes ?? 60}
               onChange={e => setEditing({ ...editing, miss_grace_minutes: Number(e.target.value) || 60 })} />
             <FormControlLabel label="启用" control={<Checkbox checked={!!editing.enabled}

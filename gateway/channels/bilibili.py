@@ -1,4 +1,4 @@
-"""B站通道适配器（大肥鱼自运营，plan 见 doc/worklog/xhs-bili-autonomous-ops-plan-2026-11-07.md）。
+"""B站通道适配器。
 
 设计（与 napcat/feishu 同构，通用化判据：本文件 + 一段配置，dispatch/messaging/scheduler 零改动；
 内核 omni_core/ 零改动是本特性的硬约束）：
@@ -16,10 +16,8 @@
   （BILI_SESSDATA / BILI_JCT / DEDEUSERID）。优先级：yaml 直填 > 环境变量 > 凭证文件。
 - 归一：``chat_id = comment:<oid>:<type>:<root>:<parent>`` / ``dynamic``，
   共用网关 ``channel:chat_id`` 会话键语义（routes.yaml 把 ``bilibili:*`` 钉到项目）。
-- 马甲不是人格（plan §8，2026-11-08 裁决）：对外身份=本通道 yaml 的 ``outbound.identity``、
-  笔墨=``outbound.style``（机械闸在 msg_send_*，归一见 gateway/outbound.py）；人格统一在
-  角色卡不分身；routes.yaml → project_id=bilibili 只是工作目录，承载运营纪律与虚构边界
-  （projects/bilibili/AGENTS.md），不承载人格。
+- 出站参数取本通道 yaml 的 ``outbound`` 块（机械闸在 msg_send_*，归一见
+  gateway/outbound.py）；routes.yaml → project_id=bilibili 只是工作目录。
 
 配置文件 ``~/.omniagent/channels/bilibili.yaml``（模板 examples/channels/bilibili.yaml）::
 

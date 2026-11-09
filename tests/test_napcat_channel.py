@@ -363,6 +363,36 @@ def test_send_text_splits_long_text(adapter, monkeypatch):
     assert "".join(c["message"][0]["data"]["text"] for c in calls) == "长" * 2500
 
 
+def test_split_send_quotes_only_first_message(adapter, monkeypatch):
+    """分条发送时引用只挂首条：续条不带 reply 段（2026-11-10 实测回归）。"""
+    calls = []
+    monkeypatch.setattr(adapter, "_api",
+                        lambda action, payload: calls.append(payload) or
+                        {"ok": True, "data": {"message_id": 1}})
+    adapter._wake_origin["group:333"] = ("named", time.time(), "999")
+    for t in ("甲", "乙", "丙"):
+        adapter.send_text("group:333", t)
+    assert len(calls) == 3
+    assert calls[0]["message"][0] == {"type": "reply", "data": {"id": "999"}}
+    assert calls[1]["message"] == [{"type": "text", "data": {"text": "乙"}}]
+    assert calls[2]["message"] == [{"type": "text", "data": {"text": "丙"}}]
+    # 引用消费不影响主动预算判定（origin/ts 保留）
+    assert adapter._proactive_speech("group:333") is False
+
+
+def test_single_long_text_quotes_only_first_chunk(adapter, monkeypatch):
+    """单次 send_text 内部按 1200 字切条时，引用同样只挂首条。"""
+    calls = []
+    monkeypatch.setattr(adapter, "_api",
+                        lambda action, payload: calls.append(payload) or
+                        {"ok": True, "data": {"message_id": 1}})
+    adapter._wake_origin["group:333"] = ("named", time.time(), "999")
+    adapter.send_text("group:333", "长" * 2500)
+    assert len(calls) == 3
+    assert calls[0]["message"][0]["type"] == "reply"
+    assert all("reply" not in [s["type"] for s in c["message"]] for c in calls[1:])
+
+
 def test_send_text_reports_api_failure(adapter, monkeypatch):
     monkeypatch.setattr(adapter, "_api", lambda action, payload: {"ok": False, "error": "retcode=100"})
     result = adapter.send_text("private:222", "x")

@@ -240,9 +240,16 @@ L0 索引把同一标注解析成 `speaker` 列。
 ```
 agent(大脑)──不能──→ 直接读写 ~/.omniagent/memory/**、projects/<pid>/memory/scene_blocks/**(S1 围栏拒绝)
 agent(大脑)──通过──→ 任务执行 → 轨迹落盘 → 蒸馏/整理 → 内核直写(唯一自动入口)
-agent(大脑)──通过──→ memory_remember/recall/update/forget 工具 → 内核代理落盘(brain.db)
+agent(大脑)──通过──→ memory_remember/observe/recall/update/forget 工具 → 内核代理落盘(brain.db)
 用户(人工)──通过──→ profile_api / 调试面板删除 / 直接编辑文件(角色卡、AGENTS.md)
 ```
+
+> 项目脚本同属红线外（2026-11-10 定）：脚本直调内核写入口（write_diary_block /
+> upsert_narrative_index / capture_observation）= 侵入式旁路，且会占住日记幂等键
+> 压住巩固期的自然日记（life 的 publish_diary.py 因此整删）。她的见闻进观察层走
+> `memory_observe` 工具（薄壳→capture_observation，H-7 缺出处不入库），事实走
+> `memory_remember`；全局日记由巩固期 D+1 自然写（她的主观视角），项目产物文件
+> 只给人看、不进记忆。
 
 - 记忆/画像/场景写入**只能由内核进程直接写文件系统**,不经过结构化文件工具层;
 - **画像无放行权**:画像可记录"用户习惯自动操作某 App",这只是用户授权信号,

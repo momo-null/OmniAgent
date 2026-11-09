@@ -10,7 +10,7 @@
 - ``.codebuddy/tmp/memory-effect-report.json``（离线效果报告，存在才读）。
 
 纪律：不写任何记忆、不触发巩固、不调 LLM、不进注入面。观测记录是量尺不是记忆，
-这里只向**本机主人**呈现聚合值，不给 agent 提供任何查询工具（§8.3）。
+这里只向本机呈现聚合值，不给 agent 提供任何查询工具。
 """
 from __future__ import annotations
 
@@ -401,7 +401,7 @@ def _local_day(ts: str) -> str:
 
 
 def _observation_metrics(mb, days: int = 30) -> Dict[str, Any]:
-    """聚合 ``memory_recall-YYYY-MM.jsonl``（§8.3 观测），只读不改。"""
+    """聚合 ``memory_recall-YYYY-MM.jsonl``，只读不改。"""
     rows: List[Dict[str, Any]] = []
     try:
         for p in sorted(_mem_dir(mb).glob("memory_recall-*.jsonl")):
