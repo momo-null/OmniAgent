@@ -33,7 +33,6 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "project_id": "etf-analysis",
         "notify_channel": "feishu",
         "enabled": False,   # 出厂默认关闭：jobs.json 是运行真源，装好后在 Web 定时任务页按需启用
-        "allow_atoms": False,
         "miss_grace_minutes": 60,
         "note": "P0 三段之一；启用前确认 mcp.json 已注册 etf-analysis",
     },
@@ -47,7 +46,6 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "project_id": "etf-analysis",
         "notify_channel": "feishu",
         "enabled": False,
-        "allow_atoms": False,
         "miss_grace_minutes": 45,
         "note": "",
     },
@@ -61,7 +59,6 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "project_id": "etf-analysis",
         "notify_channel": "feishu",
         "enabled": False,
-        "allow_atoms": False,
         "miss_grace_minutes": 120,
         "note": "",
     },
@@ -318,10 +315,9 @@ class Scheduler:
                 source=f"cron:{job['id']}",
                 project_id=job.get("project_id") or None,
                 notify_channel=job.get("notify_channel") or None,
-                # L1 开关（INV-6）：objective 是配置文本不是主人说话，缺省不产原子——
-                # 提炼器会把操作细节（路径/命令/字段）误当「用户规则」收进事实库。
-                # 确要产原子的任务在 jobs.json / 定时任务页显式开 allow_atoms。
-                allow_atoms=bool(job.get("allow_atoms", False)),
+                # job_id 必传：dispatch 侧 record_run 以它写 runs.jsonl——不传则
+                # 网关自然触发在运行记录里零痕迹（2026-11-10 实测两次）。
+                job_id=job["id"],
             )
         finally:
             self._state[job["id"]] = fire_key
@@ -380,5 +376,4 @@ def run_now(job_id: str) -> Optional[str]:
         job["objective"], job.get("done_when", ""), int(job.get("max_steps") or 0),
         source=f"manual:{job_id}", project_id=job.get("project_id") or None,
         notify_channel=job.get("notify_channel") or None, job_id=job_id,
-        allow_atoms=bool(job.get("allow_atoms", False)),
     )

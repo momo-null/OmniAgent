@@ -108,7 +108,7 @@ def test_catchup_backfills_within_window_only(monkeypatch, brain_cfg, tmp_path):
     from omni_core.local import localtime, runtime_paths as rp
 
     stub = types.ModuleType("config")
-    stub.get_config = lambda k, d=None: True
+    stub.get_config = lambda k, d=None: True if k == "knowledge.diary.enabled" else d
     monkeypatch.setitem(sys.modules, "config", stub)
     monkeypatch.setattr(mb, "enabled", lambda: True)
     # 隔离 brain.db：写链尾部的 upsert_narrative_index 会开库——不隔离就写进真实数据
@@ -183,7 +183,7 @@ def test_diary_unified_across_projects(monkeypatch, brain_cfg, tmp_path):
     from omni_core.local import localtime, runtime_paths as rp
 
     stub = types.ModuleType("config")
-    stub.get_config = lambda k, d=None: True
+    stub.get_config = lambda k, d=None: True if k == "knowledge.diary.enabled" else d
     monkeypatch.setitem(sys.modules, "config", stub)
     monkeypatch.setattr(mb, "enabled", lambda: True)
     monkeypatch.setattr(mb, "_BRAIN_PATH", str(tmp_path / "brain.db"))
@@ -238,7 +238,7 @@ def test_month_diary_unified_global(monkeypatch, brain_cfg, tmp_path):
     import types
 
     stub = types.ModuleType("config")
-    stub.get_config = lambda k, d=None: True
+    stub.get_config = lambda k, d=None: True if k == "knowledge.diary.enabled" else d
     monkeypatch.setitem(sys.modules, "config", stub)
     monkeypatch.setattr(mb, "enabled", lambda: True)
     monkeypatch.setattr(mb, "_BRAIN_PATH", str(tmp_path / "brain.db"))
@@ -261,7 +261,7 @@ def _diary_cfg_stub(monkeypatch, tmp_path):
     import types
 
     stub = types.ModuleType("config")
-    stub.get_config = lambda k, d=None: True
+    stub.get_config = lambda k, d=None: True if k == "knowledge.diary.enabled" else d
     monkeypatch.setitem(sys.modules, "config", stub)
     monkeypatch.setattr(mb, "enabled", lambda: True)
     monkeypatch.setattr(mb, "_BRAIN_PATH", str(tmp_path / "brain.db"))
@@ -423,3 +423,47 @@ def test_diary_we_marker(monkeypatch, brain_cfg, tmp_path):
     assert mb.maintain_diary(brain_cfg, day=d2) == 1
     raw2 = (se.diary_dir() / f"diary-{d2}.md").read_text(encoding="utf-8")
     assert "\nwe:" not in raw2
+
+
+def test_life_days_file_feeds_diary_material(monkeypatch, brain_cfg, tmp_path):
+    """life 事件层交接（worklog §10）：days/<day>.md 客观流水进巩固日记素材——
+    「模拟生活带上」的入料口；不落库、不占日记键。"""
+    import sys
+    import types
+
+    from omni_core.local import localtime, runtime_paths as rp
+
+    stub = types.ModuleType("config")
+    stub.get_config = lambda k, d=None: True if k == "knowledge.diary.enabled" else d
+    monkeypatch.setitem(sys.modules, "config", stub)
+    monkeypatch.setattr(mb, "enabled", lambda: True)
+    monkeypatch.setattr(mb, "_BRAIN_PATH", str(tmp_path / "brain.db"))
+
+    day = localtime.local_days_ago(5)          # 独立日期，避开其他用例写的日记
+    se.diary_dir().mkdir(parents=True, exist_ok=True)
+    (se.diary_dir() / f"diary-{day}.md").unlink(missing_ok=True)
+    ldir = rp.projects_root() / "life" / "days"
+    ldir.mkdir(parents=True, exist_ok=True)
+    (ldir / f"{day}.md").write_text(
+        "-----META-START-----\nsummary: x\n-----META-END-----\n"
+        "10:00 経済統計课上刷到一条说日牌 JSK 保值的帖子，热门款二手能卖到入手价两倍，"
+        "评论区还在为值不值吵起来，这条素材特意拉长是为了稳稳超过八十字的白卷门槛，"
+        "顺便把当天的节奏记全。\n\n"
+        "18:10 放学绕超市，鸡肉打折拿了一盒，晚上就着它想了想那条 2.9 元一人食的做法"
+        "要不要试，最后决定明天再说，同样写长一点把字数垫够。\n",
+        encoding="utf-8")
+
+    captured = {}
+    monkeypatch.setattr(mb.llm_judge, "chat_json",
+                        lambda cfg, system, user, **kw: captured.update(
+                            system=system, user=user) or {"diary": "今天课上刷到好东西"})
+
+    assert mb.maintain_diary(brain_cfg, day=day) == 1
+    material = captured["user"]
+    assert "[今天的生活]" in material
+    assert "日牌 JSK 保值" in material and "鸡肉打折" in material
+    assert "[生活]" in material
+    # 地位声明进提示：生活段与对话同等笔墨
+    assert "同等笔墨" in captured["system"]
+    # 纯工具任务口径收窄
+    assert "纯工具型任务" in captured["system"]

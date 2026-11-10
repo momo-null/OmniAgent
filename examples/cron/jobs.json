@@ -80,19 +80,16 @@
     // 三段错峰：早定方向 / 中采集真实条目 / 晚合成第一人称的一天。
     // 步数留空 = 走 runtime.default_max_steps，与普通任务同源。
     //
-    // allow_atoms：这轮任务要不要产 L1 记忆原子（她记住的事实）。
-    // **缺省 false（不写这个键 = 关）**：定时任务的 objective 是配置文本不是主人说话，
-    // 提炼器会把执行细节误当「用户规则」收进事实库（2026-11-09 实证 9 条全废，
-    // 提炼负面清单已同步收紧）。life 三任务显式开 true：行为与见闻经自然链进记忆
-    // （任务轨迹→蒸馏→L1/L2→巩固日记）；项目产物文件（days/knowledge）只给人看、
-    // 不进记忆，全局日记由巩固期自己写（D+1），不经脚本直写。
+    // 记忆口径（2026-11-10）：写链为「事件 → 她的取舍 → 记忆」，无来源开关。
+    // 收尾不自动产 L1；她的见闻在任务里逐条 memory_observe 进观察层（巩固期内化），
+    // 长期有效的事实她用 memory_remember 显式记。项目产物（days/knowledge）只给人看，
+    // 全局日记由巩固期自己写（D+1，读 days 流水作素材）。
     {
       "id": "life-morning",
       "name": "今天想看什么",
       "cron": "20 8 * * *",
       "objective": "运行项目目录下的 daytrace.py plan --root auto 生成今天的 today.json，再按课表与 interests.md 定下今天想看的几个方向",
       "project_id": "life",
-      "allow_atoms": true,
       "enabled": false,
       "miss_grace_minutes": 120,
       "note": "早段：daytrace plan → today.json"
@@ -103,7 +100,6 @@
       "cron": "40 12 * * *",
       "objective": "用只读工具采集今天感兴趣的条目，逐条写进项目目录 knowledge 下当天日期的 .jsonl，并逐条 memory_observe 记进观察层",
       "project_id": "life",
-      "allow_atoms": true,
       "enabled": false,
       "miss_grace_minutes": 120,
       "note": "中段：只读采集真实条目 → knowledge/<日期>.jsonl + memory_observe 观察层"
@@ -114,10 +110,9 @@
       "cron": "50 23 * * *",
       "objective": "把今天写成第一人称的一天，写到项目目录 days 下当天日期的 .md，并回填 interests.md",
       "project_id": "life",
-      "allow_atoms": true,
       "enabled": false,
       "miss_grace_minutes": 180,
-      "note": "晚段：days/<日期>.md（给主人看）；omni 全局日记由巩固期自己写"
+      "note": "晚段：days/<日期>.md（给人看）；omni 全局日记由巩固期自己写"
     }
   ]
 }

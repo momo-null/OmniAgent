@@ -30,21 +30,6 @@ class _FakeJudge:
         return self.script.pop(0)
 
 
-def _extract(text):
-    return {"facts": [{"text": text, "scope": "global"}]}
-
-
-def _value(kind="fact", importance=0.8):
-    return {"items": [{"idx": 0, "keep": True, "kind": kind, "importance": importance}]}
-
-
-def _decide(action, target_id=None, merged=None):
-    d = {"idx": 0, "action": action, "target_id": target_id}
-    if merged:
-        d["merged_content"] = merged
-    return {"decisions": [d]}
-
-
 @pytest.fixture
 def brain(tmp_path, monkeypatch):
     """隔离 brain 库 + 启用开关 + 假 LLM 脚本队列。"""
@@ -72,106 +57,19 @@ def brain(tmp_path, monkeypatch):
     return fake
 
 
-def test_flush_writes_novel_atom_with_value_fields(brain):
-    brain.script = [_extract("用户偏好先聊后动的工作方式"), _value("preference", 0.8)]
-    memory_brain.capture("p_test", "user", "以后改我代码前先跟我说方案")
-    memory_brain.capture("p_test", "assistant", "好的记住了")
-    stats = memory_brain.flush_brain("p_test", {"base_url": "http://x", "api_key": "k"},
-                                     source_task="t1")
-    assert stats["extracted"] == 1 and stats["stored"] == 1
-    conn = memory_brain.open_brain()
-    row = conn.execute("SELECT content, kind, importance, persona, origin, state "
-                       "FROM atoms").fetchone()
-    conn.close()
-    assert "先聊后动" in row[0]
-    assert row[1] == "preference" and abs(row[2] - 0.8) < 1e-6
-    assert row[3] == "" and row[4] == "p_test" and row[5] == "active"   # P2：persona 冻结恒空
-
-
-def test_blank_extraction_still_counts_flush(brain):
-    """白卷轮也要计入 flush 计数并尝试巩固，否则闲聊为主的会话永远攒不到巩固。"""
-    brain.script = [{"facts": []}]
+def test_blank_flush_still_counts(brain):
+    """无提炼时代（2026-11-10）收尾不调 LLM，但 flush 计数照走——巩固触发不挂原子产出。"""
+    def boom(*a, **k):
+        raise AssertionError("收尾不应触发任何 LLM 调用")
+    brain.chat_json = boom  # _FakeJudge 换成哨兵
     memory_brain.capture("p", "user", "你好啊")
     memory_brain.capture("p", "assistant", "在的")
     stats = memory_brain.flush_brain("p", {"base_url": "http://x"})
-    assert stats["extracted"] == 0
+    assert stats["stored"] == 0
     conn = memory_brain.open_brain()
     cnt = conn.execute("SELECT v FROM meta WHERE k='flush_count'").fetchone()
     conn.close()
     assert cnt and int(cnt[0]) == 1
-
-
-def test_duplicate_strengthens_instead_of_new_row(brain):
-    brain.script = [_extract("用户偏好先聊后动的工作方式"), _value("preference", 0.8)]
-    memory_brain.capture("p", "user", "以后改我代码前先跟我说方案")
-    memory_brain.capture("p", "assistant", "好")
-    memory_brain.flush_brain("p", {"base_url": "http://x"})
-    conn = memory_brain.open_brain()
-    rid = conn.execute("SELECT record_id FROM atoms").fetchone()[0]
-    acc0 = conn.execute("SELECT access_count FROM atoms").fetchone()[0]
-    conn.close()
-    # 第二轮：同一事实 → 判 duplicate → 旧条强化而非新增
-    brain.script = [_extract("用户偏好先聊后动的工作方式"), _value("preference", 0.8),
-                    _decide("duplicate", target_id=rid)]
-    memory_brain.capture("p", "user", "再次强调：以后改我代码前先跟我说方案")
-    memory_brain.capture("p", "assistant", "嗯")
-    stats = memory_brain.flush_brain("p", {"base_url": "http://x"})
-    assert stats["duplicated"] == 1
-    conn = memory_brain.open_brain()
-    n = conn.execute("SELECT COUNT(*) FROM atoms").fetchone()[0]
-    acc1 = conn.execute("SELECT access_count FROM atoms WHERE record_id=?",
-                        (rid,)).fetchone()[0]
-    conn.close()
-    assert n == 1
-    assert acc1 == acc0 + 1
-
-
-def test_conflict_tombstones_old_row(brain):
-    brain.script = [_extract("用户所在地是广州"), _value("fact", 0.7)]
-    memory_brain.capture("p", "user", "用户所在地是广州")
-    memory_brain.capture("p", "assistant", "好的")
-    memory_brain.flush_brain("p", {"base_url": "http://x"})
-    conn = memory_brain.open_brain()
-    rid = conn.execute("SELECT record_id FROM atoms").fetchone()[0]
-    conn.close()
-    brain.script = [_extract("用户所在地是上海"), _value("fact", 0.8),
-                    _decide("conflict", target_id=rid)]
-    memory_brain.capture("p", "user", "我搬家了，现在所在地是上海")
-    memory_brain.capture("p", "assistant", "记下了")
-    memory_brain.flush_brain("p", {"base_url": "http://x"})
-    conn = memory_brain.open_brain()
-    states = dict(conn.execute("SELECT record_id, state FROM atoms"))
-    conn.close()
-    assert states[rid] == "tombstone"
-    assert sum(1 for v in states.values() if v == "active") == 1
-
-
-def test_overlong_merge_is_rejected_not_truncated(brain):
-    """merge 结果超线 → 旧条不动、新条独立入库（stats.merge_rejected），**不截成半句话**。
-
-    成因见 ``_MAX_ATOM_CHARS`` 注释：静默截断把每次合并的尾巴砍掉，同一条 rule
-    于是越并越宽（2026-11-03 实测最宽一条 117 字，仍在往 200 线走）。
-    """
-    brain.script = [_extract("改我代码前先给方案"), _value("rule", 0.9)]
-    memory_brain.capture("p", "user", "改我代码前先给方案")
-    memory_brain.capture("p", "assistant", "好")
-    memory_brain.flush_brain("p", {"base_url": "http://x"})
-    conn = memory_brain.open_brain()
-    rid, old = conn.execute("SELECT record_id, content FROM atoms").fetchone()
-    conn.close()
-    brain.script = [_extract("改我代码前先给方案，并且要等我点头"), _value("rule", 0.9),
-                    _decide("merge", target_id=rid, merged="约" * 250)]
-    memory_brain.capture("p", "user", "再补一句：改我代码前先给方案，并且要等我点头")
-    memory_brain.capture("p", "assistant", "嗯")
-    stats = memory_brain.flush_brain("p", {"base_url": "http://x"})
-    assert stats["merged"] == 0 and stats["merge_rejected"] == 1
-    conn = memory_brain.open_brain()
-    rows = conn.execute("SELECT record_id, content, state FROM atoms").fetchall()
-    n_fts = conn.execute("SELECT COUNT(*) FROM atoms_fts").fetchone()[0]
-    conn.close()
-    assert len(rows) == 2 and all(r[2] == "active" for r in rows)
-    assert dict((r[0], r[1]) for r in rows)[rid] == old     # 旧条一字未动
-    assert n_fts == len(rows)                               # 拒并路径同样一条一行
 
 
 def test_search_persona_dead_dim_removed_and_reinforce(brain):
@@ -287,28 +185,11 @@ def test_disabled_brain_is_noop(brain, monkeypatch):
     memory_brain.capture("p", "user", "hello world 测试内容")
     memory_brain.capture("p", "assistant", "ok")
     stats = memory_brain.flush_brain("p", {"base_url": "http://x"})
-    assert stats["extracted"] == 0
+    assert stats["stored"] == 0
     assert memory_brain.remember("x") == ""
 
 
 # === M3 peer 归属维度 + M2.5 月记步（plan persona-social-memory-2026-10-31） ===
-
-def test_flush_tags_peer_from_judge(brain):
-    """写链打标：judge 输出 peer → atoms.peer 落库（「名片(uid)」格式）。"""
-    brain.script = [
-        _extract("成员甲 用语音嘲笑我"),
-        {"items": [{"idx": 0, "keep": True, "kind": "episode", "importance": 0.7,
-                    "peer": "成员甲(999999)"}]},
-        {"decisions": []},
-    ]
-    memory_brain.capture("p_peer", "user", "「成员甲」(999999): 你这话根本站不住脚")
-    memory_brain.capture("p_peer", "assistant", "嫌难听还点，下次不叫了")
-    memory_brain.flush_brain("p_peer", {"base_url": "http://x"})
-    conn = memory_brain.open_brain()
-    row = conn.execute("SELECT peer FROM atoms WHERE content LIKE '%嘲笑%'").fetchone()
-    conn.close()
-    assert row is not None and row[0] == "成员甲(999999)"
-
 
 def test_search_peer_boost_not_filter(brain):
     conn = memory_brain.open_brain()

@@ -1,7 +1,7 @@
 """按「人」记忆的 L0 直驱回归锁。
 
 四个契约：
-1. 不产 L1 的轮次（allow_atoms=False）也能由 L0 更新关系卡，空 atoms 库不挡路；
+1. 无 L1 增量的收尾（2026-11-10 严格口径）也能由 L0 更新关系卡，空 atoms 库不挡路；
 2. 关系卡索引带可检索摘要，按名字/标识能命中；
 3. 外部来源读 relation 仍只给摘要、正文不外泄（N-10 不破）；
 4. 入站 speaker 兜底 + 本轮边界 peer 盖章，通道无关。
@@ -69,7 +69,7 @@ def test_relations_driven_by_l0_with_empty_atoms(brain, monkeypatch):
 
 
 def test_flush_tail_runs_relations_on_l1_skip(brain, monkeypatch):
-    """allow_atoms=False 的收尾路径确实会调用关系卡维护（接线不丢）。"""
+    """普通收尾路径（无 L1 增量）确实会调用关系卡维护（接线不丢）。"""
     calls = []
     monkeypatch.setattr(mb, "maybe_maintain_relations",
                         lambda cfg: calls.append(cfg) or 0)

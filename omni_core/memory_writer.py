@@ -54,13 +54,14 @@ def _ensure_worker() -> None:
 def enqueue(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
             source_task: str = "",
             msgs: Optional[List[Dict[str, str]]] = None,
-            did_work: bool = True, allow_atoms: bool = True,
+            did_work: bool = True,
             on_done: Optional[Callable[[Dict[str, Any]], None]] = None) -> bool:
     """把一轮收尾压成一条队列项（毫秒级返回）。返回是否入队成功。
 
     ``msgs`` 为 ``None`` 时在**本函数内**取走 capture 缓冲（入队线程 = 收尾线程，
     取走是纯内存操作），保证轮次边界清晰。
-    ``allow_atoms=False`` = 只沉淀叙事层（那些是经历、不是约定），不产 L1 原子。
+    2026-11-10 起写链为「事件 → 她的取舍 → 记忆」：L1 是否生长由她的显式动作与
+    巩固期内化决定，收尾不再携带来源开关（allow_atoms 已退场）。
     """
     try:
         from omni_core import memory_brain
@@ -69,7 +70,7 @@ def enqueue(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
             msgs = memory_brain.pop_capture(project_id)
         item = {"project_id": project_id, "brain_cfg": brain_cfg,
                 "source_task": source_task, "msgs": msgs,
-                "did_work": bool(did_work), "allow_atoms": bool(allow_atoms),
+                "did_work": bool(did_work),
                 "on_done": on_done, "ts": time.time()}
         _ensure_worker()
         try:
@@ -130,7 +131,6 @@ def _process(item: Dict[str, Any]) -> Dict[str, int]:
         source_task=item.get("source_task", ""),
         msgs=item.get("msgs") or [],
         allow_write=bool(item.get("did_work", True)),
-        allow_atoms=bool(item.get("allow_atoms", True)),
     )
     stats["did_work"] = 1 if item.get("did_work") else 0
     return stats
@@ -149,13 +149,8 @@ def enqueue_throttled(project_id: str, brain_cfg: Optional[Dict[str, Any]] = Non
                       did_work: bool = True,
                       min_msgs: int = _THROTTLE_MIN_MSGS,
                       min_interval: float = _THROTTLE_MIN_INTERVAL_SEC,
-                      allow_atoms: bool = False,
                       on_done: Optional[Callable[[Dict[str, Any]], None]] = None) -> bool:
-    """按条数/间隔限流入队；是否产 L1 由调用方按进料道决定。
-
-    ``allow_atoms=False``（缺省）= 只沉淀叙事层，通道聊天轮次用；
-    ``allow_atoms=True`` = 允许产 L1 原子，cron / 手动派发 / 主动观察等
-    非通道轮次用（2026-11-09 先对自主运营任务打开）。
+    """按条数/间隔限流入队（通道聊天轮次的工程节流，与记忆语义无关）。
 
     触发条件（任一满足）：capture 缓冲里已攒够 ``min_msgs`` 条；或距该项目上次入队
     已超过 ``min_interval`` 秒（低流量场景也要保证巩固期能被喂到，否则日记永远攒不够）。
@@ -171,8 +166,7 @@ def enqueue_throttled(project_id: str, brain_cfg: Optional[Dict[str, Any]] = Non
             return False
         _last_enqueue[project_id] = now
         return enqueue(project_id, brain_cfg, source_task=source_task,
-                       did_work=did_work, allow_atoms=bool(allow_atoms),
-                       on_done=on_done)
+                       did_work=did_work, on_done=on_done)
     except Exception as e:  # noqa: BLE001 —— 写链是增强项，失败不影响主链路
         logger.warning("限流入队失败（忽略）：%s: %s", type(e).__name__, e)
         return False

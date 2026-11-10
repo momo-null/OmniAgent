@@ -355,10 +355,7 @@ def _fts_neighbors(conn: sqlite3.Connection, query: str, exclude_id: str,
     return out[:limit]
 
 
-# ---- L0 会话缓冲 → L1 提炼原料 ----
-_FLUSH_MIN_ROLES = 2        # buffer 少于此条不触发提炼(无内容可提炼)
-_FLUSH_MAX_CHARS = 8000     # 提炼原料(对话片段)截断
-_MAX_ATOMS_PER_FLUSH = 5
+_FLUSH_MIN_ROLES = 2        # buffer 少于此条不走收尾(无内容可收尾)
 # buffer 上限（plan §3.3）：barge-in 频繁时（打断轮不 flush，且可能有并发通道）缓冲
 # 会无限增长。超限即**滚动切段**——丢最旧的，只保留最近窗口，并记 dropped 计数。
 # 之所以不是"超限就强制 flush"：flush 要跑 3 次 LLM，把它塞进消息路径等于把
@@ -612,42 +609,6 @@ _l0_backfill_started = threading.Lock()
 _l0_backfill_state: Dict[str, bool] = {"running": False}
 
 
-_EXTRACT_SYSTEM = (
-    "你是记忆提炼器。从对话片段提取关于环境规律、用户长期偏好、工具/系统行为的陈述句事实。"
-    "规则:1) 1-5 条,每条一句陈述 ≤60 字;2) 只写会跨会话仍然成立的内容,"
-    "一次性的操作过程/闲聊/纯主观感受不写;3) 观察不到规律就交白卷(facts 为空数组)"
-    "——交白卷是正确答案,凑数写出的假规律是错误答案。"
-    "\n负面清单(一律不收):文件路径/目录结构/文件名约定、命令行与脚本用法、"
-    "字段名与数据格式、代码/去重/校验逻辑等**执行细节**——这些属于项目文件与脚本文档,"
-    "不是记忆;任务轮对话里 role=user 的话是机器下发的任务目标(objective),不是主人本人"
-    "说的话,「用户把 X 写到某处/用户用某脚本做某事」这类执行过程描述一律不收。"
-    "\n类别纪律:只记「发生了什么、观察到什么事实」;禁止产出对系统内部机制的因果推断"
-    "(「系统为什么这样/被拒的原因/策略如何」),禁止记录 assistant 自己的拒绝行为与应对过程"
-    "(如「拒绝生成某内容/按某规则处理了某请求」——拒绝规则属场景块/角色卡层,不是记忆事实);"
-    "对用户行为的描述只写客观事实,不带评判标签。"
-    '只返回 JSON:{"facts": [{"text": "..."}]}'
-)
-
-
-def _extract_detail(digest: str, brain_cfg) -> Tuple[List[Dict[str, Any]], str]:
-    """提炼 → ([{text}], 原因说明)；空列表时原因写明是白卷还是失败。"""
-    try:
-        # timeout=60s：reasoning 模型提炼思考常超 30s，默认 10s 会随机超时→假白卷
-        data = llm_judge.chat_json(brain_cfg, _EXTRACT_SYSTEM, digest, timeout=60.0)
-        if data is None:
-            return [], "提炼失败(无模型/请求失败/解析失败)"
-        out: List[Dict[str, Any]] = []
-        for f in (data.get("facts") or []):
-            text = str((f.get("text") if isinstance(f, dict) else f) or "").strip()
-            if text:
-                out.append({"text": text[:_MAX_ATOM_CHARS]})
-        if not out:
-            return [], "白卷(模型判无可沉淀的跨会话事实)"
-        return out, ""
-    except Exception:
-        return [], "提炼失败(异常)"
-
-
 def _cfg(key: str, default: Any = None) -> Any:
     """读 runtime.knowledge.memory.ltm.<key>，缺省合并内置默认。"""
     try:
@@ -835,212 +796,26 @@ def _narr_fts_ok(conn: sqlite3.Connection) -> bool:
 
 # ---- 写链：flush → 两段判 → 落库 ----
 
-_VALUE_SYSTEM = (
-    "你是记忆价值评审器。给你一段对话摘要和从中初提的事实候选列表。"
-    "对每条候选独立判定:"
-    "keep:一次性操作过程/寒暄问候/纯主观感受/对系统内部机制的因果推断"
-    "(「系统为什么这样/被拒的原因/策略如何」)/执行细节(文件路径、命令行、脚本用法、"
-    "字段名与数据格式——属于项目文件与脚本文档,不是记忆) → keep=false;"
-    "值得跨会话保留的事实/偏好/规律/事件 → keep=true 并给 kind 与 importance。"
-    "kind:fact(客观事实)|preference(用户长期偏好)|rule(规律/纪律/流程)|episode(具体事件片段)。"
-    "importance:0~1(影响世界/跨会话成立/用户强偏好→高;临时性/局部细节→低)。"
-    "peer:这条事实关于谁——取素材里的结构化 speaker 字段作为该事实所指对象的"
-    "结构化 speaker 原文;assistant 自己的话不打 peer;"
-    "泛指多人/关于用户本人整体/无明确对象 → 留空 \"\"。"
-    '只返回 JSON:{"items": [{"idx": 序号, "keep": true, "kind": "fact", "importance": 0.5, "peer": ""}]}'
-)
-
-#: 单条记忆的字数硬线。**在合并这一步它是拒绝线，不是截断线**（2026-11-03 定）：
-#: 静默截断会把合并结果的后半句砍掉，而合并本身又是「谁吞掉谁」的判定——两头合起来
-#: 就是把同一条 rule 越并越宽，养成"什么都管的大话"（实测最宽的一条 active rule 已到
-#: 117 字，而判定提示要求 ≤100 字）。merge 超线一律拒并：两条并存、下一轮再判——对齐
-#: 「保不住就不判断，绝不猜」的红线（`doc/agent-control-master-spec.md` §6.4）。
-#: 提炼侧与 `remember`/`update_memory` 的单条写入仍按本线截断（那是"模型写长了留前段"，
-#: 不涉及吞掉另一条记忆）。
-_MAX_ATOM_CHARS = 200
-
-_CONSIST_SYSTEM = (
-    "你是记忆一致性评审器。给你「新事实」列表和「已有记忆」候选(带编号)。"
-    "对每条新事实判定:"
-    "与某条候选表达同一事实 → duplicate(返回 target_id,旧条将强化而非新增);"
-    "与某条**同一适用域**(同一场景、同一约束对象)且互补,并成一条后双方的条件与"
-    "禁止项都还在 → merge(返回 target_id 与 merged_content,≤100 字);"
-    "与某条矛盾且新信息更可信 → conflict(返回 target_id,旧条将作废、新条入库);"
-    "是新信息 → novel。"
-    "**跨适用域不许 merge**——把某个场合的表达惯例和一条工程事实并成一条，"
-    "等于写出谁也用不上的大话;这种情况返回 novel,让它们各自成条。"
-    "并完会丢掉某一方的条件、或需要把两条改写成更笼统的一句话才装得下 → novel。"
-    "拿不准 → novel。"
-    '只返回 JSON:{"decisions": [{"idx": 序号, "action": "novel|duplicate|merge|conflict",'
-    ' "target_id": "...", "merged_content": "..."}]}'
-)
-
-
-def _majority_context_key(msgs: List[Dict[str, str]]) -> str:
-    """buffer 消息的多数派 ``context_key``（atoms 来源标注，§4.3）。
-
-    一轮 flush 的消息可能来自同一场合；个别消息缺结构化标注
-    不影响多数派。没有可用的返回空串（= 无场合线索，读链不加权）。
-    """
-    counts: Dict[str, int] = {}
-    for m in msgs or []:
-        cid = str((m or {}).get("context_key") or "").strip()
-        if cid:
-            counts[cid] = counts.get(cid, 0) + 1
-    if not counts:
-        return ""
-    return max(counts.items(), key=lambda kv: kv[1])[0]
-
-
 def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
                 source_task: str = "",
                 msgs: Optional[List[Dict[str, str]]] = None,
-                allow_write: bool = True,
-                allow_atoms: bool = True) -> Dict[str, int]:
-    """任务收尾：buffer 摘要 → 提炼 → 价值/kind/importance → 一致性四态 → brain.db。
+                allow_write: bool = True) -> Dict[str, int]:
+    """任务收尾：语境链 → 关系卡 → L2 维护 → 巩固调度（公共尾段，见 ``_flush_tail``）。
+
+    2026-11-10 起写链为「事件 → 她的取舍 → 记忆」（worklog lifelike-presence §11/§12）：
+    收尾**不再自动提炼 L1 原子**——L1 只走三条她的选择路径：``memory_remember``（显式记）、
+    巩固期 ``promote_observations``（内化她自己记的观察）、episode→rule 抽象。
+    防投毒与拟人取舍同源：世界可以灌进 L0，只有经过她的手才变成「她的」。
 
     Args:
         msgs: 已从 capture 缓冲取走的消息（异步写链在入队时取走，worker 后续消费）。
             ``None`` = 就地 pop（同步路径 / 测试）。
         allow_write: 本轮是否"真的干了活"（did_work），透传给 L2 维护。
-        allow_atoms: 是否允许产 L1 原子。**经历类轮次传 False**：那些是经历、不是约定，
-            只走叙事层、不进事实层（INV-6）；不是来源可信度判断，
-            叙事层 = 场景块 + 巩固 → 日记；顺带省掉 3 次 LLM。
     """
-    stats: Dict[str, int] = {"extracted": 0, "kept": 0, "stored": 0, "duplicated": 0,
-                             "merged": 0, "merge_rejected": 0, "conflict": 0, "dropped": 0}
+    stats: Dict[str, int] = {"stored": 0}
     msgs = pop_capture(project_id) if msgs is None else msgs
     if not enabled() or not brain_cfg or len(msgs) < _FLUSH_MIN_ROLES:
         return stats
-    digest = "\n".join(f"[{m['role']}] {m['content']}" for m in msgs)[-_FLUSH_MAX_CHARS:]
-    if not allow_atoms:
-        # 只沉淀叙事层：巩固调度（日记从这里来），L1 一字不写。这一轮不产原子，
-        # 所以 L2 场景维护天然没有进料——maybe_maintain 取到零增量就直接跳过，不调 LLM。
-        stats["l1_skipped"] = 1
-        _flush_tail(project_id, brain_cfg, stats, allow_write, msgs=msgs)
-        return stats
-    try:
-        atoms, _note = _extract_detail(digest, brain_cfg)
-    except Exception:
-        atoms, _note = [], "extract error"
-    atoms = atoms[:_MAX_ATOMS_PER_FLUSH]
-    stats["extracted"] = len(atoms)
-    if not atoms:
-        # 白卷也是"收尾了一次"：巩固的 flush 计数与触发不能只挂在非空提炼上，
-        # 否则语音/闲聊为主的会话永远攒不到巩固条件
-        _flush_tail(project_id, brain_cfg, stats, allow_write, msgs=msgs)
-        return stats
-
-    # 第一段：价值 / kind / importance（一次批量 LLM）
-    cand_lines = "\n".join(f"[{i}] {a.get('text', '')}" for i, a in enumerate(atoms))
-    items: List[Dict[str, Any]] = []
-    try:
-        data = llm_judge.chat_json(brain_cfg, _VALUE_SYSTEM,
-                                   f"对话摘要:\n{digest[:2000]}\n\n事实候选:\n{cand_lines}",
-                                   timeout=60.0)
-        items = list((data or {}).get("items") or [])
-    except Exception:
-        items = []
-    if not items:
-        # LLM 失败 → 宁保守保留（kind=fact, importance=0.5），不丢
-        items = [{"idx": i, "keep": True, "kind": "fact", "importance": 0.5}
-                 for i in range(len(atoms))]
-    kept: List[Tuple[int, Dict[str, Any]]] = []
-    _atom_chat = _majority_context_key(msgs)   # 来源标注（INV-3：只标注不过滤）
-    for it in items:
-        try:
-            idx = int(it.get("idx"))
-        except Exception:
-            continue
-        if not (0 <= idx < len(atoms)) or not it.get("keep", True):
-            stats["dropped"] += 1
-            continue
-        kind = str(it.get("kind") or "fact")
-        if kind not in ("fact", "preference", "rule", "episode"):
-            kind = "fact"
-        try:
-            imp = max(0.0, min(1.0, float(it.get("importance", 0.5))))
-        except Exception:
-            imp = 0.5
-        # peer 归属（关于谁，M3）：LLM 给了就收（截断防脏长），没给/给歪了保守置空
-        peer = str(it.get("peer") or "").strip()[:80]
-        kept.append((idx, {"text": str(atoms[idx].get("text", ""))[:_MAX_ATOM_CHARS],
-                           "kind": kind, "importance": imp, "peer": peer,
-                           "context_key": _atom_chat, "source_kind": "dialogue"}))
-    stats["kept"] = len(kept)
-    if not kept:
-        # 一条都没留下也要走收尾：巩固的触发不该被"这轮没沉淀事实"卡住
-        # （闲聊/全部被判为一次性 也是"收尾了一次"，同白卷分支口径）。
-        # L2 这趟通常空转（本轮无新原子），但历史积压的增量要靠这里被带走。
-        _flush_tail(project_id, brain_cfg, stats, allow_write, msgs=msgs)
-        return stats
-
-    # 第二段：一致性四态（候选 = 各条 top-3 并集，一次批量 LLM）
-    conn = open_brain()
-    cand_pool: Dict[str, str] = {}
-    for _, it in kept:
-        for h in search_brain(it["text"], k=3, reinforce=False, conn=conn):
-            cand_pool[str(h["record_id"])] = h["content"]
-    decisions: Dict[int, Dict[str, Any]] = {}
-    if cand_pool:
-        cand_lines = "\n".join(f"[{rid}] {txt}" for rid, txt in cand_pool.items())
-        new_lines = "\n".join(f"[{i}] {it['text']}" for i, it in kept)
-        try:
-            data = llm_judge.chat_json(brain_cfg, _CONSIST_SYSTEM,
-                                       f"新事实:\n{new_lines}\n\n已有记忆候选:\n{cand_lines}",
-                                       timeout=60.0)
-            for d in (data or {}).get("decisions") or []:
-                try:
-                    decisions[int(d.get("idx"))] = d
-                except Exception:
-                    continue
-        except Exception:
-            decisions = {}
-
-    now = _now()
-    applied = 0
-    for i, it in kept:
-        d = decisions.get(i) or {"action": "novel"}
-        action = str(d.get("action") or "novel")
-        rid = _new_id()
-        if action in ("duplicate", "merge", "conflict"):
-            target = conn.execute("SELECT record_id FROM atoms WHERE record_id=?",
-                                  (str(d.get("target_id") or ""),)).fetchone()
-            if target is None:
-                action = "novel"
-        if action == "duplicate":
-            conn.execute("UPDATE atoms SET access_count=access_count+1, last_access=?, "
-                         "updated=?, importance=max(importance, ?) WHERE record_id=?",
-                         (now, now, it["importance"], str(d.get("target_id"))))
-            stats["duplicated"] += 1
-        elif action == "merge":
-            raw = str(d.get("merged_content") or "").strip()
-            if len(raw) > _MAX_ATOM_CHARS:
-                # 超线 = 模型把两个域并成了一条大话。静默截断会砍掉后半句，所以拒并：
-                # 旧条一字不动、新条独立入库，下一轮巩固再判（2026-11-03，见 §5 不变量 6）
-                _insert_atom(conn, rid, it, project_id, source_task, now)
-                stats["stored"] += 1
-                stats["merge_rejected"] += 1
-            else:
-                merged = raw or it["text"]
-                conn.execute("UPDATE atoms SET content=?, updated=?, importance=max(importance, ?), "
-                             "access_count=access_count+1, last_access=? WHERE record_id=?",
-                             (merged, now, it["importance"], now, str(d.get("target_id"))))
-                _fts_upsert(conn, str(d.get("target_id")), merged)
-                stats["merged"] += 1
-        elif action == "conflict":
-            conn.execute("UPDATE atoms SET state='tombstone', superseded_by=?, updated=? "
-                         "WHERE record_id=?", (rid, now, str(d.get("target_id"))))
-            _insert_atom(conn, rid, it, project_id, source_task, now)
-            stats["conflict"] += 1
-        else:
-            _insert_atom(conn, rid, it, project_id, source_task, now)
-            stats["stored"] += 1
-        applied += 1
-    conn.commit()
-    conn.close()
-    stats["applied"] = applied
-
     _flush_tail(project_id, brain_cfg, stats, allow_write, msgs=msgs)
     return stats
 
@@ -2043,6 +1818,202 @@ def _consolidation_due() -> bool:
         return False
 
 
+#: 单条记忆的字数硬线。**在合并这一步它是拒绝线，不是截断线**（2026-11-03 定）：
+#: 静默截断会把合并结果的后半句砍掉，而合并本身又是「谁吞掉谁」的判定——两头合起来
+#: 就是把同一条 rule 越并越宽，养成"什么都管的大话"（实测最宽的一条 active rule 已到
+#: 117 字，而判定提示要求 ≤100 字）。merge 超线一律拒并：两条并存、下一轮再判——对齐
+#: 「保不住就不判断，绝不猜」的红线（`doc/agent-control-master-spec.md` §6.4）。
+#: 提炼侧与 `remember`/`update_memory` 的单条写入仍按本线截断（那是"模型写长了留前段"，
+#: 不涉及吞掉另一条记忆）。
+_MAX_ATOM_CHARS = 200
+
+_CONSIST_SYSTEM = (
+    "你是记忆一致性评审器。给你「新事实」列表和「已有记忆」候选(带编号)。"
+    "对每条新事实判定:"
+    "与某条候选表达同一事实 → duplicate(返回 target_id,旧条将强化而非新增);"
+    "与某条**同一适用域**(同一场景、同一约束对象)且互补,并成一条后双方的条件与"
+    "禁止项都还在 → merge(返回 target_id 与 merged_content,≤100 字);"
+    "与某条矛盾且新信息更可信 → conflict(返回 target_id,旧条将作废、新条入库);"
+    "是新信息 → novel。"
+    "**跨适用域不许 merge**——把某个场合的表达惯例和一条工程事实并成一条，"
+    "等于写出谁也用不上的大话;这种情况返回 novel,让它们各自成条。"
+    "并完会丢掉某一方的条件、或需要把两条改写成更笼统的一句话才装得下 → novel。"
+    "拿不准 → novel。"
+    '只返回 JSON:{"decisions": [{"idx": 序号, "action": "novel|duplicate|merge|conflict",'
+    ' "target_id": "...", "merged_content": "..."}]}'
+)
+
+
+#: 观察升格步的提炼章程（§4.6）：提炼器不是守门人——不做 keep/reject，量由四态去重
+#: 与召回排序管（用户裁定 2026-11-10，不设每日上限）；只有提不出稳定结论的条目按空串跳过。
+_PROMOTE_SYSTEM = (
+    "你是记忆提炼器。把观察见闻逐条提炼成跨会话成立的结论短句。"
+    "规则:1) 每条输入对应一条输出(idx 对齐);2) 结论 ≤60 字陈述句,提炼普遍事实/规律,"
+    "不要复述原文细节;3) 提不出稳定结论(纯一次性事件/无信息量转述)时 text 给空串;"
+    "4) 执行细节(文件路径/命令行/字段名)不是记忆,text 给空串。"
+    "kind:fact(客观事实)|rule(规律/流程);importance:0~1(跨会话有用→高)。"
+    '只返回 JSON:{"items": [{"idx": 0, "text": "...", "kind": "fact", "importance": 0.5}]}'
+)
+
+
+def promote_observations(brain_cfg: Optional[Dict[str, Any]],
+                         out: Optional[Dict[str, Any]] = None) -> None:
+    """观察升格步（§4.6 升格路径落地，巩固期调用）：观察原文不直接写 atoms（INV-6），
+    统一提炼为结论短句后走四态一致性入事实层，写齐 ``source_kind/observed_at/provenance``
+    追溯标注（INV-14 / H-5）。
+
+    - 幂等：升格原子的 ``source_task`` 记观察 record_id，已升格的观察不再重提；
+    - 无每日上限：单轮 60 条只是 LLM 窗口约束，剩余随下一次巩固继续；
+    - ``origin`` 取观察 context_key 前缀（如 ``life``）——L2 场景进料按 origin 分组路由。
+    """
+    stats = out if out is not None else {}
+    if not enabled() or not brain_cfg:
+        return
+    try:
+        conn = open_brain()
+        try:
+            rows = conn.execute(
+                "SELECT record_id, context_key, text, recorded_at, provenance "
+                "FROM l0_messages WHERE source_kind='observation' AND record_id NOT IN "
+                "(SELECT source_task FROM atoms WHERE source_task != '') "
+                # 投毒锁（worklog lifelike-presence §9.6）：他人可控来源记下的
+                # 见闻只留叙事层，永不升格为世界事实——升格只内化她自己空间
+                # 记的观察（``group:`` 前缀场合 = 他人可达，由边界层归一）。
+                "AND context_key NOT LIKE 'group:%' "
+                "ORDER BY recorded_at LIMIT 60").fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return
+    if not rows:
+        return
+    lines = "\n".join(f"[{i}] ({str(r[3])[:10]}) {str(r[2])[:300]}"
+                      for i, r in enumerate(rows))
+    try:
+        data = llm_judge.chat_json(_batch_llm_cfg(brain_cfg), _PROMOTE_SYSTEM,
+                                   f"见闻列表:\n{lines}", timeout=90.0)
+    except Exception:
+        return
+    cands: List[Tuple[int, Dict[str, Any]]] = []
+    for it in (data or {}).get("items") or []:
+        try:
+            idx = int(it.get("idx"))
+        except Exception:
+            continue
+        if not (0 <= idx < len(rows)):
+            continue
+        text = str(it.get("text") or "").strip()
+        if not text:
+            continue
+        kind = str(it.get("kind") or "fact")
+        if kind not in ("fact", "rule"):
+            kind = "fact"
+        try:
+            imp = max(0.0, min(1.0, float(it.get("importance", 0.5))))
+        except Exception:
+            imp = 0.5
+        r = rows[idx]
+        cands.append((idx, {"text": text[:_MAX_ATOM_CHARS], "kind": kind,
+                            "importance": imp, "peer": "",
+                            "context_key": str(r[1] or ""),
+                            "source_kind": "observation",
+                            "observed_at": str(r[3])[:10],
+                            "provenance": str(r[4] or "")[:200]}))
+    if not cands:
+        stats["obs_promoted"] = 0
+        return
+    conn = open_brain()
+    try:
+        # 四态一致性：候选 = 各条 top-3 近邻并集，一次批量 LLM（与 flush_brain 同口径）
+        cand_pool: Dict[str, str] = {}
+        for _, it in cands:
+            for h in search_brain(it["text"], k=3, reinforce=False, conn=conn):
+                cand_pool[str(h["record_id"])] = h["content"]
+        decisions: Dict[int, Dict[str, Any]] = {}
+        if cand_pool:
+            cand_lines = "\n".join(f"[{rid}] {txt}" for rid, txt in cand_pool.items())
+            new_lines = "\n".join(f"[{i}] {it['text']}" for i, (_, it) in enumerate(cands))
+            try:
+                data = llm_judge.chat_json(_batch_llm_cfg(brain_cfg), _CONSIST_SYSTEM,
+                                           f"新事实:\n{new_lines}\n\n已有记忆候选:\n{cand_lines}",
+                                           timeout=60.0)
+                for d in (data or {}).get("decisions") or []:
+                    try:
+                        decisions[int(d.get("idx"))] = d
+                    except Exception:
+                        continue
+            except Exception:
+                decisions = {}
+        now = _now()
+        applied = stored = merged_n = conflict_n = dup_n = 0
+        for i, (ridx, it) in enumerate(cands):
+            obs_rid = str(rows[ridx][0])
+            origin = str(it.get("context_key") or "").split(":", 1)[0]
+            new_rid = _new_id()
+            d = decisions.get(i) or {"action": "novel"}
+            action = str(d.get("action") or "novel")
+            tgt = str(d.get("target_id") or "")
+            if action in ("duplicate", "merge", "conflict"):
+                if not tgt or conn.execute("SELECT 1 FROM atoms WHERE record_id=?",
+                                           (tgt,)).fetchone() is None:
+                    action = "novel"
+            if action == "duplicate":
+                conn.execute("UPDATE atoms SET access_count=access_count+1, last_access=?, "
+                             "updated=?, importance=max(importance, ?) WHERE record_id=?",
+                             (now, now, it["importance"], tgt))
+                dup_n += 1
+            elif action == "merge":
+                raw = str(d.get("merged_content") or "").strip()
+                if len(raw) > _MAX_ATOM_CHARS:
+                    # 超线拒并：与 flush_brain 同口径——旧条不动，新条独立入库
+                    _insert_atom(conn, new_rid, it, origin, obs_rid, now)
+                    stored += 1
+                else:
+                    m = raw or it["text"]
+                    conn.execute("UPDATE atoms SET content=?, updated=?, "
+                                 "importance=max(importance, ?), access_count=access_count+1, "
+                                 "last_access=? WHERE record_id=?",
+                                 (m, now, it["importance"], now, tgt))
+                    _fts_upsert(conn, tgt, m)
+                    merged_n += 1
+            elif action == "conflict":
+                conn.execute("UPDATE atoms SET state='tombstone', superseded_by=?, updated=? "
+                             "WHERE record_id=?", (new_rid, now, tgt))
+                _insert_atom(conn, new_rid, it, origin, obs_rid, now)
+                conflict_n += 1
+            else:
+                _insert_atom(conn, new_rid, it, origin, obs_rid, now)
+                stored += 1
+            applied += 1
+        conn.commit()
+        stats["obs_promoted"] = applied
+        stats["obs_stored"] = stored
+        stats["obs_merged"] = merged_n
+        stats["obs_conflict"] = conflict_n
+        stats["obs_duplicate"] = dup_n
+    finally:
+        conn.close()
+
+
+def _batch_llm_cfg(brain_cfg: Optional[Dict[str, Any]], floor: int = 6000) -> Optional[Dict[str, Any]]:
+    """批量整理调用的预算托底：reasoning 模型在长素材上会把小 ``max_tokens`` 全烧在
+    思考里——``finish_reason='length'``、正文零字被截（2026-11-10 实证：2048 预算
+    撑不住日记步 13KB 素材）。浅拷贝抬高 ``request.max_tokens`` 下限，不动调用方原 cfg。
+
+    只用于 memory_brain 内部的整理/日记/升格批量调用；对话链路不经过这里。
+    """
+    if not brain_cfg:
+        return brain_cfg
+    req = dict(brain_cfg.get("request") or {})
+    try:
+        req["max_tokens"] = max(int(req.get("max_tokens") or 0), floor)
+    except Exception:
+        req["max_tokens"] = floor
+    out = dict(brain_cfg)
+    out["request"] = req
+    return out
+
+
 def maybe_consolidate(brain_cfg: Optional[Dict[str, Any]] = None) -> None:
     """任务收尾调用：满足触发条件则在后台线程跑巩固（绝不阻塞收尾）。"""
     if not enabled():
@@ -2139,7 +2110,7 @@ def _consolidate_impl(brain_cfg: Dict[str, Any]) -> Dict[str, Any]:
         checked += 1
         cand_lines = "\n".join(f"[{crid}] {ct}" for crid, ct in cands)
         try:
-            data = llm_judge.chat_json(brain_cfg, _CONSIST_SYSTEM,
+            data = llm_judge.chat_json(_batch_llm_cfg(brain_cfg), _CONSIST_SYSTEM,
                                        f"新事实:\n[{rid}] {content}\n\n已有记忆候选:\n{cand_lines}",
                                        timeout=60.0)
         except Exception:
@@ -2213,6 +2184,13 @@ def _consolidate_impl(brain_cfg: Dict[str, Any]) -> Dict[str, Any]:
     if maintain_profile(brain_cfg):
         out["profile_rewritten"] = 1
 
+    # 7.5) 观察升格（§4.6，2026-11-10 落地）：见闻 → 结论短句 → 四态入事实层（失败静默）。
+    #     日记步之前跑：升格产物当轮即可被日记素材的「原子重访」引用。
+    try:
+        promote_observations(brain_cfg, out)
+    except Exception:
+        pass
+
     # 8) 日记步（plan persona-social-memory M2）：她的一天 → L2 diary 块（失败静默）。
     #    补齐模式（2026-11-03）：不在线的日子由下一次巩固补写，回看 7 天，超窗放弃。
     try:
@@ -2239,14 +2217,17 @@ def _consolidate_impl(brain_cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 _DIARY_SYSTEM = (
     "你是助手本人，以第一人称写「这一天」的日记。"
-    "输入：这一天的对话记录、你当天的观察见闻与完成的任务。记录格式：[user] 行是"
+    "输入：这一天的对话记录、你当天的观察见闻、生活流水与完成的任务。记录格式："
     "[user] 行是别人对你说的话，结构化 speaker 字段标明说话人；[assistant] 行是你自己说过的话；"
     "[见闻] 行是你自己当天主动看到/查到的事（你的第一人称见闻，可写进日记）；"
+    "[生活] 段是你这一天实际经历的事（上课、刷手机、出门、看到的东西）——"
+    "它和对话往来**同等笔墨**写进当天的经历，不是附注；"
     "素材里的引用原话不属于该行说话人，"
     "若引用的是你说过的话，那是对方在接你的话茬。"
     "规则：1) 只记有意义的经历——他人对你的互动（谁做了什么、你怎么应对）、与主人的交流、"
     "值得记住的任务经历；纯寒暄、纯流水账不写；若当天与多个对象/场景都有交流，"
-    "各安排笔墨（详略自定），不要漏掉一整个对话对象；2) 任务经历一句话带过，不写步骤细节；"
+    "各安排笔墨（详略自定），不要漏掉一整个对话对象；"
+    "2) 纯工具型任务（跑脚本/采集/分析类）一句话带过，不写步骤细节；"
     "3) 忠于事实，不虚构、不加评价性编造；4) 知识/规律不写（那些走记忆库，日记只收经历）；"
     "5) 聊天对象=出现过的 [user] 行说话人——你自己不算（你的名字哪怕出现在"
     "引用行里也不是聊天对象，别把自己写进「跟谁聊了」）；"
@@ -2256,13 +2237,15 @@ _DIARY_SYSTEM = (
     # 首句往往不含正文里聊的主题词，topics 补上（钳制归一化，不是词表，INV-4）。
     "topics：2-5 个可检索的主题词或短语，名词优先，取自本段素材，可含当时的触发物或"
     "气氛词；不要整句、不要评价、不要臆测；没有则空数组。"
-    # P6-1（plan §16.3）经历质地：仍是同一篇、同一次调用、≤900 字——多的是现场感
+    # P6-1（plan §16.3）经历质地：仍是同一篇、同一次调用——多的是现场感
+    # 字数帽 900→1800（2026-11-10 用户定）：日记不进注入面无预算约束，
+    # 素材里有 [生活]/[见闻] 全天段，900 字装不下她的一天。
     #（触发物/心境/带说话人的原话片段），只写素材里看得出来的，不臆造。
     "7) 经历质地：挑 1-3 处写「现场感」——当时是什么勾起了这段互动（一句话、一个物件、"
     "一种气氛），以及你当时的心情或反应；8) 原话片段：最多 1-2 处短原话引用，"
     "标清是谁说的（用结构化 speaker 字段）。"
     "atmosphere：≤16 字的当天气氛/情绪底色词面（取自素材；看不出则空串）。"
-    "\n只返回 JSON:{\"diary\": \"第一人称日记，≤900 字；没有则空串\", "
+    "\n只返回 JSON:{\"diary\": \"第一人称日记，≤1800 字；没有则空串\", "
     "\"topics\": [\"...\", \"...\"], \"atmosphere\": \"...\"}"
 )
 
@@ -2350,6 +2333,33 @@ def _diary_observation_lines(day: str) -> List[Tuple[str, str]]:
             body = str(text or "").strip()[:300]
             if body:
                 out.append((ts, f"[见闻] {body}"))
+    except Exception:
+        return []
+    return out
+
+
+def _diary_life_day_lines(day: str) -> List[Tuple[str, str]]:
+    """life 事件层素材（worklog lifelike-presence §10，2026-11-10）：各项目
+    ``days/<day>.md``（她这天的客观流水，life 侧产出）→ ``[生活]`` 素材段。
+
+    与 ``[见闻]`` 同理只作素材不落库；伪 ts 取当天 UTC 正午（= 本地晚八点），
+    排序上落在白天对话之后、深夜闲聊之前。任何失败静默返回空（增强项）。
+    """
+    out: List[Tuple[str, str]] = []
+    try:
+        from omni_core.local import scene_executor as _se
+
+        for f in sorted(rp.projects_root().glob(f"*/days/{day}.md")):
+            try:
+                _meta, body = _se.parse_scene_block(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            body = str(body or "").strip()
+            if not body:
+                continue
+            ts = f"{day}T12:00:00+00:00"
+            for para in [p.strip() for p in body.split("\n\n") if p.strip()]:
+                out.append((ts, f"[生活] {para}"))
     except Exception:
         return []
     return out
@@ -2472,7 +2482,11 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]],
     # P6-1（§16.3）/ N-17（§14.2）：当日观察见闻进素材——「我今天自己去看了什么」
     # 与对话经历同一篇、第一人称；纯观察日（没聊天但有事做）也算有素材的一天。
     obs_items = _diary_observation_lines(day) + _revisit_atom_lines(day)
-    if not by_project and not obs_items:
+    # life 事件层交接（worklog lifelike-presence §10，2026-11-10）：项目 days/<day>.md
+    # 是她这一天的客观流水（life 侧产出、给人看），巩固期读进来由她取舍写进
+    # 主观日记——不逐字入库、不占日记键，只是素材。
+    life_items = _diary_life_day_lines(day)
+    if not by_project and not obs_items and not life_items:
         return 0
     # 该日完成任务（标题级一句话；任务明细走轨迹，日记只收经历）
     try:
@@ -2495,6 +2509,10 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]],
         recs = [line for _, line in sorted(chosen, key=lambda x: x[0])]
         recs = recs[-_DIARY_MAX_LINES:]
         material = "\n".join(recs)
+        life_lines = "\n".join(line for _, line in life_items)
+        if life_lines:
+            # 生活流水整段必进素材（不进尾窗裁剪）——这是「模拟生活带上」的入料口
+            material += "\n\n[今天的生活]\n" + life_lines
         task_lines = "\n".join(
             f"- 完成任务：{str(t.get('title') or t.get('objective') or '')[:60]}"
             for t in done_day)
@@ -2510,7 +2528,8 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]],
             system += (
                 "\n身份锚：以下是「你」在本设备的已知名字（任一出现都指你自己，"
                 f"不是聊天对象）：{'、'.join(known)}。")
-        data = llm_judge.chat_json(brain_cfg, system, material, timeout=90.0)
+        # 字数帽 1800 + reasoning 思考余量：日记调用预算单独抬到 8000
+        data = llm_judge.chat_json(_batch_llm_cfg(brain_cfg, floor=8000), system, material, timeout=120.0)
         diary = str((data or {}).get("diary") or "").strip()
         if not diary:
             return 0
@@ -2832,7 +2851,7 @@ def maintain_month_diary(brain_cfg: Optional[Dict[str, Any]]) -> int:
             material = "\n\n".join(parts)
             if len(material) < 120:
                 continue
-            data = llm_judge.chat_json(brain_cfg, _DIARY_MONTH_SYSTEM, material, timeout=90.0)
+            data = llm_judge.chat_json(_batch_llm_cfg(brain_cfg), _DIARY_MONTH_SYSTEM, material, timeout=90.0)
             summary = str((data or {}).get("summary") or "").strip()[:80]
             body = str((data or {}).get("month_diary") or "").strip()
             if not body:
