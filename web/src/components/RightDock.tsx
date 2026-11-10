@@ -13,6 +13,7 @@ import {
   Typography,
 } from "@mui/material";
 import {
+  BrainIcon,
   BugIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -35,6 +36,7 @@ import GitTab from "./dock/GitTab.tsx";
 import TerminalTab from "./dock/TerminalTab.tsx";
 import OutboxTab from "./dock/OutboxTab.tsx";
 import DebugPanel from "./DebugPanel.tsx";
+import MemoryPanel from "./debug/MemoryPanel.tsx";
 import { useTaskStore, type DockTab, type DockView } from "../store/taskStore.tsx";
 import { workspaceApi } from "../api/client.ts";
 import { fmtBytes } from "./dock/FilesTab.tsx";
@@ -80,6 +82,7 @@ const VIEWS: { key: DockView; label: string; icon: React.ReactNode }[] = [
   { key: "files", label: "查看产物", icon: <FolderIcon fontSize="small" /> },
   { key: "browser", label: "打开浏览器", icon: <GlobeIcon fontSize="small" /> },
   { key: "git", label: "查看变更", icon: <GitCompareArrowsIcon fontSize="small" /> },
+  { key: "memory", label: "记忆", icon: <BrainIcon fontSize="small" /> },
   { key: "terminal", label: "打开终端", icon: <TerminalIcon fontSize="small" /> },
   { key: "debug", label: "Debug", icon: <BugIcon fontSize="small" /> },
   { key: "outbox", label: "出站审批", icon: <ImageIcon fontSize="small" /> },
@@ -199,6 +202,7 @@ function DockBody({ view }: { view: DockTab }) {
     case "files": return <FilesTab />;
     case "browser": return <BrowserTab />;
     case "git": return <GitTab />;
+    case "memory": return <MemoryPanel />;
     case "terminal": return <TerminalTab />;
     case "outbox": return <OutboxTab />;
     case "debug":

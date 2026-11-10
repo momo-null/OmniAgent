@@ -128,6 +128,11 @@ class TaskStore:
                 continue
             if state and meta.get("state") != state:
                 continue
+            # 最后活跃时间：trajectory.jsonl 每轮都在写，mtime 即「最近一次跑」；
+            # 没跑过的任务回退 task.json mtime（= 创建时间）。task.json 自己的
+            # updated_at 只在创建时写一次，不能当活跃时间用。
+            traj = d / "trajectory.jsonl"
+            meta["last_active_at"] = _iso_from_mtime(traj if traj.exists() else pj)
             out.append(meta)
         # 按创建时间倒序（同毫秒用 task_id 兜底，保证稳定）
         out.sort(key=lambda m: (m.get("created_at", ""), m.get("task_id", "")), reverse=True)

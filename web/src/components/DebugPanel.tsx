@@ -4,18 +4,16 @@
 import { useState } from "react";
 import { Box, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import {
-  BrainIcon, EraserIcon, TerminalIcon, ZapIcon,
+  EraserIcon, TerminalIcon, ZapIcon,
 } from "./icons";
 import ScrollArea from "./ScrollArea.tsx";
-import MemoryPanel from "./debug/MemoryPanel.tsx";
 import MetricsPanel from "./debug/MetricsPanel.tsx";
 import { Empty, KV, Pre, Row, StatusBar, Toolbar } from "./debug/shared";
 import type { DebugLog } from "../store/taskStore";
 
-type View = "log" | "memory" | "metrics";
+type View = "log" | "metrics";
 const VIEWS: { key: View; label: string; icon: typeof TerminalIcon }[] = [
   { key: "log", label: "实时日志", icon: TerminalIcon },
-  { key: "memory", label: "记忆", icon: BrainIcon },
   { key: "metrics", label: "监控", icon: ZapIcon },
 ];
 
@@ -130,8 +128,7 @@ export default function DebugPanel({ logs, onClear }: {
       </Stack>
 
       <Box sx={{ flex: 1, minWidth: 0, minHeight: 0 }}>
-        {view === "log" ? <LogPane logs={logs} /> :
-          view === "memory" ? <MemoryPanel /> : <MetricsPanel />}
+        {view === "log" ? <LogPane logs={logs} /> : <MetricsPanel />}
       </Box>
     </Stack>
   );

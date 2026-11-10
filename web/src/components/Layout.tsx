@@ -24,7 +24,6 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   ClockIcon,
-  EllipsisVerticalIcon,
   FolderIcon,
   FolderOpenIcon,
   PencilIcon,
@@ -57,13 +56,31 @@ const ROW_DENSE_SX = { ...ROW_SX, py: 0.25, mb: 0 };
 const LABEL_NAV = { fontSize: "1rem" };        // 14px
 const LABEL_ROW = { fontSize: "0.9286rem" };   // 13px
 const LABEL_CHILD = { fontSize: "0.8571rem" }; // 12px：项目下的会话，比父行矮一档
-const LABEL_META = { fontSize: "0.7857rem" };  // 11px：副标题 / N 任务
+const LABEL_META = { fontSize: "0.7857rem" };  // 11px：副标题 / N 任务 / 行尾相对时间
+
+// git 式相对时间（任务行行尾）：刚刚 / N分钟 / N小时 / N天，超过 30 天回退日期。
+// 入参是后端 last_active_at（ISO，UTC 带时区），解析失败/缺了返回空（不显示）。
+function relTime(iso?: string): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const min = Math.floor(Math.max(0, Date.now() - t) / 60000);
+  if (min < 1) return "刚刚";
+  if (min < 60) return `${min}分钟`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}小时`;
+  const day = Math.floor(hr / 24);
+  if (day <= 30) return `${day}天`;
+  const d = new Date(t);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 
 export default function Layout() {
   const {
     view, setView, tasks, currentTaskId, selectTask,
     refreshTasks, connectStream, disconnectStream, taskTitles, taskObjectives,
-    taskProjects, deleteTask, renameTask, runningByTask,
+    taskProjects, taskTimes, deleteTask, renameTask, runningByTask,
   } = useTaskStore();
 
   const [tasksOpen, setTasksOpen] = useState(true);
@@ -78,7 +95,8 @@ export default function Layout() {
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({});
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveNewProject, setSaveNewProject] = useState("");
-  const [projMenuAnchor, setProjMenuAnchor] = useState<null | HTMLElement>(null);
+  // 右键菜单定位（项目行）：记鼠标坐标，Menu 用 anchorPosition 在点击处弹出
+  const [projMenuPos, setProjMenuPos] = useState<{ mouseX: number; mouseY: number } | null>(null);
   const [projMenuId, setProjMenuId] = useState("");
 
   const refreshProjects = () =>
@@ -88,8 +106,8 @@ export default function Layout() {
 
   useEffect(() => { refreshProjects(); }, []);
 
-  // 任务右键菜单状态
-  const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
+  // 任务右键菜单状态：右键行任意位置弹出（坐标即弹出点），不再有 3 点按钮
+  const [menuPos, setMenuPos] = useState<{ mouseX: number; mouseY: number } | null>(null);
   const [menuTaskId, setMenuTaskId] = useState("");
   // 重命名对话框状态（任务）
   const [renameOpen, setRenameOpen] = useState(false);
@@ -288,6 +306,11 @@ ${assets}`)) {
                   <Box key={p.id}>
                     <Box
                       sx={{ display: "flex", alignItems: "center", borderRadius: 2, "&:hover": { bgcolor: "action.hover" } }}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setProjMenuId(p.id);
+                        setProjMenuPos({ mouseX: e.clientX, mouseY: e.clientY });
+                      }}
                     >
                       <ListItemButton
                         onClick={() => setOpenProjects((prev) => ({ ...prev, [p.id]: !open }))}
@@ -307,18 +330,6 @@ ${assets}`)) {
                           secondaryTypographyProps={{ noWrap: true, variant: "caption", sx: LABEL_META }}
                         />
                       </ListItemButton>
-                      <IconButton
-                        size="small"
-                        sx={{ flexShrink: 0, ml: 0.25 }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setProjMenuId(p.id);
-                          setProjMenuAnchor(e.currentTarget);
-                        }}
-                        aria-label="项目操作"
-                      >
-                        <EllipsisVerticalIcon fontSize="small" />
-                      </IconButton>
                     </Box>
                     {/* 项目下的任务（保存到项目的任务挂在这里，点击打开会话） */}
                     {projTasks.length > 0 && (
@@ -328,6 +339,11 @@ ${assets}`)) {
                             <Box
                               key={t}
                               sx={{ display: "flex", alignItems: "center", borderRadius: 2, "&:hover": { bgcolor: "action.hover" } }}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                setMenuTaskId(t);
+                                setMenuPos({ mouseX: e.clientX, mouseY: e.clientY });
+                              }}
                             >
                               <ListItemButton
                                 selected={t === currentTaskId}
@@ -342,18 +358,15 @@ ${assets}`)) {
                                   primaryTypographyProps={{ noWrap: true, sx: LABEL_CHILD }}
                                 />
                               </ListItemButton>
-                              <IconButton
-                                size="small"
-                                sx={{ flexShrink: 0, ml: 0.25 }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setMenuTaskId(t);
-                                  setMenuAnchor(e.currentTarget);
-                                }}
-                                aria-label="任务操作"
-                              >
-                                <EllipsisVerticalIcon fontSize="small" />
-                              </IconButton>
+                              {taskTimes[t] && (
+                                <Typography
+                                  variant="caption"
+                                  title={new Date(taskTimes[t]).toLocaleString()}
+                                  sx={{ flexShrink: 0, mr: 1, ...LABEL_META, color: "text.secondary", userSelect: "none" }}
+                                >
+                                  {relTime(taskTimes[t])}
+                                </Typography>
+                              )}
                             </Box>
                           ))}
                         </List>
@@ -390,6 +403,11 @@ ${assets}`)) {
                 <Box
                   key={t}
                   sx={{ display: "flex", alignItems: "center", borderRadius: 2, "&:hover": { bgcolor: "action.hover" } }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setMenuTaskId(t);
+                    setMenuPos({ mouseX: e.clientX, mouseY: e.clientY });
+                  }}
                 >
                   <ListItemButton
                     selected={t === currentTaskId}
@@ -412,33 +430,31 @@ ${assets}`)) {
                       }}
                     />
                   </ListItemButton>
-                  <IconButton
-                    size="small"
-                    sx={{ flexShrink: 0, ml: 0.25 }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setMenuTaskId(t);
-                      setMenuAnchor(e.currentTarget);
-                    }}
-                    aria-label="任务操作"
-                  >
-                    <EllipsisVerticalIcon fontSize="small" />
-                  </IconButton>
+                  {taskTimes[t] && (
+                    <Typography
+                      variant="caption"
+                      title={new Date(taskTimes[t]).toLocaleString()}
+                      sx={{ flexShrink: 0, mr: 1, ...LABEL_META, color: "text.secondary", userSelect: "none" }}
+                    >
+                      {relTime(taskTimes[t])}
+                    </Typography>
+                  )}
                 </Box>
               ))
             )}
           </List>
         </Collapse>
 
-        {/* 项目操作菜单：新建会话直接挂到该项目下 + 删除项目（C5） */}
+        {/* 项目右键菜单：新建会话直接挂到该项目下 + 删除项目（C5） */}
         <Menu
-          anchorEl={projMenuAnchor}
-          open={Boolean(projMenuAnchor)}
-          onClose={() => setProjMenuAnchor(null)}
+          open={projMenuPos !== null}
+          onClose={() => setProjMenuPos(null)}
+          anchorReference="anchorPosition"
+          anchorPosition={projMenuPos ? { top: projMenuPos.mouseY, left: projMenuPos.mouseX } : undefined}
         >
           <MenuItem onClick={async () => {
             const pid = projMenuId;
-            setProjMenuAnchor(null);
+            setProjMenuPos(null);
             try {
               const r = await taskApi.create({ objective: "", project_id: pid });
               const tid = (r.data as { task?: { task_id?: string } })?.task?.task_id;
@@ -459,14 +475,14 @@ ${assets}`)) {
             setProjRenameId(pid);
             setProjRenameValue(displayNameOf(pid));
             setProjRenameOpen(true);
-            setProjMenuAnchor(null);
+            setProjMenuPos(null);
           }}>
             <ListItemIcon sx={{ minWidth: 32 }}><PencilIcon fontSize="small" /></ListItemIcon>
             重命名
           </MenuItem>
           <MenuItem onClick={() => {
             const pid = projMenuId;
-            setProjMenuAnchor(null);
+            setProjMenuPos(null);
             void deleteProject(pid);
           }} sx={{ color: "error.main" }}>
             <ListItemIcon sx={{ minWidth: 32, color: "error.main" }}><TrashIcon fontSize="small" /></ListItemIcon>
@@ -474,23 +490,24 @@ ${assets}`)) {
           </MenuItem>
         </Menu>
 
-        {/* 任务右键/更多菜单 */}
+        {/* 任务右键菜单 */}
         <Menu
-          anchorEl={menuAnchor}
-          open={Boolean(menuAnchor)}
-          onClose={() => setMenuAnchor(null)}
+          open={menuPos !== null}
+          onClose={() => setMenuPos(null)}
+          anchorReference="anchorPosition"
+          anchorPosition={menuPos ? { top: menuPos.mouseY, left: menuPos.mouseX } : undefined}
         >
           <MenuItem onClick={() => {
             setRenameValue(taskLabel(menuTaskId));
             setRenameOpen(true);
-            setMenuAnchor(null);
+            setMenuPos(null);
           }}>
             <ListItemIcon sx={{ minWidth: 32 }}><PencilIcon fontSize="small" /></ListItemIcon>
             改名
           </MenuItem>
           <MenuItem onClick={async () => {
             const id = menuTaskId;
-            setMenuAnchor(null);
+            setMenuPos(null);
             try {
               const r = await taskApi.openFolder(id);
               if (!r.data?.ok) window.alert(`打开失败：${r.data?.error || "未知错误"}`);
@@ -507,7 +524,7 @@ ${assets}`)) {
             <MenuItem onClick={() => {
               setSaveNewProject("");
               setSaveOpen(true);
-              setMenuAnchor(null);
+              setMenuPos(null);
             }}>
               <ListItemIcon sx={{ minWidth: 32 }}><SaveIcon fontSize="small" /></ListItemIcon>
               保存到项目…
@@ -515,7 +532,7 @@ ${assets}`)) {
           )}
           <MenuItem onClick={() => {
             const id = menuTaskId;
-            setMenuAnchor(null);
+            setMenuPos(null);
             if (window.confirm(`确定删除任务「${taskLabel(id)}」？\n将同时删除其全部落盘数据（轨迹/世界模型/收集/技能）。`)) {
               deleteTask(id);
             }

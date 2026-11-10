@@ -15,8 +15,8 @@ export interface DebugLog {
 
 export type MainView = "chat" | "cron";
 
-// 右侧栏（RightDock）页签：文件/产物 · 浏览器 · git 变更 · 终端 · Debug · 出站审批
-export type DockTab = "files" | "browser" | "git" | "terminal" | "debug" | "outbox";
+// 右侧栏（RightDock）页签：文件/产物 · 浏览器 · git 变更 · 记忆 · 终端 · Debug · 出站审批
+export type DockTab = "files" | "browser" | "git" | "memory" | "terminal" | "debug" | "outbox";
 // dock 窗口内页签视图：home=主页（入口列表），其余为功能视图
 export type DockView = "home" | DockTab;
 // 浏览器式页签（每页签记住自己停在哪个视图）
@@ -79,6 +79,9 @@ interface TaskStoreValue {
 
   taskTitles: Record<string, string>;
   taskObjectives: Record<string, string>;
+  // 任务最后活跃时间（后端 TaskStore.list 附的 last_active_at，trajectory mtime），
+  // 侧栏任务行右侧的 git 式相对时间用
+  taskTimes: Record<string, string>;
 
   debugLogs: DebugLog[];
   pushDebugLog: (m: DebugLog) => void;
@@ -158,6 +161,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   // localStorage 的 taskTitles 仅作 rename 覆盖
   const [taskObjectives, setTaskObjectives] = useState<Record<string, string>>({});
   const [taskProjects, setTaskProjects] = useState<Record<string, string>>({});
+  const [taskTimes, setTaskTimes] = useState<Record<string, string>>({});
   const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
   // 对话区实时过程流（思考 + 工具调用），与右栏 debug 日志解耦
   const [processLogs, setProcessLogs] = useState<ProcessItem[]>([]);
@@ -353,8 +357,14 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   const refreshTasks = useCallback(async () => {
     try {
       const r = await taskApi.list();
-      const d = r.data as { tasks: { task_id: string; objective?: string; title?: string }[] };
+      const d = r.data as { tasks: { task_id: string; objective?: string; title?: string; last_active_at?: string }[] };
       setTasks((d.tasks || []).map((t) => t.task_id));
+      // 任务最后活跃时间：侧栏 git 式相对时间（每次全量重建，删掉的任务自然落掉）
+      const times: Record<string, string> = {};
+      for (const t of d.tasks || []) {
+        if (t.last_active_at) times[t.task_id] = t.last_active_at;
+      }
+      setTaskTimes(times);
       // 显示名主源：服务端 title（通道自声明的会话名，如「与「昵称」(1234)的对话」）
       // 优先，回退 objective（Web 会话首条消息即目标）；用户 rename 后用 taskTitles 覆盖
       setTaskObjectives((prev) => {
@@ -944,6 +954,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       taskTitles,
       taskObjectives,
       taskProjects,
+      taskTimes,
       debugLogs, pushDebugLog, clearDebugLogs,
       processLogs, pushProcessLog, clearProcessLogs,
       deleteTask, renameTask,
@@ -951,7 +962,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
       openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath,
       artifactsVersion, bumpArtifactsVersion,
     }),
-    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, runningByTask, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, forceSendMessage, injectOrQueue, removeQueuedAt, queuedMessages, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, taskProjects, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval, dockOpen, dockWin, dockPreviewPath, openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath, artifactsVersion, bumpArtifactsVersion]
+    [view, tasks, projects, currentTaskId, selectTask, refreshTasks, running, runningByTask, messages, pushMessage, clearMessages, snapshot, connectStream, disconnectStream, sendMessage, forceSendMessage, injectOrQueue, removeQueuedAt, queuedMessages, injectMessage, stopTask, maxSteps, deleteTask, renameTask, taskObjectives, taskProjects, taskTimes, debugLogs, pushDebugLog, clearDebugLogs, processLogs, pushProcessLog, clearProcessLogs, pendingApprovals, decideApproval, dockOpen, dockWin, dockPreviewPath, openDock, openDockMenu, closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab, setDockPreviewPath, artifactsVersion, bumpArtifactsVersion]
   );
 
   return <TaskStoreContext.Provider value={value}>{children}</TaskStoreContext.Provider>;
