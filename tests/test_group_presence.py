@@ -117,7 +117,7 @@ def test_thread_hot_lowers_threshold(tmp_path):
     assert promoted == []                      # 冷：wave_floor 0.62 > 0.55
     state["now"] += 20.0                       # 跳出空闲退避
     p.note_own_speech("g1", "我说了一句")
-    state["now"] += 1.0                        # 他人接话在她发言之后
+    state["now"] += 1.0                        # 他人接话在助手发言之后
     p.feed(_ev(state["now"], uid="u2", speaker="李四", text="接着聊"))
     p._evaluate("g1")
     assert len(promoted) == 1                  # 热：0.62×0.8=0.496 ≤ 0.55
@@ -539,7 +539,7 @@ def test_mention_feature_masks_other_members(tmp_path):
 
 def test_name_mention_allows_exact_same_name(monkeypatch, tmp_path):
     """与别名完全同名的其他成员不遮（2026-10-31 实测：三个名片就叫「测试鱼」的
-    bot 在群里，裸名是唯一呼叫形式，全遮 = 她聋了）；严格超集照遮。"""
+    bot 在群里，裸名是唯一呼叫形式，全遮 = 助手聋了）；严格超集照遮。"""
     a = _fish_adapter(monkeypatch, tmp_path)
     monkeypatch.setattr(a, "_bot_nickname", lambda: "")
     monkeypatch.setattr(a, "_member_names",
@@ -593,12 +593,12 @@ def test_named_reply_does_not_make_next_proactive_free(tmp_path):
     p.note_named("g1")
     p.note_own_speech("g1", "被点名回复", proactive=False)     # 被叫醒的发言：免费
     state["now"] += 60.0
-    p.note_own_speech("g1", "自己插一句", proactive=True)        # 不在她开的线程里：计费
+    p.note_own_speech("g1", "自己插一句", proactive=True)        # 不在助手开的线程里：计费
     assert sent() == 1
 
 
 def test_at_other_owned_blocks_new_thread(tmp_path):
-    """@ 归属：有人 @ 了别的成员且被 @ 者已应答 → 对话归他们，她不开新话头。"""
+    """@ 归属：有人 @ 了别的成员且被 @ 者已应答 → 对话归他们，助手不开新话头。"""
     p, promoted, state = _presence(tmp_path, {"enabled_groups": ["g1"],
                                               "aliases": ["测试鱼"],
                                               "weights": {"intercept": 5.0}})
@@ -616,7 +616,7 @@ def test_at_other_owned_blocks_new_thread(tmp_path):
 
 
 def test_at_other_unanswered_or_self_not_owned(tmp_path):
-    """@ 了没人应、或 @ 的是她自己 → 不算归属他人，照常判定。"""
+    """@ 了没人应、或 @ 的是助手自己 → 不算归属他人，照常判定。"""
     p, promoted, state = _presence(tmp_path, {"enabled_groups": ["g1"],
                                               "aliases": ["测试鱼"],
                                               "weights": {"intercept": 5.0}})
@@ -628,7 +628,7 @@ def test_at_other_unanswered_or_self_not_owned(tmp_path):
     p.feed(_ev(state["now"], uid="u9", text="大家聊"))
     p._evaluate("g1")
     assert len(promoted) == 1                     # 叫了没人理 → 大众话头
-    # 李四 @ 她（bot1）→ 对话归她
+    # 李四 @ 助手（bot1）→ 对话归助手
     p.feed(GroupEvent(ts=state["now"] + 1, group_id="g1", user_id="u3", speaker="李四",
                       text="hello", ats=frozenset({"bot1"})))
     state["now"] += 3.0
@@ -638,7 +638,7 @@ def test_at_other_unanswered_or_self_not_owned(tmp_path):
 
 
 def test_at_other_owned_hot_thread_exempt(tmp_path):
-    """热窗续聊豁免：她自己的线程跟进不因第三者 @ 他人而中断。"""
+    """热窗续聊豁免：助手自己的线程跟进不因第三者 @ 他人而中断。"""
     p, promoted, state = _presence(tmp_path, {"enabled_groups": ["g1"],
                                               "aliases": ["测试鱼"],
                                               "weights": {"intercept": 5.0}})
@@ -647,7 +647,7 @@ def test_at_other_owned_hot_thread_exempt(tmp_path):
     p._evaluate("g1")
     assert promoted
     p.note_own_speech("g1", "我说")               # 热窗口打开
-    # 她发言之后，张三 @ 王五且王五应答（旁边开新对话）
+    # 助手发言之后，张三 @ 王五且王五应答（旁边开新对话）
     p.feed(GroupEvent(ts=state["now"] + 1, group_id="g1", user_id="u1", speaker="张三",
                       text="问你", ats=frozenset({"u2"})))
     p.feed(GroupEvent(ts=state["now"] + 2, group_id="g1", user_id="u2", speaker="王五",
@@ -820,7 +820,7 @@ def test_send_records_voice_mode_state(adapter, monkeypatch):
 
 
 def test_bare_name_ignores_quote_line(adapter, monkeypatch):
-    """裸名点名只看正文：引用别的同名鱼的消息不唤醒（回复她本人仍走 quoted_self）。"""
+    """裸名点名只看正文：引用别的同名鱼的消息不唤醒（回复助手本人仍走 quoted_self）。"""
     a, got = adapter
     monkeypatch.setattr(a, "_member_names", lambda gid: {"111": "蓝色测试鱼"})
     monkeypatch.setattr(a, "_gp_aliases", ("测试鱼",))
@@ -828,7 +828,7 @@ def test_bare_name_ignores_quote_line(adapter, monkeypatch):
 
     def fake_api(action, payload):
         if action == "get_msg":
-            if str((payload or {}).get("message_id")) == "11101":   # 她本人的消息
+            if str((payload or {}).get("message_id")) == "11101":   # 助手本人的消息
                 return {"ok": True, "data": {"user_id": 111,
                                              "message": [{"type": "text",
                                                           "data": {"text": "我说的"}}],
@@ -854,7 +854,7 @@ def test_bare_name_ignores_quote_line(adapter, monkeypatch):
     a._handle_event(_reply_event(851, "测试鱼你来", 556), got.append)
     assert len(got) == 1                           # 正文点名照常唤醒
     a._handle_event(_reply_event(852, "说得对", 11101), got.append)
-    assert len(got) == 2                           # 引用她本人（quoted_self）仍唤醒
+    assert len(got) == 2                           # 引用助手本人（quoted_self）仍唤醒
 
 
 def test_group_gates_layered(adapter, monkeypatch):

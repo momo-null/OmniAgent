@@ -90,7 +90,7 @@ def test_no_legacy_migration_code(brain):
         conn.close()
     assert {"peer", "context_key", "source_kind", "observed_at", "provenance",
             "review_after"} <= cols                      # 列在 DDL，不靠 ALTER 补
-    assert {"source_kind", "provenance"} <= l0cols
+    assert {"source_kind", "provenance", "source_external"} <= l0cols
 
 
 def test_observation_search_reads_observation_lane_only(brain):

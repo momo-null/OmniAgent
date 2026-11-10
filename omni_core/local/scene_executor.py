@@ -791,7 +791,7 @@ def write_diary_block(project_id: str, date_str: str, text: str, *,
     """写日记块 ``diary-<日期>.md``（内核巩固期直写；plan persona-social-memory M2）。
 
     H-4（2026-11-06）：落点是**全局叙事目录** ``rp.global_diary()``，``project_id``
-    只作调用兼容、不再决定路径——她的一天跨项目，按日期全局唯一一篇。
+    只作调用兼容、不再决定路径——助手的一天跨项目，按日期全局唯一一篇。
 
     - 当日一篇、幂等（已存在则跳过返回 False）；META.summary = 正文首行（导航地图用）；
     - 日记不占任务块 max_blocks 容量、维护 agent 不可读写（只读资产）；

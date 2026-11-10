@@ -145,7 +145,7 @@ class GroupPresence:
     #: 连续开话守卫：未被点名期间最多连开 N 个新话头（防连环搭话；被点名即清零）
     _CONSEC_LIMIT = 8
     #: @ 归属窗：最近 N 秒内有人 @ 了别的成员**且被 @ 者已应答** → 对话归他们，
-    #: 她不开新话头（2026-10-31 实测：@了别的成员的问答被她插话）。热窗续聊豁免。
+    #: 助手不开新话头（2026-10-31 实测：@了别的成员的问答被助手插话）。热窗续聊豁免。
     _AT_OWNED_SEC = 180.0
     #: 升格与自己发言的关联窗口（outcome 日志里的 latency 观测口径）
     _SPOKE_WINDOW_SEC = 150.0
@@ -320,7 +320,7 @@ class GroupPresence:
         # 热窗口豁免：跟进期内每波都判（退避不掐活跃窗，见 _arm_locked 同款豁免）。
         if not hot and self._backoff_until.get(group_id, 0.0) > now and len(candidates) < 6:
             return "skip", "backoff"
-        # @ 归属：别人点名的对话（被 @ 者已应答）不主动掺和——她只接大众话头。
+        # @ 归属：别人点名的对话（被 @ 者已应答）不主动掺和——助手只接大众话头。
         # 热窗豁免：自己线程的跟进不因第三者 @ 他人而中断。
         if not hot and self._at_other_owned_locked(group_id, now):
             return "skip", "at_other_thread"
@@ -340,10 +340,10 @@ class GroupPresence:
         return "pass", ""
 
     def _at_other_owned_locked(self, group_id: str, now: float) -> bool:
-        """最近有人 @ 了别的成员、且被 @ 者已应答 → 对话归他们（她不主动掺和）。
+        """最近有人 @ 了别的成员、且被 @ 者已应答 → 对话归他们（助手不主动掺和）。
 
-        2026-10-31 实测：某成员 @另一成员 → 被点名者回答 → 她以热窗低阈值
-        升格插话——@ 是对话归属信号，被点名者的应答期内她只旁观。@ 自己/@全体
+        2026-10-31 实测：某成员 @另一成员 → 被点名者回答 → 助手以热窗低阈值
+        升格插话——@ 是对话归属信号，被点名者的应答期内助手只旁观。@ 自己/@全体
         不算归属他人；被 @ 者一直不应答（叫了没人理）不算。
         """
         events = [e for e in self._buffers.get(group_id, ())
@@ -471,9 +471,9 @@ class GroupPresence:
           的判定都靠它；
         - 预算按**对话线程**计：``proactive=False``（点名回复这类被叫醒的发言，
           通道传入）不占预算；``proactive=True`` 且距上次**自己开的话头**超过线程
-          热窗 = 新开话头 → 记 sent、扣意愿、连续开话 +1；她自己开的线程内接话续聊
+          热窗 = 新开话头 → 记 sent、扣意愿、连续开话 +1；助手自己开的线程内接话续聊
           免费。
-        - **免费续聊只看 ``_last_proactive_ts``（她主动开的线程），不看"最近说过
+        - **免费续聊只看 ``_last_proactive_ts``（助手主动开的线程），不看"最近说过
           话"**：旧版用 ``_last_own_ts`` 判定，被点名回复也会刷新它 → 点名密集的
           群里热窗永不冷却，每一次主动发言都被判成「续聊免费」，预算门与 hourly_cap
           整体失效（实测：某点名密集的试点群 4 小时主动发言量超目标 3 倍、
@@ -493,7 +493,7 @@ class GroupPresence:
                 return
             prev_pro = self._last_proactive_ts.get(group_id, 0.0)
             if prev_pro and now - prev_pro <= self.cfg.thread_hot_min * 60.0:
-                # 她自己开的话头内接话：不重复计费
+                # 助手自己开的话头内接话：不重复计费
                 self._log(group_id, {"kind": "outcome", "spoke": True, "thread": "continue"})
                 return
             self._window.setdefault(group_id, deque(maxlen=600)).append((now, "sent", 1.0))

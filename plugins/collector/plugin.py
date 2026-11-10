@@ -6,14 +6,15 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from omni_core.tools.capability import register_capability, unregister_capability
 
 CAPABILITY = "observation_collector"
 
 
-def collect(context_key: str, text: str, provenance: Dict[str, Any]) -> str:
+def collect(context_key: str, text: str, provenance: Dict[str, Any],
+            source_external: Optional[bool] = None) -> str:
     """采集一条见闻。
 
     Args:
@@ -21,10 +22,14 @@ def collect(context_key: str, text: str, provenance: Dict[str, Any]) -> str:
         text: 见闻原文。
         provenance: 结构化出处（platform / surface / actor / ref 等哈希值），
             不含真实账号或 URL 明文；必填，缺出处不入库（H-7）。
+        source_external: 边界层归一的结构信号（是否来自外部可达来源）；
+            不传则由内核读 run 级信号，插件不推断场合键。
     """
     from omni_core import memory_brain
 
-    return memory_brain.capture_observation(context_key, text, provenance=provenance)
+    return memory_brain.capture_observation(
+        context_key, text, provenance=provenance,
+        source_external=source_external)
 
 
 def startup(ctx) -> None:

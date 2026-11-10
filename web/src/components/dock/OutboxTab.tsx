@@ -1,4 +1,4 @@
-// B站待发审批卡（大肥鱼自运营 M3）：主人批准 / 作废她的待出站内容。
+// B站待发审批卡（大肥鱼自运营 M3）：主人批准 / 作废助手的待出站内容。
 // 逻辑全部走后端 /bilibili/outbox*（backend/api/routers/bilibili_api.py）——写路径
 // 单点收口在通道适配器（全量四道闸），这里只是批准入口的换壳。
 import { useCallback, useEffect, useState } from "react";
@@ -85,7 +85,7 @@ export default function OutboxTab() {
         <Button size="small" onClick={() => void load()} sx={{ ml: "auto" }}>刷新</Button>
       </Stack>
       {err && <Typography variant="caption" color="error">{err}</Typography>}
-      {pend.length === 0 && <Typography variant="body2" color="text.secondary">待发队列为空——她觉醒产出的内容会先进这里等你批准。</Typography>}
+      {pend.length === 0 && <Typography variant="body2" color="text.secondary">待发队列为空——助手觉醒产出的内容会先进这里等你批准。</Typography>}
       {pend.map((i) => (
         <Box key={i.no} sx={{ border: 1, borderColor: "divider", borderRadius: 1, p: 1.25 }}>
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 0.5 }}>

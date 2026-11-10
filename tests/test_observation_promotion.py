@@ -14,12 +14,14 @@ def brain(tmp_path, monkeypatch):
     monkeypatch.setattr(mb, "enabled", lambda: True)
 
 
-def _seed_obs(rid, text, context_key="life:2026-11-10", provenance="surface=observe|source=x"):
+def _seed_obs(rid, text, context_key="life:2026-11-10",
+              provenance="surface=observe|source=x", source_external=0):
     conn = mb.open_brain()
     conn.execute("INSERT INTO l0_messages(record_id, context_key, session_id, kind, role, "
-                 "speaker, text, recorded_at, source_kind, provenance) "
+                 "speaker, text, recorded_at, source_kind, provenance, source_external) "
                  "VALUES(?,?, '', 'chat', 'system', '', ?, '2026-11-10T02:00:00', "
-                 "'observation', ?)", (rid, context_key, text, provenance))
+                 "'observation', ?, ?)", (rid, context_key, text, provenance,
+                                          int(source_external)))
     conn.commit()
     conn.close()
 
@@ -101,9 +103,13 @@ def test_promote_merges_into_existing_atom(brain, monkeypatch):
     assert "社区实测" in row[0] and row[1] != "o1"  # 目标条吸收结论，观察 rid 不占新条
 
 
-def test_promote_skips_group_context_observations(brain, monkeypatch):
-    """投毒锁（worklog §9.6）：他人可达场合（group:*）记的见闻只留叙事层，永不升格。"""
-    _seed_obs("g1", "群友说：某装备下版本要削弱", context_key="group:33300001")
+def test_promote_skips_externally_reachable_observations(brain, monkeypatch):
+    """投毒锁（worklog §9.6）：外部可达来源记的见闻只留叙事层，永不升格。
+
+    判据是边界层盖章的结构信号，不是场合键取值或前缀。
+    """
+    _seed_obs("g1", "群友说：某装备下版本要削弱", context_key="group:33300001",
+              source_external=1)
     _seed_obs("l1", "小红书帖子说：日牌 JSK 二手保值", context_key="life:2026-11-10")
     seen_idx = []
 
@@ -116,11 +122,35 @@ def test_promote_skips_group_context_observations(brain, monkeypatch):
     monkeypatch.setattr(mb.llm_judge, "chat_json", _fake)
     out: dict = {}
     mb.promote_observations({"base_url": "x", "model": "m"}, out)
-    assert out["obs_promoted"] == 1, "group:* 观察不进升格批次"
+    assert out["obs_promoted"] == 1, "外部可达的观察不进升格批次"
     conn = mb.open_brain()
     origins = [r[0] for r in conn.execute("SELECT context_key FROM atoms").fetchall()]
     conn.close()
     assert origins == ["life:2026-11-10"]
+
+
+def test_promote_ignores_context_key_prefix(brain, monkeypatch):
+    """内核不再解析场合键：带 group 前缀但非外部可达的行照常升格。"""
+    _seed_obs("o1", "自己记下的一条见闻", context_key="group:33300001",
+              source_external=0)
+    monkeypatch.setattr(mb.llm_judge, "chat_json", lambda cfg, s, u, **kw: {
+        "items": [{"idx": 0, "text": "一条稳定结论", "kind": "fact",
+                   "importance": 0.5}]})
+    out: dict = {}
+    mb.promote_observations({"base_url": "x", "model": "m"}, out)
+    assert out["obs_promoted"] == 1 and out["obs_stored"] == 1
+
+
+def test_promote_skips_external_signal_on_any_context_key(brain, monkeypatch):
+    """按信号不按来源：普通场合键只要被盖章为外部可达，同样不升格。"""
+    _seed_obs("o1", "外部来源的一条见闻", context_key="life:2026-11-10",
+              source_external=1)
+    calls = []
+    monkeypatch.setattr(mb.llm_judge, "chat_json",
+                        lambda cfg, s, u, **kw: calls.append(1) or {"items": []})
+    out: dict = {}
+    mb.promote_observations({"base_url": "x", "model": "m"}, out)
+    assert calls == [] and out.get("obs_promoted", 0) == 0
 
 
 def test_promote_duplicate_strengthens_existing(brain, monkeypatch):
@@ -151,7 +181,7 @@ def test_promote_conflict_replaces_old_row(brain, monkeypatch):
     conn = mb.open_brain()
     rid = conn.execute("SELECT record_id FROM atoms").fetchone()[0]
     conn.close()
-    _seed_obs("o1", "她自己说：搬家了，现在所在地是上海")
+    _seed_obs("o1", "助手自己说：搬家了，现在所在地是上海")
     monkeypatch.setattr(mb.llm_judge, "chat_json", lambda cfg, s, u, **kw: (
         {"decisions": [{"idx": 0, "action": "conflict", "target_id": rid}]}
         if "新事实" in u else
@@ -173,7 +203,7 @@ def test_promote_overlong_merge_rejected_not_truncated(brain, monkeypatch):
     conn = mb.open_brain()
     rid, old = conn.execute("SELECT record_id, content FROM atoms").fetchone()
     conn.close()
-    _seed_obs("o1", "她说：改代码前先给方案，并且要等我点头确认")
+    _seed_obs("o1", "助手说：改代码前先给方案，并且要等我点头确认")
     monkeypatch.setattr(mb.llm_judge, "chat_json", lambda cfg, s, u, **kw: (
         {"decisions": [{"idx": 0, "action": "merge", "target_id": rid,
                         "merged_content": "约" * 250}]}
@@ -190,6 +220,45 @@ def test_promote_overlong_merge_rejected_not_truncated(brain, monkeypatch):
     assert len(rows) == 2 and all(r[2] == "active" for r in rows)
     assert dict((r[0], r[1]) for r in rows)[rid] == old      # 旧条一字未动
     assert n_fts == len(rows)                                # 拒并路径同样一条一行
+
+
+def test_observation_entry_stamps_structure_signal(brain, monkeypatch):
+    """统一入口：显式盖章优先；未盖章时只读 run 级结构信号，内核不推断场合键。"""
+    from omni_core.local.loop import context_signal as cs
+
+    cs.set_boundary(context_key="group:33300001", source_external=False)
+    try:
+        r_int = mb.capture_observation("group:33300001", "内部记的一条见闻",
+                                       provenance={"surface": "observe", "source": "x"})
+        r_ext = mb.capture_observation("life:2026-11-10", "外部记的一条见闻",
+                                       provenance={"surface": "observe", "source": "x"},
+                                       source_external=True)
+        r_run = mb.capture_observation("life:2026-11-10", "本轮信号兜底的一条见闻",
+                                       provenance={"surface": "observe", "source": "x"})
+    finally:
+        cs.set_boundary()
+    conn = mb.open_brain()
+    try:
+        stamped = dict(conn.execute(
+            "SELECT record_id, source_external FROM l0_messages").fetchall())
+    finally:
+        conn.close()
+    assert stamped[r_int] == 0
+    assert stamped[r_ext] == 1
+    assert stamped[r_run] == 0
+    cs.set_boundary(context_key="life:2026-11-10", source_external=True)
+    try:
+        r_run2 = mb.capture_observation("life:2026-11-10", "外部轮次的一条见闻",
+                                        provenance={"surface": "observe", "source": "x"})
+    finally:
+        cs.set_boundary()
+    conn = mb.open_brain()
+    try:
+        v = conn.execute("SELECT source_external FROM l0_messages WHERE record_id=?",
+                         (r_run2,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert v == 1
 
 
 def test_scheduler_fire_passes_job_id(monkeypatch):

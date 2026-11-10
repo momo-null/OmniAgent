@@ -193,7 +193,8 @@ def memory_observe(text: str = "", source: str = "") -> Dict[str, Any]:
     rid = b.capture_observation(
         chat, text,
         provenance={"surface": "observe", "source": source[:160]},
-        source_kind="observation")
+        source_kind="observation",
+        source_external=_is_external_source())
     if not rid:
         return {"ok": False, "error": "写入失败（观察是增强项，可继续当前任务）"}
     return {"ok": True, "record_id": rid}

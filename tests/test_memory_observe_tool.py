@@ -1,6 +1,6 @@
 """memory_observe 工具：观察进料道的 agent 写入面（agent→工具→内核代理）。
 
-红线形态（memory-architecture §2.6）：她的见闻经工具进 capture_observation 统一入口，
+红线形态（memory-architecture §2.6）：助手的见闻经工具进 capture_observation 统一入口，
 不经脚本直写（2026-11-10 起 life 的 publish_diary.py 因此退役）；出处必填（H-7），
 空出处不入库。
 """
@@ -18,9 +18,11 @@ def observe_env(monkeypatch):
     captured: dict = {}
 
     def _fake_capture(context_key, text, provenance=None,
-                      observed_at="", source_kind="observation"):
+                      observed_at="", source_kind="observation",
+                      source_external=None):
         captured.update({"context_key": context_key, "text": text,
-                         "provenance": provenance, "source_kind": source_kind})
+                         "provenance": provenance, "source_kind": source_kind,
+                         "source_external": source_external})
         return "m_abc123"
 
     monkeypatch.setattr(mb, "capture_observation", _fake_capture)
@@ -36,6 +38,19 @@ def test_observe_routes_to_capture_lane(observe_env):
     assert c["source_kind"] == "observation"
     assert c["provenance"]["surface"] == "observe"
     assert c["provenance"]["source"].startswith("小红书")
+    assert c["source_external"] is False
+
+
+def test_observe_stamps_boundary_external_signal(observe_env, monkeypatch):
+    """边界层结构信号由工具显式交给内核，内核不推断场合键。"""
+    from omni_core.local.loop import context_signal as cs
+
+    cs.set_boundary(context_key="life:test", source_external=True)
+    try:
+        r = mt.memory_observe(text="一条见闻", source="某帖")
+    finally:
+        cs.set_boundary()
+    assert r["ok"] and observe_env["source_external"] is True
 
 
 def test_observe_requires_source(observe_env):

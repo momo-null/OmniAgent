@@ -486,13 +486,13 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             send_info.update({"mode": "explicit", "count": len(sent_texts)})
         _record_final("\n\n".join(sent_texts) if sent_texts else answer)
         # ── 记忆写链：chat 与 task 只差**工程节流**（chat 高频合并入队），无记忆语义分支
-        # ──（2026-11-10「事件 → 她的取舍 → 记忆」：L1 由她的显式动作与巩固期内化决定）。
+        # ──（2026-11-10「事件 → 助手的取舍 → 记忆」：L1 由助手的显式动作与巩固期内化决定）。
         try:
             from omni_core import memory_writer
 
             if pid:
                 # 写链按进料道只差**工程节流**（chat 高频合并入队），无记忆语义分支：
-                # L1 生长由她的显式动作与巩固期内化决定（2026-11-10，allow_atoms 退场）。
+                # L1 生长由助手的显式动作与巩固期内化决定（2026-11-10，allow_atoms 退场）。
                 if _l0_kind == "chat":
                     memory_writer.enqueue_throttled(
                         pid, brain_cfg, source_task=real_task_id,

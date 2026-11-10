@@ -443,7 +443,7 @@ def test_image_message_carries_single_data_url(adapter, monkeypatch):
 
 
 def test_group_image_without_at_is_not_downloaded(adapter, monkeypatch):
-    """群聊没 @ 她 → 直接丢弃，连图都不下载（群聊刷图不白白耗流量与 token）。"""
+    """群聊没 @ 助手 → 直接丢弃，连图都不下载（群聊刷图不白白耗流量与 token）。"""
     calls = []
     monkeypatch.setattr(mod, "fetch_image_data_url", lambda url: calls.append(url) or "")
     got, emit = _collector()
@@ -534,7 +534,7 @@ def _non_t1_adapter(monkeypatch):
 def test_unnamed_chatter_attached_on_named_wake(monkeypatch):
     """未点名消息（含图）不派发但留痕；下次点名时以背景块附带，图占位带 id。
 
-    事故场景：群友先发图再点名，她答得像没见过图——因为图从未到达。
+    事故场景：群友先发图再点名，助手答得像没见过图——因为图从未到达。
     修复后 objective 里看得到 `[图片](id=...)`，msg_group_image 就有处可取。
     """
     adapter = _non_t1_adapter(monkeypatch)
@@ -664,7 +664,7 @@ def test_quote_image_annotated_with_id(adapter, monkeypatch):
                     {"type": "text", "data": {"text": "这图什么意思"}}],
         "sender": {"nickname": "阿伟"},
     }, emit)
-    assert len(got) == 1                  # 回复她的消息 = 被点名
+    assert len(got) == 1                  # 回复助手的消息 = 被点名
     assert "[引用] 我: [图片](id=7)" in got[0].text
 
 

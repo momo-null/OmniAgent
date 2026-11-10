@@ -74,6 +74,9 @@ CREATE TABLE IF NOT EXISTS meta(k TEXT PRIMARY KEY, v TEXT);
 # 与原仓库的两处有意差异：① 多一列 ``session_id``——Web/API 会话没有 IM 群号，
 # 靠它定位「当前会话」；② 不建 ``timestamp``（消息原始时间戳）——我们只把消息落盘一次，
 # ``recorded_at`` 就是那个时间，再存一份空列是死字段。
+# ``source_external`` 是边界层在 run 起始归一后盖上的**结构信号**（run 级
+# context_signal.boundary()）：本行是否来自外部可达来源。内核只读写这个布尔列，
+# 不解析任何场合键取值或前缀；信号随行落库，跨轮/跨进程仍可判定。
 _L0_SCHEMA = """
 CREATE TABLE IF NOT EXISTS l0_messages(
   record_id   TEXT PRIMARY KEY,
@@ -85,7 +88,8 @@ CREATE TABLE IF NOT EXISTS l0_messages(
   text        TEXT NOT NULL,
   recorded_at TEXT NOT NULL,
   source_kind TEXT NOT NULL DEFAULT 'chat',
-  provenance  TEXT DEFAULT ''
+  provenance  TEXT DEFAULT '',
+  source_external INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_l0_context_time ON l0_messages(context_key, recorded_at);
 CREATE INDEX IF NOT EXISTS idx_l0_session ON l0_messages(session_id, recorded_at);
@@ -438,17 +442,34 @@ def _l0_conn() -> sqlite3.Connection:
     return _L0_CONN["conn"]
 
 
+def _resolve_source_external(explicit: Optional[bool]) -> bool:
+    """归一「本行是否来自外部可达来源」的结构信号。
+
+    边界层在 run 起始把结论写进 ``context_signal.set_boundary(source_external=...)``；
+    内核只读这个布尔结构信号，不看任何场合键取值。调用方显式盖章时优先。
+    """
+    if explicit is not None:
+        return bool(explicit)
+    try:
+        from omni_core.local.loop import context_signal as _cs
+        return bool((_cs.boundary() or {}).get("source_external") or False)
+    except Exception:
+        return False
+
+
 def index_l0_message(session_id: str, role: str, text: str, *, context_key: str = "",
                      kind: str = "chat", recorded_at: str = "",
                      source_kind: str = "", provenance: str = "",
-                     speaker: str = "") -> str:
+                     speaker: str = "", source_external: Optional[bool] = None) -> str:
     """会话消息入 L0 检索表（写入即入表；任何异常静默——索引不打断主流程）。
 
     ``kind``：``chat``=通道消息，``task``=任务输入（cron/手动派发写进会话的那条 user 气泡）。
     ``source_kind``（§4.6 进料道，INV-13）：``chat`` / ``observation`` / ``task``——
     空则从 ``kind`` 推导（老调用语义不变）；观察原文必须经 ``capture_observation()``
     进入，不得伪装成聊天原话。``provenance`` 为结构化来源指针（不含真实标识）。
-    返回 record_id；未启用/空文本/失败返回空串。
+    ``source_external``：边界层归一后的**结构信号**（本行是否来自外部可达来源），
+    由调用方盖章；未盖章时由 :func:`_resolve_source_external` 读 run 级结构信号，
+    内核不解析场合键。返回 record_id；未启用/空文本/失败返回空串。
     """
     text = str(text or "").strip()
     if not text or not enabled() or not (session_id or context_key):
@@ -467,11 +488,12 @@ def index_l0_message(session_id: str, role: str, text: str, *, context_key: str 
             conn = _l0_conn()
             cur = conn.execute(
                 "INSERT OR IGNORE INTO l0_messages(record_id, context_key, session_id, kind, "
-                "role, speaker, text, recorded_at, source_kind, provenance) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "role, speaker, text, recorded_at, source_kind, provenance, source_external) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (rid, str(context_key or ""), str(session_id or ""), kind, role,
                  str(speaker or ""), body, now,
-                 source_kind, str(provenance or "")[:200]))
+                 source_kind, str(provenance or "")[:200],
+                 1 if _resolve_source_external(source_external) else 0))
             if cur.rowcount:
                 conn.execute("INSERT OR IGNORE INTO l0_fts(record_id, text) VALUES(?,?)",
                              (rid, body))
@@ -490,7 +512,8 @@ def _format_provenance(value: Any) -> str:
 
 
 def capture_observation(context_key: str, text: str, provenance: Any,
-                        observed_at: str = "", source_kind: str = "observation") -> str:
+                        observed_at: str = "", source_kind: str = "observation",
+                        source_external: Optional[bool] = None) -> str:
     """统一观察进料道**唯一入口**（§4.6 / §5.5，R8）：所有非对话来源（主动阅读 /
     检索结果 / 工具产出）都走它写入 ``l0_messages(source_kind=observation)``。
 
@@ -501,6 +524,9 @@ def capture_observation(context_key: str, text: str, provenance: Any,
       不透明字符串、不解析其语义（INV-4）；无别名、不双写、不迁移旧列。
     - ``provenance`` **必填**（H-7）：``platform/surface/actor/ref`` 哈希串或等价
       字典，内核只透传不解析；缺出处不入库，避免再次出现「来源全空」。
+    - ``source_external``：边界层归一后的结构信号（本行是否来自外部可达来源），
+      交给 :func:`_resolve_source_external` 归一后随行落库；内核**只读布尔、
+      不推断任何场合键取值**。巩固期据此判断是否内化为事实。
     - 返回 record_id；未启用 / 空文本 / 失败返回空串（观察是增强项，静默）。
     """
     text = str(text or "").strip()
@@ -513,7 +539,8 @@ def capture_observation(context_key: str, text: str, provenance: Any,
         source_kind = "observation"
     return index_l0_message("", "system", text, context_key=str(context_key),
                             kind="chat", recorded_at=observed_at or "",
-                            source_kind=source_kind, provenance=prov)
+                            source_kind=source_kind, provenance=prov,
+                            source_external=_resolve_source_external(source_external))
 
 
 def _l0_cutoff(days: Any) -> str:
@@ -664,7 +691,8 @@ def _days_since(ts: str) -> float:
 
 #: H-7 schema 闸门：版本不符 = 旧库，直接重建（数据全丢弃，不迁移 / 不双写 / 不留别名）。
 #: 这不是兼容层——不读旧行、不 ALTER 补列、不提供转换脚本，只做「丢掉重来」。
-_SCHEMA_VERSION = "h8"
+#: h9：l0_messages 增 source_external 结构信号列（列在 DDL，版本不符即重建）。
+_SCHEMA_VERSION = "h9"
 _BRAIN_TABLES = ("atoms_fts", "atoms", "l0_fts", "l0_messages",
                  "narrative_fts", "narrative_index", "context_buffer",
                  "circle_note", "meta")
@@ -802,10 +830,10 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
                 allow_write: bool = True) -> Dict[str, int]:
     """任务收尾：语境链 → 关系卡 → L2 维护 → 巩固调度（公共尾段，见 ``_flush_tail``）。
 
-    2026-11-10 起写链为「事件 → 她的取舍 → 记忆」（worklog lifelike-presence §11/§12）：
-    收尾**不再自动提炼 L1 原子**——L1 只走三条她的选择路径：``memory_remember``（显式记）、
-    巩固期 ``promote_observations``（内化她自己记的观察）、episode→rule 抽象。
-    防投毒与拟人取舍同源：世界可以灌进 L0，只有经过她的手才变成「她的」。
+    2026-11-10 起写链为「事件 → 助手的取舍 → 记忆」（worklog lifelike-presence §11/§12）：
+    收尾**不再自动提炼 L1 原子**——L1 只走三条助手的选择路径：``memory_remember``（显式记）、
+    巩固期 ``promote_observations``（内化助手自己记的观察）、episode→rule 抽象。
+    防投毒与拟人取舍同源：世界可以灌进 L0，只有经过助手的手才变成「助手的」。
 
     Args:
         msgs: 已从 capture 缓冲取走的消息（异步写链在入队时取走，worker 后续消费）。
@@ -1864,7 +1892,8 @@ def promote_observations(brain_cfg: Optional[Dict[str, Any]],
 
     - 幂等：升格原子的 ``source_task`` 记观察 record_id，已升格的观察不再重提；
     - 无每日上限：单轮 60 条只是 LLM 窗口约束，剩余随下一次巩固继续；
-    - ``origin`` 取观察 context_key 前缀（如 ``life``）——L2 场景进料按 origin 分组路由。
+    - ``origin`` 取观察 context_key 前缀（如 ``life``）——L2 场景进料按 origin 分组路由；
+    - 只取 ``source_external = 0`` 的观察行：该信号由边界层归一、内核不解析场合键。
     """
     stats = out if out is not None else {}
     if not enabled() or not brain_cfg:
@@ -1876,10 +1905,11 @@ def promote_observations(brain_cfg: Optional[Dict[str, Any]],
                 "SELECT record_id, context_key, text, recorded_at, provenance "
                 "FROM l0_messages WHERE source_kind='observation' AND record_id NOT IN "
                 "(SELECT source_task FROM atoms WHERE source_task != '') "
-                # 投毒锁（worklog lifelike-presence §9.6）：他人可控来源记下的
-                # 见闻只留叙事层，永不升格为世界事实——升格只内化她自己空间
-                # 记的观察（``group:`` 前缀场合 = 他人可达，由边界层归一）。
-                "AND context_key NOT LIKE 'group:%' "
+                # 投毒锁（worklog lifelike-presence §9.6）：外部可达来源记下的
+                # 见闻只留叙事层，永不升格为世界事实。「是否外部可达」由边界层在
+                # run 起始归一成结构信号随行落库，内核只读这一列，不解析场合键
+                # 取值或前缀（INV-4）。
+                "AND source_external = 0 "
                 "ORDER BY recorded_at LIMIT 60").fetchall()
         finally:
             conn.close()
@@ -2191,7 +2221,7 @@ def _consolidate_impl(brain_cfg: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 8) 日记步（plan persona-social-memory M2）：她的一天 → L2 diary 块（失败静默）。
+    # 8) 日记步（plan persona-social-memory M2）：助手的一天 → L2 diary 块（失败静默）。
     #    补齐模式（2026-11-03）：不在线的日子由下一次巩固补写，回看 7 天，超窗放弃。
     try:
         diary_n = maintain_diaries(brain_cfg)
@@ -2239,7 +2269,7 @@ _DIARY_SYSTEM = (
     "气氛词；不要整句、不要评价、不要臆测；没有则空数组。"
     # P6-1（plan §16.3）经历质地：仍是同一篇、同一次调用——多的是现场感
     # 字数帽 900→1800（2026-11-10 用户定）：日记不进注入面无预算约束，
-    # 素材里有 [生活]/[见闻] 全天段，900 字装不下她的一天。
+    # 素材里有 [生活]/[见闻] 全天段，900 字装不下助手的一天。
     #（触发物/心境/带说话人的原话片段），只写素材里看得出来的，不臆造。
     "7) 经历质地：挑 1-3 处写「现场感」——当时是什么勾起了这段互动（一句话、一个物件、"
     "一种气氛），以及你当时的心情或反应；8) 原话片段：最多 1-2 处短原话引用，"
@@ -2257,7 +2287,7 @@ _SELF_NAMES: set = set()
 
 
 def note_self_names(names) -> None:
-    """渠道登记叙事主体（她自己）在本渠道的已知名字/uid（幂集，重复调用无害）。"""
+    """渠道登记叙事主体（助手自己）在本渠道的已知名字/uid（幂集，重复调用无害）。"""
     for n in (names or ()):
         s = str(n or "").strip()
         if s:
@@ -2340,7 +2370,7 @@ def _diary_observation_lines(day: str) -> List[Tuple[str, str]]:
 
 def _diary_life_day_lines(day: str) -> List[Tuple[str, str]]:
     """life 事件层素材（worklog lifelike-presence §10，2026-11-10）：各项目
-    ``days/<day>.md``（她这天的客观流水，life 侧产出）→ ``[生活]`` 素材段。
+    ``days/<day>.md``（助手这天的客观流水，life 侧产出）→ ``[生活]`` 素材段。
 
     与 ``[见闻]`` 同理只作素材不落库；伪 ts 取当天 UTC 正午（= 本地晚八点），
     排序上落在白天对话之后、深夜闲聊之前。任何失败静默返回空（增强项）。
@@ -2391,7 +2421,7 @@ def _revisit_atom_lines(day: str) -> List[Tuple[str, str]]:
 
 def maintain_diary(brain_cfg: Optional[Dict[str, Any]],
                    day: str = "") -> int:
-    """日记步（plan persona-social-memory M2）：巩固期把「她的一天」写成第一人称日记。
+    """日记步（plan persona-social-memory M2）：巩固期把「助手的一天」写成第一人称日记。
 
     每个当日有活动的项目一篇，落 L2 ``diary-<日期>.md``（独立配额、维护 agent 只读）。
     写**昨日**（D+1 语义，2026-11-01 用户确认）：巩固期何时跑都不缺素材——当天尾部
@@ -2483,7 +2513,7 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]],
     # 与对话经历同一篇、第一人称；纯观察日（没聊天但有事做）也算有素材的一天。
     obs_items = _diary_observation_lines(day) + _revisit_atom_lines(day)
     # life 事件层交接（worklog lifelike-presence §10，2026-11-10）：项目 days/<day>.md
-    # 是她这一天的客观流水（life 侧产出、给人看），巩固期读进来由她取舍写进
+    # 是助手这一天的客观流水（life 侧产出、给人看），巩固期读进来由助手取舍写进
     # 主观日记——不逐字入库、不占日记键，只是素材。
     life_items = _diary_life_day_lines(day)
     if not by_project and not obs_items and not life_items:
@@ -2496,7 +2526,7 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]],
                     if localtime.local_date(str(t.get("finished_at") or "")) == day]
     except Exception:
         done_day = []
-    # H-4（§11）：跨项目聚合成「她的一天」——一次 LLM、全局一篇，不再按 pid 各写一篇
+    # H-4（§11）：跨项目聚合成「助手的一天」——一次 LLM、全局一篇，不再按 pid 各写一篇
     try:
         if (scene_executor.diary_dir() / f"diary-{day}.md").exists():
             return 0                                    # 一日一篇，幂等
@@ -2809,7 +2839,7 @@ def maintain_month_diary(brain_cfg: Optional[Dict[str, Any]]) -> int:
     """月记步（plan persona-social-memory M2.5）：把**已结束月份**的日记压缩为月记块。
 
     月记 ``diary-month-<月份>.md`` 是消费地图（META.summary = 关键人物/事件一行式）——
-    她据此知道该翻哪几篇旧日记。规则：只压已结束月份；<3 篇不压；已有月记幂等跳过；
+    助手据此知道该翻哪几篇旧日记。规则：只压已结束月份；<3 篇不压；已有月记幂等跳过；
     失败静默。门控同日记步。月份口径 D-1：**本地日**的当月（``localtime.local_today``）。
     """
     if not enabled() or not brain_cfg:

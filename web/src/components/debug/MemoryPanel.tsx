@@ -25,7 +25,7 @@ function l0Speaker(r: Record<string, unknown>): string {
   if (sp) return sp;
   const role = String(r.role || "");
   const src = String(r.source_kind || "");
-  if (role === "assistant") return "她自己";
+  if (role === "assistant") return "助手本人";
   if (role === "system") return src === "observation" ? "观察记录" : "系统";
   if (src === "task") return "任务输入（主人）";
   const ck = String(r.context_key || "");

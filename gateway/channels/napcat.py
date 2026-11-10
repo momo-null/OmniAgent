@@ -281,7 +281,7 @@ _GROUP_CTX_COUNT = 8
 _GROUP_CTX_ITEM_CHARS = 120
 
 #: 旁听留痕（A，2026-11-08 图片盲区）：未点名群消息原本零痕迹丢弃，named 唤醒的
-#: objective 永远看不见「点名前群里发生了什么」（实测：群友先发图再点名，她答得
+#: objective 永远看不见「点名前群里发生了什么」（实测：群友先发图再点名，助手答得
 #: 像没见过图——因为图从未到达）。这里只做**文本投影** ring buffer（零 LLM，
 #: 图本体仍不预取，占位带 message_id 供 msg_group_image 按需取），named 唤醒时
 #: 以背景块附带、附带即 flush。窗与上限防刷屏群拖爆 objective。
@@ -1163,7 +1163,7 @@ class NapcatAdapter:
         self._member_names_cache[group_id] = (now, names)
         own_card = names.get(str(self._self_id), "")
         if own_card:
-            self._note_self_name(own_card)      # 日记身份锚：她在本群的群名片
+            self._note_self_name(own_card)      # 日记身份锚：助手在本群的群名片
         return names
 
     @staticmethod
@@ -1208,7 +1208,7 @@ class NapcatAdapter:
 
         点名回复是「被叫醒的发言」，不占主动开话预算；波次升格 / cron 等自发
         发言占（线程级——热窗内的接话续聊免费由 presence 侧判定）。查不到来源
-        默认按主动算（保守：宁可多计费也不让她失控刷屏）。
+        默认按主动算（保守：宁可多计费也不让助手失控刷屏）。
         """
         hit = self._wake_origin.get(chat_id)
         if hit and hit[0] == "named" and time.time() - hit[1] <= 600.0:
@@ -1482,7 +1482,7 @@ class NapcatAdapter:
             # 白名单过了才花这次 HTTP；展开失败退回 [引用] 占位。
             quote_line, quoted_self, quote_id = self._expand_quote(raw)
             # 正文（剥掉引用占位、不含引用展开行）：裸名点名只看正文——引用行是
-            # 上下文不是呼叫，引用别的同名鱼不该唤醒她（回复她的消息走 quoted_self）
+            # 上下文不是呼叫，引用别的同名鱼不该唤醒助手（回复助手的消息走 quoted_self）
             body = text.replace("[引用]", "", 1).strip() if quote_line else text
             if quote_line:
                 text = f"{quote_line}\n{body}" if body else quote_line
@@ -1568,7 +1568,7 @@ class NapcatAdapter:
         nickname = sanitize_name(str(sender.get("card") or sender.get("nickname") or ""))
         # ── 场合自述（通道职责，内核零改动）──
         # 通道只交代**处境**（这是你自己的 QQ、在哪个群/跟谁、刚才发生了什么）与
-        # **发送机制**（要说话必须显式调 msg_send_text）；**她是谁、以什么身份说话、
+        # **发送机制**（要说话必须显式调 msg_send_text）；**助手是谁、以什么身份说话、
         # 被骂怎么回、要请示时怎么说，一律不写在这里**——那是角色卡
         # `~/.omniagent/character.md` 的职责（system 注入），换人格不需要改通道。
         #   ① 这是你自己的 QQ（不是"别人转给你看的信息"）；
