@@ -179,3 +179,70 @@ def test_dispatch_stamps_peer_boundary(monkeypatch):
     dispatch.dispatch_sync("构造原文", session_id="s_people_boundary",
                            speaker="构造甲(10001)")
     assert seen == ["构造甲(10001)"]
+
+
+# ---- 5. 主人卡称呼：名字的唯一宿主是卡（identity 署名跟随；不介绍=恒默认） ----
+
+def test_master_display_name_defaults_without_card(brain, monkeypatch):
+    """程序一致性：无卡/未介绍 → 署名恒为缺省「主人」，与历史行为逐字节一致。"""
+    from omni_core.local import identity
+    identity._NAME_CACHE.update({"mtime": None, "name": None})
+    assert identity.master_speaker() == "主人(master)"
+    assert identity.master_display_name() == "主人"
+
+
+def test_master_display_name_follows_card_meta(brain, monkeypatch):
+    """卡里有了称呼（维护写入）→ 署名标签跟随；缓存按 mtime 失效。"""
+    from omni_core.local import identity
+    identity._NAME_CACHE.update({"mtime": None, "name": None})
+    card = identity and rp.global_relations() / "master.md"
+    rp.global_relations().mkdir(parents=True, exist_ok=True)
+    card.write_text(
+        "-----META-START-----\nname: 阿蕾\nuid: master\nupdated: t\n-----META-END-----\n"
+        "【稳定背景】\n- 搭起这个世界的人\n", encoding="utf-8")
+    assert identity.master_display_name() == "阿蕾"
+    assert identity.master_speaker() == "阿蕾(master)"
+    # 坏值回退：META 无 name → 缺省
+    card.write_text("-----META-START-----\nuid: master\n-----META-END-----\n", encoding="utf-8")
+    identity._NAME_CACHE.update({"mtime": None, "name": None})
+    assert identity.master_display_name() == "主人"
+
+
+def test_master_card_maintenance_adopts_name(brain, monkeypatch):
+    """维护者从素材采纳称呼 → 写进 META + 署名跟随；没给称呼 = 原样保留。"""
+    from omni_core.local import identity
+    identity._NAME_CACHE.update({"mtime": None, "name": None})
+    mb._rel_l0_cursor = None  # 关系卡游标在 meta，不受影响；保险清零
+    monkeypatch.setattr(mb, "_peer_lines", lambda limit_days=7: {
+        "master": {"name": "主人", "lines": ["- 他自我介绍：叫我阿蕾，是搭起这个世界的人",
+                                             "- 他说今天缸温刚好"] * 6}})
+    script = [{"card": "【稳定背景】\n- 他叫我阿蕾，是搭起这个世界的人\n【最近交手】聊了称呼\n"
+                       "【他对我的态度】随意\n【我对他的态度】熟",
+               "topics": ["称呼"], "name": "阿蕾"}]
+    monkeypatch.setattr(mb.llm_judge, "chat_json", lambda *a, **k: script.pop(0))
+    assert mb.maintain_relations(CFG) == 1
+    card = rp.global_relations() / "master.md"
+    assert "name: 阿蕾" in card.read_text(encoding="utf-8")
+    assert identity.master_display_name() == "阿蕾"
+
+    # 下一轮没给称呼 → 保留现有称呼（不被缺省冲掉）
+    script.append({"card": "【稳定背景】\n- 他叫我阿蕾，是搭起这个世界的人\n【最近交手】日常\n"
+                           "【他对我的态度】随意\n【我对他的态度】熟",
+                   "topics": ["称呼"], "name": ""})
+    assert mb.maintain_relations(CFG) == 1
+    assert "name: 阿蕾" in card.read_text(encoding="utf-8")
+
+
+def test_master_card_without_introduction_stays_default(brain, monkeypatch):
+    """从不介绍：维护照跑、称呼恒为缺省（程序一致性硬约束）。"""
+    from omni_core.local import identity
+    identity._NAME_CACHE.update({"mtime": None, "name": None})
+    monkeypatch.setattr(mb, "_peer_lines", lambda limit_days=7: {
+        "master": {"name": "主人", "lines": ["- 他让我跑一个采集任务"] * 6}})
+    monkeypatch.setattr(mb.llm_judge, "chat_json", lambda *a, **k: {
+        "card": "【最近交手】派了活\n【他对我的态度】公事公办\n【我对他的态度】配合",
+        "topics": ["任务"], "name": ""})
+    assert mb.maintain_relations(CFG) == 1
+    card = rp.global_relations() / "master.md"
+    assert "name: 主人" in card.read_text(encoding="utf-8")
+    assert identity.master_display_name() == "主人"

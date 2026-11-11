@@ -85,7 +85,7 @@ def test_ui_not_notified_for_temp_task(monkeypatch):
     assert calls == []
 
 
-# === 显式发送（QQ 等 IM）：模型调 msg_send_text 才发，最终回答不再自动外发 =====
+# === 显式发送（QQ 等 IM）：模型调 msg_send_* 才发；纯文本收尾=漏发，兜底代发（2026-11-12 收窄） ===
 
 class _Reply:
     """最小 ReplyChannel 桩：记录真正发出去的内容。"""
@@ -140,21 +140,103 @@ def _assistant_records(session_id):
     return [r for r in recs if r.get("role") == "assistant"]
 
 
-def test_explicit_mode_does_not_auto_send(monkeypatch):
-    """explicit：模型没调发送工具 → 一个字符都不发出去，历史标记未发送。
+class _LoopStaySilent(_FakeLoop):
+    """模型显式选择沉默（msg_stay_silent）——静默是一等决定，不是格式失败。"""
 
-    发送与否是模型自己的决定（含「不发」）；最终回答按通道规则只给主人看，
-    网关不代发、也不拿它兜底（2026-11-04 设计决议）。
+    def run_task(self, spec):
+        cb = self.kwargs["on_tool_call"]
+        cb("brain", "msg_stay_silent", "{}", '{"ok": true}', "m")
+        self.kwargs["on_llm_delta"]("brain", "message", "b1", "这条不用回。", "m")
+        return {"success": True, "summary": "这条不用回。"}
+
+
+class _LoopFailNoSend(_FakeLoop):
+    """失败的 run：最终文本是内部 reason（报错/校验文案），永不该外发。"""
+
+    def run_task(self, spec):
+        self.kwargs["on_llm_delta"]("brain", "message", "b1", "ProviderError: timeout", "m")
+        return {"success": False, "reason": "ProviderError: timeout"}
+
+
+def test_explicit_mode_stay_silent_tool_keeps_silent(monkeypatch):
+    """explicit：模型调 msg_stay_silent → 显式沉默，纯文本不被兜底代发。
+
+    2026-11-12 收窄后的语义：沉默是一等决定（msg_stay_silent）；只有
+    「零 send + 零 silence」的纯文本收尾才视作漏发、由网关兜底代发。
     """
-    _use_loop(monkeypatch, _LoopNoSend)
+    called = []
+    import plugins.messaging.plugin as msg_plugin
+    monkeypatch.setattr(msg_plugin, "msg_send_text",
+                        lambda text, channel="", target="": called.append(text) or {"ok": True})
+    _use_loop(monkeypatch, _LoopStaySilent)
     reply = _Reply()
     dispatch.dispatch_sync("（这是你的 QQ）在吗", session_id="s_qq_explicit_1",
                            display_text="在吗", reply=reply, reply_mode="explicit")
-    assert reply.sent == []
+    assert called == [] and reply.sent == []
     rec = _assistant_records("s_qq_explicit_1")[-1]
     assert rec["extra"]["send"] == {"mode": "explicit", "count": 0}
     # 独白仍留在任务里（给主人看），只是没发出去
     assert "这条不用回" in rec["content"]
+
+
+def test_explicit_mode_plain_text_finish_fallback_sends(monkeypatch):
+    """named 轮「零 send + 零 silence」的纯文本收尾 = 漏发的回复 → 兜底代发。
+
+    实测诱因（doro 私聊 5 条未达）：短附和轮模型把回复写成正文忘了派发工具。
+    代发走 msg_send_text 同一闸门（本测试桩记账同款），前端据此标「已发送」。
+    """
+    called = []
+    import plugins.messaging.plugin as msg_plugin
+
+    def _fake_mst(text, channel="", target=""):
+        called.append(text)
+        from gateway.channels import context as _ctx
+        _ctx.note_sent(text)  # 与真工具同款记账，extra.send 才能反映出来
+        return {"ok": True, "message_id": 1}
+
+    monkeypatch.setattr(msg_plugin, "msg_send_text", _fake_mst)
+    _use_loop(monkeypatch, _LoopNoSend)
+    reply = _Reply()
+    dispatch.dispatch_sync("（这是你的 QQ）在吗", session_id="s_qq_fb1",
+                           display_text="在吗", reply=reply, reply_mode="explicit")
+    assert called == ["这条不用回。"]
+    rec = _assistant_records("s_qq_fb1")[-1]
+    assert rec["extra"]["send"]["count"] == 1
+    assert rec["content"] == "这条不用回。"
+    # 句柄用完即清，不泄漏到下一轮
+    from gateway.channels import context as _ctx
+    assert _ctx.get_current_reply() is None
+
+
+def test_fallback_skips_wave_ambient(monkeypatch):
+    """wave 旁听轮的纯文本独白是合法静默（杠杆1 的素材），绝不代发。"""
+    called = []
+    import plugins.messaging.plugin as msg_plugin
+    monkeypatch.setattr(msg_plugin, "msg_send_text",
+                        lambda text, channel="", target="": called.append(text) or {"ok": True})
+    _use_loop(monkeypatch, _LoopNoSend)
+    reply = _Reply()
+    dispatch.dispatch_sync("（这是你的 QQ）在吗", session_id="s_qq_wave1",
+                           display_text="在吗", reply=reply, reply_mode="explicit",
+                           origin="wave")
+    assert called == []
+    rec = _assistant_records("s_qq_wave1")[-1]
+    assert rec["extra"]["send"]["count"] == 0
+
+
+def test_fallback_skips_failed_run(monkeypatch):
+    """失败 run 的 reason/报错文本是内部信息，永不该外发（success 守卫）。"""
+    called = []
+    import plugins.messaging.plugin as msg_plugin
+    monkeypatch.setattr(msg_plugin, "msg_send_text",
+                        lambda text, channel="", target="": called.append(text) or {"ok": True})
+    _use_loop(monkeypatch, _LoopFailNoSend)
+    reply = _Reply()
+    dispatch.dispatch_sync("（这是你的 QQ）在吗", session_id="s_qq_fail1",
+                           display_text="在吗", reply=reply, reply_mode="explicit")
+    assert called == []
+    rec = _assistant_records("s_qq_fail1")[-1]
+    assert rec["extra"]["send"]["count"] == 0
 
 
 def test_explicit_mode_records_what_was_sent(monkeypatch):
@@ -387,7 +469,7 @@ def test_send_rule_names_both_actions():
 
     assert "msg_send_text" in napcat._SEND_RULE
     assert "msg_stay_silent" in napcat._SEND_RULE
-    assert "只给主人看" in napcat._SEND_RULE  # 最终回答仍是非发送通道
+    assert "只进运行记录" in napcat._SEND_RULE  # 最终回答仍是非发送通道
 
 
 class _VoiceAdapter:

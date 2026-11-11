@@ -359,8 +359,8 @@ def test_watermark_throttles_and_signal_forces_profile(iso, monkeypatch):
     mb.request_profile_update("用户环境从 C 盘迁到 D 盘")
     assert mb.maintain_profile(_BRAIN) is True
     assert "场景整理请求画像更新" in seen.get("user", ""), "信号应作为优先证据并入"
-    from omni_core.local.runtime_paths import user_profile
-    assert user_profile().read_text(encoding="utf-8") == "新画像"
+    from omni_core.local.runtime_paths import self_profile
+    assert self_profile().read_text(encoding="utf-8") == "新画像"
     conn = mb.open_brain()
     row = conn.execute("SELECT v FROM meta WHERE k='persona_update_request'").fetchone()
     conn.close()

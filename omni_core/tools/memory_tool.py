@@ -3,7 +3,7 @@
 落盘权在内核（S1 红线不变）：工具提交意图，由 memory_brain 代理读写 brain.db。
 启用条件：runtime.knowledge.memory.ltm.enabled（未启用时工具返回明确不可用）。
 """
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from omni_core.tools.base import function_tool
 from utils import get_logger
@@ -39,12 +39,15 @@ def _brain_cfg() -> Dict[str, Any]:
 _FETCH_QUOTA = 3        # 七工具合计 ≤3 次 / run
 _NARRATIVE_QUOTA = 2    # narrative_* ≤2 次 / run
 _run_stats: Dict[str, Any] = {"calls": 0, "hits": 0, "top1_id": "", "by_tool": {},
-                              "context_hits": 0, "narrative_cross": 0, "active": False}
+                              "context_hits": 0, "narrative_cross": 0, "active": False,
+                              "evidence": 0, "bundle_taken": 0, "quota_blocked": 0}
 
 
 def reset_recall_stats() -> None:
     _run_stats.update({"calls": 0, "hits": 0, "top1_id": "", "by_tool": {},
-                       "context_hits": 0, "narrative_cross": 0, "active": True})
+                       "context_hits": 0, "narrative_cross": 0, "active": True,
+                       "evidence": 0, "bundle_taken": 0, "quota_blocked": 0})
+    _BUNDLE["items"] = []
 
 
 def take_recall_stats() -> Dict[str, Any]:
@@ -53,25 +56,43 @@ def take_recall_stats() -> Dict[str, Any]:
     return st
 
 
+def _quota_cfg() -> Dict[str, int]:
+    """读侧自取配额（走配置；缺省 3 / 2，行为与旧常量一致）。"""
+    try:
+        import config
+        return {
+            "total": max(1, int(config.get_config(
+                "runtime.knowledge.memory.read_quota.total", _FETCH_QUOTA) or _FETCH_QUOTA)),
+            "narrative": max(0, int(config.get_config(
+                "runtime.knowledge.memory.read_quota.narrative", _NARRATIVE_QUOTA) or 0)),
+        }
+    except Exception:
+        return {"total": _FETCH_QUOTA, "narrative": _NARRATIVE_QUOTA}
+
+
 def quota_left() -> Dict[str, int]:
     """剩余配额（工具侧统一记账；run 作用域外恒视为满额）。"""
+    cfg = _quota_cfg()
     if not _run_stats.get("active"):
-        return {"total": _FETCH_QUOTA, "narrative": _NARRATIVE_QUOTA}
-    return {"total": max(0, _FETCH_QUOTA - int(_run_stats.get("calls") or 0)),
-            "narrative": max(0, _NARRATIVE_QUOTA
+        return {"total": cfg["total"], "narrative": cfg["narrative"]}
+    return {"total": max(0, cfg["total"] - int(_run_stats.get("calls") or 0)),
+            "narrative": max(0, cfg["narrative"]
                              - sum(int(v) for k, v in (_run_stats.get("by_tool") or {}).items()
                                    if str(k).startswith("narrative_")))}
 
 
 def _quota_block(tool: str) -> Dict[str, Any]:
     """超配额的统一拒绝文案（N-5；规则文本与稳定段同口径）。"""
+    cfg = _quota_cfg()
     left = quota_left()
     if left["narrative"] <= 0 and str(tool).startswith("narrative_"):
+        _run_stats["quota_blocked"] = int(_run_stats.get("quota_blocked") or 0) + 1
         return {"ok": False,
-                "error": f"本轮叙事检索配额已用完（narrative_* ≤{_NARRATIVE_QUOTA} 次/run）"}
+                "error": f"本轮叙事检索配额已用完（narrative_* ≤{cfg['narrative']} 次/run）"}
     if left["total"] <= 0:
+        _run_stats["quota_blocked"] = int(_run_stats.get("quota_blocked") or 0) + 1
         return {"ok": False,
-                "error": f"本轮自取过往的配额已用完（七工具合计 ≤{_FETCH_QUOTA} 次/run）——"
+                "error": f"本轮自取过往的配额已用完（七工具合计 ≤{cfg['total']} 次/run）——"
                          "先消化已拿到的内容，不要反复换关键词硬查"}
     return {}
 
@@ -92,6 +113,114 @@ def note_self_fetch(hits: int = 0, top1_id: str = "", tool: str = "") -> None:
         _run_stats["hits"] += int(hits)
         if not _run_stats["top1_id"] and top1_id:
             _run_stats["top1_id"] = str(top1_id)
+
+
+def _bundle_cfg() -> Dict[str, Any]:
+    """读侧候选包参数（全部走配置：内核零词表、零场合键分支）。"""
+    p = "runtime.knowledge.memory.read_bundle"
+    try:
+        import config
+        return {
+            "enabled": bool(config.get_config(p + ".enabled", True)),
+            "total_cap": max(1, int(config.get_config(p + ".total_cap", 2) or 2)),
+            "item_chars": max(20, int(config.get_config(p + ".item_chars", 60) or 60)),
+            "l1_min_score": float(config.get_config(p + ".l1_min_score", 0.60) or 0.60),
+            "narrative_min_score": float(
+                config.get_config(p + ".narrative_min_score", 0.65) or 0.65),
+            "l0_limit": max(0, int(config.get_config(p + ".l0_limit", 0) or 0)),
+        }
+    except Exception:
+        return {"enabled": False, "total_cap": 2, "item_chars": 60,
+                "l1_min_score": 0.60, "narrative_min_score": 0.65, "l0_limit": 0}
+
+
+#: 本 run 的高置信候选包（run 级内存）。内容**只经 memory_recall 空 query 取用**，
+#: 不进 system / 不进 items —— 检索结果永不自动注入（INV-4）。
+_BUNDLE: Dict[str, Any] = {"items": []}
+
+
+def build_candidate_bundle(query: str = "", context_key: str = "",
+                           session_id: str = "", peer: str = "") -> int:
+    """run 起始：把现有带分数的检索器的过线结果合成一个候选包。
+
+    三通道都只用内核现有检索函数与结构参数，不使用词表、场合键前缀或平台名
+    （INV-4 / R5）；阈值与条数全部来自 :func:`_bundle_cfg`。叙事通道额外要求
+    词面与当轮输入相交，避免「按近因浏览」的固定几条被当成候选（实测噪声源）。
+    返回候选条数并写入观测账本 ``evidence``；任何异常静默返回 0。
+    """
+    _BUNDLE["items"] = []
+    cfg = _bundle_cfg()
+    q = str(query or "").strip()
+    if not cfg.get("enabled") or len(q) < 2:
+        return 0
+    b = _brain()
+    try:
+        if not b.enabled():
+            return 0
+    except Exception:
+        return 0
+    items: List[Dict[str, Any]] = []
+    chars = int(cfg["item_chars"])
+    ck, sid, pr = str(context_key or ""), str(session_id or ""), str(peer or "")
+    try:
+        for h in b.search_brain(q, k=3, reinforce=False, peer=pr, context_key=ck):
+            if float(h.get("score") or 0) < cfg["l1_min_score"]:
+                continue
+            items.append({"src": "atom", "text": str(h.get("content") or "")[:chars],
+                          "score": float(h.get("score") or 0),
+                          "doc_id": str(h.get("record_id") or "")})
+    except Exception:
+        pass
+    try:
+        uniq = set(str(t) for t in b._query_terms(q) if t)
+
+        def _face_ok(face: str) -> bool:
+            """词面覆盖率闸（与 search_brain 的 glue 门槛同口径，零词表）。"""
+            if not uniq:
+                return True
+            hit = sum(1 for t in uniq if t in face)
+            return hit / len(uniq) >= 0.34
+
+        for h in b.search_narrative(q, limit=3, peer=pr, context_key=ck,
+                                    require_match=True):
+            if float(h.get("score") or 0) < cfg["narrative_min_score"]:
+                continue
+            face = " ".join([str(h.get("summary") or ""),
+                             " ".join(str(t) for t in (h.get("topics") or []))]).lower()
+            if not _face_ok(face):
+                continue
+            items.append({"src": "narrative", "text": str(h.get("summary") or "")[:chars],
+                          "score": float(h.get("score") or 0),
+                          "doc_id": str(h.get("doc_id") or ""),
+                          "kind": str(h.get("kind") or "")})
+    except Exception:
+        pass
+    try:
+        if cfg["l0_limit"]:
+            terms = b._query_terms(q)
+            if terms:
+                for h in b.search_l0(str(terms[0]), limit=int(cfg["l0_limit"]),
+                                     context_key=ck, session_id=sid):
+                    items.append({"src": "raw", "text": str(h.get("text") or "")[:chars],
+                                  "score": 0.0, "doc_id": ""})
+    except Exception:
+        pass
+    items.sort(key=lambda x: -float(x.get("score") or 0))
+    _BUNDLE["items"] = items[:int(cfg["total_cap"])]
+    _run_stats["evidence"] = len(_BUNDLE["items"])
+    return len(_BUNDLE["items"])
+
+
+def take_candidate_bundle() -> List[Dict[str, Any]]:
+    """一次取用（1 次/run，独立额度；不占七工具合计 ≤3 次/run 的深挖配额）。"""
+    if not _BUNDLE["items"] or int(_run_stats.get("bundle_taken") or 0) >= 1:
+        return []
+    _run_stats["bundle_taken"] = 1
+    return [dict(x) for x in _BUNDLE["items"]]
+
+
+def bundle_size() -> int:
+    return len(_BUNDLE["items"])
 
 
 def _run_source() -> str:
@@ -132,7 +261,10 @@ def log_recall_run(project: str = "", context_key: str = "", source_kind: str = 
             top1_id=str(st.get("top1_id") or ""),
             context_hits=int(st.get("context_hits") or 0),
             narrative_cross=int(st.get("narrative_cross") or 0),
-            sent=bool(sent), llm_calls_delta=int(llm_calls_delta or 0))
+            sent=bool(sent), llm_calls_delta=int(llm_calls_delta or 0),
+            evidence=int(st.get("evidence") or 0),
+            bundle_taken=int(st.get("bundle_taken") or 0),
+            quota_blocked=int(st.get("quota_blocked") or 0))
     except Exception:
         pass
 
@@ -214,6 +346,16 @@ def memory_recall(query: str = "", k: int = 5) -> Dict[str, Any]:
     b = _brain()
     if not b.enabled():
         return {"ok": False, "error": "长期记忆未启用（ltm.enabled）"}
+    q = (query or "").strip()
+    if not q:
+        # 空 query = 取本轮候选证据（1 次/run，独立额度，不占深挖配额）。
+        # 内容只在这一个工具返回里出现，不进 system/items（INV-4）。
+        items = take_candidate_bundle()
+        if not items:
+            return {"ok": True, "hits": [], "candidates": [],
+                    "note": "本轮没有高置信候选证据（或已取过）；不必再查"}
+        return {"ok": True, "hits": [], "candidates": items,
+                "note": "这些是线索不是结论，只供你自己参考；不必都用，也不要照抄到对外消息"}
     blocked = _quota_block("memory_recall")
     if blocked:
         return blocked

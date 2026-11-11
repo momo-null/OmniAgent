@@ -140,6 +140,21 @@ runtime:
           relevance: 0.55
           salience: 0.30
           recency: 0.15
+      # 读侧候选包：run 起始用现有带分数的检索器备好高置信线索，只存 run 级内存，
+      # 内容不进 system/items（INV-4）；模型用 memory_recall（不带 query）一次取用。
+      # 条数 N 只落观测，不进 prompt —— 避免每轮提示查资料伤拟人。
+      read_bundle:
+        enabled: true
+        # 阈值经 2026-11-11 真机重放校准：宽松档会让 68/71 轮都出候选（几乎全是
+        # 无关日记噪声），等于每轮提示查资料、伤拟人。收紧后只留少数高置信轮次。
+        total_cap: 2            # 一次最多给几条线索
+        item_chars: 60          # 每条短结论上限（适配对外短句）
+        l1_min_score: 0.60      # L1 过线闸（高于 ltm.inject_floor）
+        narrative_min_score: 0.65  # 叙事过线闸；另要求 FTS 真命中 + 词面覆盖 ≥0.34
+        l0_limit: 0             # 逐字原话线索条数（实测群聊噪声大，缺省关；要开置 1）
+      read_quota:
+        total: 3                # 七工具合计深挖自取次数
+        narrative: 2            # 候选包取用走独立额度，不占这里
 
 # ── security：权限模式与审批（⚠ 顶层节，不是 runtime.security）──────────────
 # 谁来读：graph_runner 在 run 起始把这份快照凝固进 SecurityContext，run 内不变

@@ -140,6 +140,24 @@ async def debug_memory_document(request: Request):
     return _resp(data.read_document, mb, key)
 
 
+@router.delete("/memory/relation-card")
+async def debug_memory_relation_card_delete(request: Request):
+    """手动注销一张关系卡（admin 动作）：删正文 + 撤叙事索引；主人卡拒绝。
+
+    用途：错卡/重复卡/想让她忘掉某人。冻结退役是默认（7 天窗外停更不删），
+    这里只处理显式的人工决定。
+    """
+    from omni_core import memory_brain as mb
+
+    uid = str(request.query_params.get("uid") or "").strip()
+    if not uid:
+        return JSONResponse({"ok": False, "error": "uid 为空"}, status_code=422)
+    if not mb.retire_relation_card(uid):
+        return JSONResponse({"ok": False, "error": "删除失败（主人卡或卡不存在）"},
+                            status_code=422)
+    return JSONResponse({"ok": True, "uid": uid})
+
+
 # ------------------------------------------------------------------ 监控指标
 
 @router.get("/memory/metrics")

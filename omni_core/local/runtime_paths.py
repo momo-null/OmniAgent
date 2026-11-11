@@ -65,9 +65,10 @@ def global_diary() -> Path:
     return _GLOBAL / "memory" / "diary"
 
 
-def user_profile() -> Path:
-    """全局用户画像 ``memory/user_profile.md``（跨 task 共享，P0 一等实体）。"""
-    return _GLOBAL / "memory" / "user_profile.md"
+def self_profile() -> Path:
+    """她的自我画像 ``memory/self_profile.md``（跨 task 共享；角色本人的演化层，
+    与静态 character.md 互补）。L3 由巩固周期增量维护。"""
+    return _GLOBAL / "memory" / "self_profile.md"
 
 
 def character_card() -> Path:

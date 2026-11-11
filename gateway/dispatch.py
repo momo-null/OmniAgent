@@ -85,6 +85,18 @@ def _is_silent_run(steps: Any) -> bool:
                    for s in steps or [])
 
 
+def _explicit_committed(steps: Any) -> bool:
+    """本轮模型是否对「发 / 不发」做过**显式投递决定**（2026-11-12 兜底代发的门槛）。
+
+    调过任一 msg_send_*（发了）或 msg_stay_silent（显式选择沉默）都算——
+    只有两者皆无的纯文本收尾才是「忘了派发工具」的格式失败，才轮到兜底代发。
+    """
+    return any(isinstance(s, dict) and s.get("type") == "tool_call"
+               and (str(s.get("name") or "").startswith("msg_send")
+                    or str(s.get("name") or "") == "msg_stay_silent")
+               for s in steps or [])
+
+
 def _build_history_items(records: List[Dict[str, Any]], explicit: bool,
                          now_ts: Optional[float] = None) -> List[Dict[str, Any]]:
     """会话记录 → TaskSpec.history（群上下文种子组装，2026-11-03 杠杆 1/2/3）。
@@ -121,6 +133,25 @@ def _build_history_items(records: List[Dict[str, Any]], explicit: bool,
         if content:
             items.append({"role": role, "content": content})
     return items[-(12 if explicit else 40):]
+
+
+def _history_fold_note(records: List[Dict[str, Any]],
+                       items: List[Dict[str, Any]]) -> str:
+    """窗口外旧话的能力声明（与 Web 侧折叠提示同口径）。
+
+    只喂模型、不进会话历史：IM 侧没有 Web 那句「需要时用 conversation_search 查」，
+    窗口外的旧事此前只能靠模型自己想起来查。文本是通用能力声明，零词表。
+    """
+    try:
+        before = sum(1 for r in (records or []) if r.get("role") == "user")
+        after = sum(1 for m in (items or []) if m.get("role") == "user")
+        folded = before - after
+        if folded <= 0:
+            return ""
+        return (f"（更早的 {folded} 轮对话未在本轮窗口内；需要时用 "
+                f"conversation_search 查）")
+    except Exception:
+        return ""
 
 
 #: 后端地址（桌面壳拉起网关时注入实际端口，默认按 8000）
@@ -379,6 +410,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         # ── 固定会话连续对话：读会话历史注入 TaskSpec.history（对齐 Web /chat 链路）──
         # B3 同款：以服务端会话记录（含结构化 steps）重建模型上下文，跨消息记忆唯一来源
         history_items = []
+        _recs = []
         if pid and sid:
             try:
                 # 杠杆5：尾部预读（limit=400）——长会话不整份解析；coalesce 把
@@ -416,6 +448,9 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         # （历史走 display_text）。cron 无固定目标不在此附加——发送闸在 msg_send_*
         # 按 (通道, 目标) 现解析。
         run_objective = item["objective"]
+        _fold = _history_fold_note(_recs, history_items)
+        if _fold:
+            run_objective = f"{run_objective}\n{_fold}"
         if reply is not None:
             try:
                 from gateway.outbound import note as _ob_note, resolve as _ob_resolve
@@ -474,12 +509,41 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
 
         summary = _extract_summary(result)
         # 最终口播（真实回答）；内部判定文案只进任务详情/日志，绝不外发
-        # 注意：`_last_answer` 在 explicit 通道里按 _SEND_RULE 是「只给主人看」的
-        # 独白，**不是**发送意图的载体。发不发由模型调 msg_send_* 决定——
-        # 不代发、不拿这段文本兜底（2026-11-04 设计决议）。
+        # 注意（2026-11-04 决议，2026-11-12 收窄）：`_last_answer` 在 explicit 通道
+        # 原则上仍是「只给主人看」的独白，发不发由模型调 msg_send_* 决定——
+        # **但**「全程零 msg_send_* + 零 msg_stay_silent」的纯文本收尾是格式失败
+        # （实测 18.5%，短附和轮最易发：模型把回复写成正文忘了派发工具，doro 私聊
+        # 5 条未达）。这种状态下模型没做过任何投递决定，非空 `_last_answer` 视作
+        # 漏发的回复，走 msg_send_text 同一闸门代发（出站守则/外部锁/记账全复用）。
+        # 三道防内部文本外泄的守卫：
+        #   ① success 且未升级——失败路径的 reason/校验文本永远不进代发；
+        #   ② 只用 `_last_answer`（模型亲笔最终文本），summary 兜底不参与——
+        #     机器拼的结论文案（"已完成采集 N 条"之类）不外发；
+        #   ③ 仅 origin=named（被点名/私聊）——wave 旁听轮的独白是杠杆1的合法静默。
         answer = (_last_answer or "").strip() or summary
+        ok = bool(result.get("success", True)) and not result.get("escalated") if isinstance(result, dict) else True
+        if (explicit and reply is not None and ok
+                and str(item.get("origin") or "named") == "named"
+                and not _explicit_committed(turn_steps)):
+            _fb_text = (_last_answer or "").strip()
+            if _fb_text:
+                try:
+                    from plugins.messaging.plugin import msg_send_text as _mst
+
+                    # finally 已清线程句柄——兜底期间临时恢复，让工具的缺省解析
+                    # （来源通道/会话）与记账走同一路径；用完即清，不泄漏到下一轮。
+                    context.set_current_reply(reply)
+                    try:
+                        _fb_res = _mst(_fb_text)
+                    finally:
+                        context.set_current_reply(None)
+                    _fb_ok = isinstance(_fb_res, dict) and _fb_res.get("ok")
+                    print(f"[dispatch] 显式模式纯文本兜底代发（任务{task_id}）: ok={_fb_ok}")
+                except Exception as e:  # noqa: BLE001 —— 兜底失败不影响本轮状态
+                    print(f"[dispatch] 兜底代发失败（任务{task_id}）: {type(e).__name__}: {e}")
         # 显式模式：会话里记「实际发出去的内容」；没发出就记内部说明（前端标未发送）。
         # 首选工具侧的记账（唯一事实来源），步骤解析仅作兜底（结果字符串可能是 repr）。
+        # （兜底代发在 take_sent 之前——它的记账要进 extra.send，前端才能标「已发送」。）
         _noted = context.take_sent()
         sent_texts = (_noted or _sent_texts(turn_steps)) if explicit else []
         if explicit:
@@ -504,7 +568,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         except Exception as e:  # noqa: BLE001 —— 写链是增强项，失败不影响本轮
             print(f"[dispatch] 记忆入队失败（忽略）: {type(e).__name__}: {e}")
         # run_task 真实返回：success / escalated / steps / trajectory_file …
-        ok = bool(result.get("success", True)) and not result.get("escalated") if isinstance(result, dict) else True
+        # （ok 已在上方兜底代发判定处先行计算，此处复用同一值）
         try:
             TaskStore.update(real_task_id, state="done" if ok else "failed", success=ok)
         except Exception:

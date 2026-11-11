@@ -118,6 +118,8 @@ class EmitterMixin:
                         getattr(self, "_fp_system_prompt", "") or "",
                         getattr(self, "_fp_tool_names", None) or [],
                         seq,
+                        context_note=getattr(self, "_fp_context_note", "") or "",
+                        tool_schemas=getattr(self, "_fp_tool_schemas", None),
                     )
                     traj.log_think(
                         json.dumps({"kind": "request_fingerprint", "role": role,

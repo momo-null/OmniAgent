@@ -141,13 +141,14 @@ class InstructionMixin:
         return system_prompt or ""
 
     def _memory_stable_block(self, is_sub: bool, task_id: str = ""):
-        """记忆**稳定段**进 system prompt——使用规则 + scene 导航 + 用户画像。
+        """记忆**稳定段**进 system prompt——使用规则 + scene 导航 + 她的自我画像。
 
         * ``<memory-usage-rules>``（P1，2026-11-02 方案 C）：L1 检索结果永不自动注入，
           system 常驻的是「必查场景 + 每轮合计 ≤3 次」的使用规则；gate ``memory.enabled``；
         * ``<scene-navigation>``：L2 场景摘要 + 更新时间 + read_scene 指引——**只放索引**，
           全文由模型按需调 ``read_scene`` 读取（渐进披露）；gate ``runtime.knowledge.memory.enabled``；
-        * ``<user-persona>``：用户画像（TAM 的 L3 persona 位置）；gate ``knowledge.profile.enabled``。
+        * ``<self-persona>``：她的自我画像（TAM 的 L3 persona 位置；角色本人的演化层，
+          静态底色在 character.md）；gate ``knowledge.profile.enabled``。
 
         与纪律块同款约束：run 开始读一次、run 内不变（scene/画像维护只在任务收尾 flush
         触发，run 中途文件不变），命中前缀缓存。子任务（is_sub）零注入，语义不变。
@@ -165,7 +166,7 @@ class InstructionMixin:
             _rules = (
                 "<memory-usage-rules>\n"
                 "长期记忆（你与主人的事实/规则/偏好/事件）不会自动提供给你，需要时自己查：\n"
-                "- 必查：被问过往事件、以前的约定、人物关系、主人的相关信息时，"
+                "- 必查：被问过往事件、以前的约定、人物关系、亲近的人的相关信息时，"
                 "先调 memory_recall 查过再回答，不凭印象编造；\n"
                 "- 要原话、具体时间、具体是谁说的：memory_recall 只有摘要或查不到时，"
                 "调 conversation_search 检索原始聊天记录（关键词用 2-4 字最有效）；\n"
@@ -174,6 +175,9 @@ class InstructionMixin:
                 "要读全文再调 narrative_read；\n"
                 "- 叙事内容只供你自己参考——不得把日记/月记/对人的印象直接转述到对外消息"
                 "里，也不得把它们当成客观事实引用；\n"
+                "- 需要给判断或建议、又可能用得上过往事实时，可以用 memory_recall（不带 query）"
+                "取一次本轮候选证据：内核只在高置信线索存在时准备，不占下面的自取次数；"
+                "取到的只是线索，供你自己参考，不必都用，也不必每轮都取；\n"
                 "- 查不到就如实说「没有相关记录」；一个 run 内自取过往（memory_recall + "
                 "conversation_search + 历史自取工具 + read_scene + narrative_search + "
                 "narrative_read）合计不超过 3 次，其中 narrative_* 不超过 2 次，"
@@ -235,25 +239,19 @@ class InstructionMixin:
                 pass
         if self.knowledge_cfg.get("profile"):
             try:
-                from omni_core.local.knowledge_inject import load_profile_text
-                _pt = load_profile_text()
-                if _pt.strip():
-                    parts.append(f"<user-persona>\n{_pt.strip()}\n</user-persona>")
-                    layers.append("user_profile")
+                from omni_core.local.knowledge_inject import load_self_text
+                _st = load_self_text()
+                if _st.strip():
+                    parts.append(f"<self-persona>\n{_st.strip()}\n</self-persona>")
+                    layers.append("self_profile")
             except Exception:
                 pass
-        # M1（plan personal-agent-memory §6.1）：``<current-context>`` 工作记忆稳定段——
-        # run 起始由 context_signal.build_run 单点构造一次、run 内不变；≤200 字符
-        # （context.context_chars），每 run 只注入一次。空信号零注入（逐字节不变）。
-        if not is_sub:
-            try:
-                from omni_core.local.loop import context_signal as _cs
-                _ctx = _cs.render()
-                if _ctx:
-                    parts.append(_ctx)
-                    layers.append("context_signal")
-            except Exception:
-                pass
+        # 2026-11-11 钉前缀：``<current-context>`` 是唯一逐 run 变化的 run 级信号，
+        # 留在 system 会让静态前缀跨 run 失效（首调用缓存命中约 20%）。现由
+        # ``sdk_bridge`` 在 build_run 之后单独渲染，合并进**当轮 user 输入**的前部
+        # （与输入同条消息 → 压缩裁剪动不到它，且离当前问题更近）。
+        # 稳定段只留跨 run 字节一致的静态知识块：使用规则 / L2 导航 / 画像。
+        # 子任务零注入：is_sub 时下面这段在 sdk_bridge 侧同样不生成。
         if not parts:
             return "", []
         return "\n\n".join(parts), layers

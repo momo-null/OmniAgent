@@ -8,8 +8,9 @@
   ``inject_text_brain`` 出 ``<relevant-memories>`` 文本（仅供工具/调试；每轮自动注入
   已下线，见 implemented/memory-architecture.md §13.1）；
 - L2 场景块：机制与触发在 ``local/scene_executor.py``（本模块只在收尾时调 ``maybe_maintain``）；
-- L3 画像：``maintain_profile`` 由巩固周期驱动，把 brain.db 新 atoms 增量重写进
-  ``user_profile.md``（读取在 local/knowledge_inject.py）。
+- L3 自我画像：``maintain_profile`` 由巩固周期驱动，把 brain.db 新 atoms 中**关于她
+  自己**的事实增量重写进 ``self_profile.md``（读取在 local/knowledge_inject.py）；
+  对话者（含主人）的画像归关系卡 ``maintain_relations``。
 
 总开关 ``runtime.knowledge.memory.enabled``；参数在 ``runtime.knowledge.memory.ltm.*``。
 自管工具经 tools/memory_tool.py 走同一落盘路径（S1 红线：agent 不直接碰文件）。
@@ -1150,7 +1151,9 @@ def log_recall_observability(project: str = "", source: str = "", calls: int = 0
                              injected_context: bool = False, context_chars: int = 0,
                              by_tool: Optional[Dict[str, int]] = None,
                              context_hits: int = 0, narrative_cross: int = 0,
-                             sent: bool = False, llm_calls_delta: int = 0) -> None:
+                             sent: bool = False, llm_calls_delta: int = 0,
+                             evidence: int = 0, bundle_taken: int = 0,
+                             quota_blocked: int = 0) -> None:
     """P1 观测（2026-11-02 起步，§8.3 定稿）：每 run 一行观测记录。
 
     落点 ``~/.omniagent/memory/memory_recall-YYYY-MM.jsonl``（按月分片，不清理历史）；
@@ -1170,7 +1173,10 @@ def log_recall_observability(project: str = "", source: str = "", calls: int = 0
                "calls": int(calls), "hits": int(hits), "top1_id": str(top1_id or ""),
                "zero_query": int(calls) == 0,
                "context_hits": int(context_hits), "narrative_cross": int(narrative_cross),
-               "sent": bool(sent), "llm_calls_delta": int(llm_calls_delta)}
+               "sent": bool(sent), "llm_calls_delta": int(llm_calls_delta),
+               "evidence": int(evidence), "bundle_taken": int(bundle_taken),
+               "quota_blocked": int(quota_blocked),
+               "any_fetch": int(calls) > 0 or int(bundle_taken) > 0}
         shard = _now()[:7]
         path = os.path.join(os.path.dirname(_BRAIN_PATH),
                             f"memory_recall-{shard}.jsonl")
@@ -1262,6 +1268,32 @@ def upsert_narrative_index(doc_id: str, kind: str, project_id: str = "",
         return False
 
 
+def delete_narrative_index(doc_id: str, kind: str) -> bool:
+    """撤一条叙事索引（relation 卡注销/收编用）；正文文件由调用方处理。
+
+    与 upsert 同键口径（``_narr_doc_id``），索引删了检索就不再命中；
+    失败静默返回 False（索引失败不阻断注销，正文删除才是主操作）。
+    """
+    doc_id = str(doc_id or "").strip()
+    kind = str(kind or "").strip()
+    if not doc_id or kind not in _NARR_KINDS or not enabled():
+        return False
+    doc_id = _narr_doc_id(doc_id, kind)
+    try:
+        conn = open_brain()
+        try:
+            conn.execute("DELETE FROM narrative_index WHERE doc_id=? AND kind=?",
+                         (doc_id, kind))
+            conn.execute("DELETE FROM narrative_fts WHERE doc_id=? AND kind=?",
+                         (doc_id, kind))
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+    except Exception:
+        return False
+
+
 def get_narrative_row(doc_id: str, kind: str = "") -> Optional[Dict[str, Any]]:
     """按 doc_id（可选 kind）取索引行（供 narrative_read 拿 project_id / 场合标注）。
 
@@ -1306,7 +1338,7 @@ def get_narrative_row(doc_id: str, kind: str = "") -> Optional[Dict[str, Any]]:
 
 def search_narrative(query: str = "", kind: str = "", date_from: str = "",
                      date_to: str = "", peer: str = "", context_key: str = "",
-                     limit: int = 8) -> List[Dict[str, Any]]:
+                     limit: int = 8, require_match: bool = False) -> List[Dict[str, Any]]:
     """叙事检索核心（§13.3.1）：只返回条目**不返回正文**（正文走 ``read_narrative``）。
 
     排序 = bm25 相关性 + 时间近因 + 场合/对象加权；``context_key`` 只加权不过滤
@@ -1400,17 +1432,28 @@ def search_narrative(query: str = "", kind: str = "", date_from: str = "",
     # 话题词面（共同背景）与 peer 线索来自 query/参数；加权不过滤（§6.2）
     q = str(query or "")
     peer_key = str(peer or "").strip()
+    # 认领归一（2026-11-12）：peer 按 **uid** 比对（先经 resolve_peer_uids——
+    # 已认领的旧身份对应到主人卡），且卡上标签只取其 uid（昵称改了不裂匹配）。
+    peer_uid_set = set()
+    if peer_key:
+        from omni_core.local.identity import resolve_peer_uids, speaker_uid as _peer_uid
+        peer_uid_set = set(resolve_peer_uids(peer_key))
     cid = str(context_key or "").strip()
     qterms = set(_query_terms(q))
     scored: List[Dict[str, Any]] = []
     for d, rel in cand:
+        # 读侧候选包用：只要 FTS/LIKE 真命中的条目，排除「按近因浏览」凑数行。
+        # 缺省 False —— 叙事工具的浏览语义不变，这是加性能力不是兼容分支。
+        if require_match and rel <= 0.0:
+            continue
         rec_days = _days_since(d.get("time_to") or d.get("date_to") or "")
         rec = pow(2.718281828459045, -rec_days / 180.0)
         final = 0.6 * rel + 0.4 * rec
         context_keys = d.get("context_keys") or []
         if cid and cid in context_keys:
             final *= (1.0 + _ctx_cfg("w_ctx", 0.25))       # 同场合标注：加权不过滤
-        if peer_key and any(peer_key == str(p) for p in (d.get("peers") or [])):
+        if peer_uid_set and any((_peer_uid(str(p)) or str(p)) in peer_uid_set
+                                for p in (d.get("peers") or [])):
             final *= 1.25                                   # 关于当前对象
         if cid and qterms:
             # 共同背景（R8，w_bg）：本场合叙事且正文/主题词面与 query 相交
@@ -2210,7 +2253,7 @@ def _consolidate_impl(brain_cfg: Dict[str, Any]) -> Dict[str, Any]:
     conn.commit()
     conn.close()
 
-    # 7) 画像重写（L3）：brain.db 新 atoms → user_profile.md（带外信号强制）
+    # 7) 自我画像重写（L3）：brain.db 新 atoms → self_profile.md（带外信号强制）
     if maintain_profile(brain_cfg):
         out["profile_rewritten"] = 1
 
@@ -2651,6 +2694,24 @@ _REL_SYSTEM = (
     '只返回 JSON:{"card": "...", "topics": ["...", "..."]}'
 )
 
+#: 主人卡专用模板（2026-11-11）：主人跨表面出现（控制台/单聊/多人场合），且画像需要
+#: **稳定背景区**（设备/项目/长期偏好）——滚动印象不冲掉背景（背景保留由代码兜底，
+#: 不只靠 prompt：LLM 丢了背景时代码补写回）。
+_REL_MASTER_SYSTEM = (
+    "你是助手本人。下面这些「他说过的话」来自你与**主人**的往来（可能跨多个"
+    "场合混在一起），另附一份「现有稳定背景」。\n"
+    "写你对主人的印象卡：稳定背景**完整保留**（只在素材明确支持时增补或修正个别"
+    "条目，绝不删漏），印象部分只写材料里能看出来的东西，不编造、不下判决。\n"
+    "格式：\n【稳定背景】\n<逐条保留并按需增补>\n"
+    "【最近交手】<这段时间发生过什么，一两句>\n"
+    "【他对我的态度】用你自己的话概括\n【我对他的态度】用你自己的话概括\n"
+    "topics：2-5 个可检索的主题词或短语，名词优先；没有则空数组。"
+    "素材里关于称呼与身份的内容（他叫我什么、他自我介绍自己是谁、我们怎么认识的）"
+    "属于稳定背景，写进【稳定背景】；name 取素材里最新的对助手的称呼"
+    "（没有明确的称呼变化则给空串）。"
+    '只返回 JSON:{"card": "...", "topics": ["..."], "name": ""}'
+)
+
 #: topics 钳制上限（§13.10.2）：项数与单条长度。这是钳制不是词表（INV-4）——
 #: 任何值都收，超长截断、脏值丢弃，语义判断权在生成侧。
 _TOPICS_MAX_ITEMS = 5
@@ -2680,6 +2741,48 @@ def _normalize_topics(raw: Any) -> List[str]:
 _REL_MIN_LINES = 3
 _REL_MAX_PEERS = 5
 _REL_TAIL_LINES = 600
+#: 主人卡正文上限比普通卡宽（稳定背景区 + 印象三行）
+_REL_MASTER_MAX_CHARS = 1400
+
+
+def _card_meta_name(path) -> str:
+    """读关系卡 META 的 ``name:``（无卡/无字段/异常返回空——调用方自行回退）。"""
+    try:
+        if not path.exists():
+            return ""
+        meta = path.read_text(encoding="utf-8").split("-----META-END-----", 1)[0]
+        for ln in meta.splitlines():
+            s = ln.strip()
+            if s.startswith("name:"):
+                return s[len("name:"):].strip()[:40]
+    except Exception:
+        pass
+    return ""
+
+
+def _card_stable_background(path) -> str:
+    """读现有主人卡的【稳定背景】段；无卡/无段/异常返回空。
+
+    段以 ``【稳定背景】`` 行起，到下一个 ``【`` 开头的段首或正文末尾止。
+    """
+    try:
+        if not path.exists():
+            return ""
+        body = path.read_text(encoding="utf-8").split("-----META-END-----", 1)[-1]
+        out: List[str] = []
+        inside = False
+        for ln in body.splitlines():
+            s = ln.strip()
+            if s.startswith("【稳定背景】"):
+                inside = True
+                continue
+            if inside:
+                if s.startswith("【"):
+                    break
+                out.append(ln)
+        return "\n".join(out).strip()
+    except Exception:
+        return ""
 
 
 def _peer_lines(limit_days: int = 7) -> Dict[str, Dict[str, Any]]:
@@ -2717,12 +2820,68 @@ def _peer_lines(limit_days: int = 7) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def list_speakers(limit_days: int = 7, min_lines: int = 3, q: str = "",
+                  limit: int = 20, exclude_uids=None) -> List[Dict[str, Any]]:
+    """认领候选：按 uid 聚合的说话人列表（name/uid/条数/最近活跃时间）。
+
+    - ``q`` 为空：近 ``limit_days`` 窗口、≥ ``min_lines`` 条的**活跃**说话人，
+      按条数降序（与关系卡维护同门槛——聊一次就消失的人不进列表，零噪音）；
+    - ``q`` 非空：**全量不限时窗**，按 name/uid 前缀匹配（认领列表外找旧人）。
+    ``exclude_uids`` 里的 uid 不返回（已认领名单 + 主人 key）。
+    uid 解析口径与 :func:`_peer_lines` 一致（``name(uid)`` 后缀，Python 侧比对）。
+    """
+    from omni_core.local.identity import speaker_uid
+    try:
+        exclude = {str(u).strip() for u in (exclude_uids or []) if str(u or "").strip()}
+        cutoff = ""
+        if not q:
+            cutoff = (datetime.now(timezone.utc)
+                      - timedelta(days=max(1, limit_days))).strftime("%Y-%m-%d")
+        conn = open_brain()
+        try:
+            if cutoff:
+                rows = conn.execute(
+                    "SELECT speaker, count(*), max(recorded_at) FROM l0_messages "
+                    "WHERE role='user' AND speaker != '' AND recorded_at >= ? "
+                    "GROUP BY speaker", (cutoff,)).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT speaker, count(*), max(recorded_at) FROM l0_messages "
+                    "WHERE role='user' AND speaker != '' "
+                    "GROUP BY speaker").fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return []
+    agg: Dict[str, Dict[str, Any]] = {}
+    for speaker, cnt, last_at in rows:
+        s = str(speaker or "")
+        uid = speaker_uid(s)
+        if not uid or uid in exclude:
+            continue
+        name = s.rpartition("(")[0].strip() or uid
+        item = agg.setdefault(uid, {"name": name, "uid": uid, "lines": 0, "last": ""})
+        item["lines"] += int(cnt or 0)
+        if str(last_at or "") > item["last"]:
+            item["last"] = str(last_at or "")
+    out = list(agg.values())
+    qk = str(q or "").strip().lower()
+    if qk:
+        out = [x for x in out
+               if x["name"].lower().startswith(qk) or x["uid"].lower().startswith(qk)]
+    else:
+        out = [x for x in out if x["lines"] >= max(1, min_lines)]
+    out.sort(key=lambda x: x["lines"], reverse=True)
+    return out[:max(1, limit)]
+
+
 def maintain_relations(brain_cfg: Optional[Dict[str, Any]],
                        limit_days: int = 7) -> int:
     """关系卡步：按**人**把这段时间的往来压成一张印象卡（全局一份，不按群/项目拆）。
 
-    落点 ``~/.omniagent/memory/relations/<uid>.md``（META: name/uid/updated + 正文三行）。
-    只写"记录里能看出来"的东西，做得越久越像关系而不是账本；信息不足写「还不熟」。
+    落点 ``~/.omniagent/memory/relations/<uid>.md``（META: name/uid/updated + 正文三行；
+    主人卡 uid 为合成 key ``master``，见 local/identity.py）。只写"记录里能看出来"
+    的东西，做得越久越像关系而不是账本；信息不足写「还不熟」。
     返回更新张数；任何失败静默（巩固链不可被关系卡拖垮）。
     """
     if not enabled() or not brain_cfg:
@@ -2742,43 +2901,159 @@ def maintain_relations(brain_cfg: Optional[Dict[str, Any]],
     d.mkdir(parents=True, exist_ok=True)
     written = 0
     for uid, info in cand:
-        try:
-            material = "\n".join(f"- {t}" for t in info["lines"][-40:])
-            # 注意：模板里含 JSON 花括号，不能用 str.format（会把 {"card": ...} 当占位符）
-            data = llm_judge.chat_json(
-                brain_cfg, _REL_SYSTEM.replace("{name}", str(info.get("name") or uid)),
-                f"对方说过的话（按时间，最多 40 条）：\n{material}", timeout=60.0)
-            card = str((data or {}).get("card") or "").strip()
-            if not card:
-                continue
-            topics = _normalize_topics((data or {}).get("topics"))
-            meta_lines = (f"name: {info.get('name') or uid}\nuid: {uid}\n"
-                          f"updated: {_now()}\n")
-            if topics:
-                meta_lines += f"topics: {json.dumps(topics, ensure_ascii=False)}\n"
-            # P6-2：关系卡上的共同经历标记——素材里出现配置参与人才标（INV-4，取值
-            # 来自配置；不进 atoms，只是卡片 META 标注）。
-            we_hit = [n for n in _we_participants() if n in material][:6]
-            if we_hit:
-                meta_lines += f"we: {json.dumps(we_hit, ensure_ascii=False)}\n"
-            body = ("-----META-START-----\n" + meta_lines + "-----META-END-----\n"
-                    + card[:600])
-            (d / f"{uid}.md").write_text(body, encoding="utf-8")
-            peer_label = f"{info.get('name') or uid}({uid})"
-            # 索引摘要只放可被外部场合看到的中性信息（称呼/标识/往来量/话题），
-            # 不含印象正文：外部来源读 relation 只给 summary（N-10），摘要同时是
-            # 检索词面，让按名字/标识的 narrative_search 能命中这张卡。
-            digest = f"与 {peer_label} 的往来印象卡；近段 {len(info['lines'])} 条往来"
-            if topics:
-                digest += "；话题：" + "、".join(topics[:3])
-            upsert_narrative_index(uid, "relation", project_id="",
-                                   summary=digest, topics=topics,
-                                   context_keys=[], peers=[peer_label],
-                                   date_basis="local")
+        if _maintain_one(brain_cfg, d, uid, info):
             written += 1
-        except Exception:
-            continue
     return written
+
+
+def maintain_master_card(brain_cfg: Optional[Dict[str, Any]],
+                         limit_days: int = 90) -> bool:
+    """只重写主人卡（认领后的宽窗重建 / Web 单独触发用），不碰别人的卡。
+
+    与 :func:`maintain_relations` 同一套写卡逻辑，但素材窗可放宽（认领时回填过的
+    历史不白费——不用等主人再攒 3 句新话，卡片立刻有血肉）。
+    """
+    if not enabled() or not brain_cfg:
+        return False
+    try:
+        import config
+        if not bool(config.get_config("knowledge.relations.enabled", True)):
+            return False
+    except Exception:
+        pass
+    from omni_core.local.identity import MASTER_KEY, master_speaker
+    peers = _peer_lines(limit_days)
+    info = peers.get(MASTER_KEY)
+    if not info or len(info.get("lines") or []) < _REL_MIN_LINES:
+        return False
+    if not info.get("name"):
+        info["name"] = master_speaker().rpartition("(")[0]
+    d = rp.global_relations()
+    d.mkdir(parents=True, exist_ok=True)
+    return _maintain_one(brain_cfg, d, MASTER_KEY, info)
+
+
+def _maintain_one(brain_cfg: Dict[str, Any], d, uid: str, info: Dict[str, Any]) -> bool:
+    """单张关系卡的维护体（maintain_relations 循环体提取；主人分支按合成 key 判定）。"""
+    try:
+        material = "\n".join(f"- {t}" for t in info["lines"][-40:])
+        # 主人卡（2026-11-11）：跨表面聚合 + 稳定背景区。素材带现有背景，
+        # LLM 丢了背景时代码补写回（背景保留是硬要求，不只靠 prompt）。
+        is_master = is_master_card_uid(uid)
+        if is_master:
+            bg = _card_stable_background(d / f"{uid}.md")
+            existing_name = _card_meta_name(d / f"{uid}.md")
+            system = _REL_MASTER_SYSTEM
+            prompt = (f"现有稳定背景（必须完整保留，只增不删）：\n{bg or '（暂无）'}\n\n"
+                      f"主人说过的话（按时间，最多 40 条，跨表面）：\n{material}")
+        else:
+            bg = ""
+            system = _REL_SYSTEM.replace("{name}", str(info.get("name") or uid))
+            prompt = f"对方说过的话（按时间，最多 40 条）：\n{material}"
+        # 注意：模板里含 JSON 花括号，不能用 str.format（会把 {"card": ...} 当占位符）
+        data = llm_judge.chat_json(brain_cfg, system, prompt, timeout=60.0)
+        card = str((data or {}).get("card") or "").strip()
+        if not card:
+            return False
+        if is_master and bg and "【稳定背景】" not in card:
+            card = f"【稳定背景】\n{bg}\n" + card
+        topics = _normalize_topics((data or {}).get("topics"))
+        # 主人卡称呼（2026-11-12）：名字的唯一宿主是这张卡——素材里有明确称呼时
+        # 维护者采纳进 META（identity 署名标签读这里）；没介绍/没给出 = 原样保留
+        #（程序一致性：从不介绍 = 恒为缺省称呼）。regular 卡称呼仍由平台承载。
+        card_name = info.get("name") or uid
+        if is_master:
+            new_name = str((data or {}).get("name") or "").strip()[:40]
+            card_name = new_name or existing_name or card_name
+        meta_lines = (f"name: {card_name}\nuid: {uid}\n"
+                      f"updated: {_now()}\n")
+        if topics:
+            meta_lines += f"topics: {json.dumps(topics, ensure_ascii=False)}\n"
+        # P6-2：关系卡上的共同经历标记——素材里出现配置参与人才标（INV-4，取值
+        # 来自配置；不进 atoms，只是卡片 META 标注）。
+        we_hit = [n for n in _we_participants() if n in material][:6]
+        if we_hit:
+            meta_lines += f"we: {json.dumps(we_hit, ensure_ascii=False)}\n"
+        body = ("-----META-START-----\n" + meta_lines + "-----META-END-----\n"
+                + card[:_REL_MASTER_MAX_CHARS if is_master else 600])
+        (d / f"{uid}.md").write_text(body, encoding="utf-8")
+        peer_label = f"{card_name}({uid})"
+        # 索引摘要只放可被外部场合看到的中性信息（称呼/标识/往来量/话题），
+        # 不含印象正文：外部来源读 relation 只给 summary（N-10），摘要同时是
+        # 检索词面，让按名字/标识的 narrative_search 能命中这张卡。
+        digest = f"与 {peer_label} 的往来印象卡；近段 {len(info['lines'])} 条往来"
+        if topics:
+            digest += "；话题：" + "、".join(topics[:3])
+        upsert_narrative_index(uid, "relation", project_id="",
+                               summary=digest, topics=topics,
+                               context_keys=[], peers=[peer_label],
+                               date_basis="local")
+        return True
+    except Exception:
+        return False
+
+
+def is_master_card_uid(uid: str) -> bool:
+    """uid 是否为主人卡（合成 key；薄封装，避免调用方 import identity 内部细节）。"""
+    from omni_core.local.identity import is_master_key
+    return is_master_key(uid)
+
+
+def restamp_speaker_as_master(uid: str) -> int:
+    """认领回填：该 uid 的历史 user 行 speaker 重盖章为 ``主人(master)``。
+
+    只动 l0 检索表（关系卡素材源；回填后旧消息立即并入主人分组）；会话 jsonl 是
+    文件真相、显示名保留原样。uid 匹配口径与 :func:`_peer_lines` 一致——
+    ``name(uid)`` 后缀解析，在 Python 侧精确比对（不用 SQL LIKE，免转义坑）。
+    返回重盖章行数；异常返回 0（回填失败不阻断认领，后续新消息照常归一）。
+    """
+    from omni_core.local.identity import master_speaker, speaker_uid
+    uid = str(uid or "").strip()
+    if not uid:
+        return 0
+    target = master_speaker()
+    try:
+        conn = open_brain()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT speaker FROM l0_messages "
+                "WHERE role='user' AND speaker != ''").fetchall()
+            hits = [str(s) for (s,) in rows if speaker_uid(str(s)) == uid]
+            if not hits:
+                return 0
+            n = 0
+            for s in hits:
+                cur = conn.execute(
+                    "UPDATE l0_messages SET speaker=? WHERE speaker=? AND role='user'",
+                    (target, s))
+                n += cur.rowcount or 0
+            conn.commit()
+            return n
+        finally:
+            conn.close()
+    except Exception:
+        return 0
+
+
+def retire_relation_card(uid: str) -> bool:
+    """注销/收编一张关系卡：删正文文件 + 撤叙事索引（admin 动作，不进 agent 写路径）。
+
+    主人卡（合成 key）不允许从这里删——删了身份锚就断了；重置主人卡走认领解除
+    之外的人工路径。返回是否删了正文文件（索引撤除尽力而为）。
+    """
+    uid = str(uid or "").strip()
+    if not uid or is_master_card_uid(uid):
+        return False
+    deleted = False
+    try:
+        p = rp.global_relations() / f"{uid}.md"
+        if p.exists():
+            p.unlink()
+            deleted = True
+    except Exception:
+        pass
+    delete_narrative_index(uid, "relation")
+    return deleted
 
 
 #: 关系卡直驱节流：与写链同款（新增带结构化 speaker 的 L0 行数 / 距上次维护的间隔）。
@@ -3067,7 +3342,9 @@ def hard_delete(record_id: str) -> bool:
         conn.close()
 
 
-# ---- L3 画像（brain.db 驱动；人工 PUT /profile 可覆盖） ----
+# ---- L3 自我画像（brain.db 驱动；人工 PUT /profile 可覆盖） ----
+# 「用户画像」概念随多表面拟人部署退役（2026-11-11）：她自己是主体（本块），
+# 对话者（含主人）归关系卡，操作者环境归主人卡的稳定背景区。
 
 _PROFILE_AUTO = "knowledge.profile.auto_maintain"        # 缺省开
 _PROFILE_TRIGGER = "knowledge.profile.trigger_every_n"   # 每 N 条新 atoms 触发
@@ -3076,15 +3353,17 @@ _PROFILE_TS_KEY = "last_profile_ts"
 _PROFILE_SIGNAL_KEY = "persona_update_request"
 
 _PROFILE_SYSTEM = (
-    "你是用户画像维护器。给你「当前用户画像」和「最近沉淀的新事实」。"
-    "任务:输出更新后的完整用户画像——保留仍然成立的内容,把新事实中关于"
-    "用户本人/用户长期偏好/用户环境的部分合并进去,剔除已过时或与用户无关的条目;"
-    "矛盾的以新事实为准。不要虚构,没有可合并的新信息就原样返回。"
-    "\n类别边界:画像只记录关于用户本人的客观事实/长期偏好/习惯/背景。"
-    "以下内容一律视为「与用户无关」剔除,不得合并进画像:assistant 的应对策略、"
-    "拒绝规则、边界设定,以及对用户行为的评判/模式判定条款(如「用户反复索取某类"
-    "内容……此类内容不生成」)——这类内容属于场景块/角色卡层;即使新事实以"
-    "「优先处理」或带外信号标记出现,也照此过滤。"
+    "你是角色本人的自我画像维护器。给你「当前自我画像」和「最近沉淀的新事实」。"
+    "任务:输出更新后的完整自我画像——保留仍然成立的内容,把新事实中关于"
+    "**角色她自己**的部分合并进去:她的兴趣/品味/审美、生活史与习惯、身体特征、"
+    "她的能力与工具面;剔除已过时的部分,矛盾的以新事实为准。不要虚构,"
+    "没有可合并的新信息就原样返回。"
+    "\n类别边界:画像只记录关于角色她自己的事实。以下内容一律剔除,不得合并:"
+    "关于对话者/其他人的事实(他们的偏好/身份/经历——那属于关系卡),"
+    "关于主人或操作者环境的事实(设备/项目/账号——那属于主人卡),"
+    "assistant 的应对策略/拒绝规则/边界设定(属于场景块/角色卡层),"
+    "以及**无法判断是关于她还是关于别人的条目**(宁可漏记,不可错记)。"
+    "即使新事实以「优先处理」或带外信号标记出现,也照此过滤。"
     "只返回 JSON:{\"profile\": \"<完整画像全文,≤2000字符>\"}"
 )
 
@@ -3117,7 +3396,7 @@ def request_profile_update(reason: str) -> None:
 
 
 def maintain_profile(brain_cfg: Optional[Dict[str, Any]]) -> bool:
-    """L3 画像重写：上次水位之后的新 atoms → LLM 增量合并 → user_profile.md（旧版 .bak）。
+    """L3 自我画像重写：上次水位之后的新 atoms → LLM 增量合并 → self_profile.md（旧版 .bak）。
 
     - gate ``knowledge.profile.auto_maintain``（缺省开）
     - 触发：新增 active atoms ≥ ``knowledge.profile.trigger_every_n``（缺省 20），
@@ -3143,14 +3422,14 @@ def maintain_profile(brain_cfg: Optional[Dict[str, Any]]) -> bool:
                 conn.commit()
         finally:
             conn.close()
-        pp = rp.user_profile()
+        pp = rp.self_profile()
         old_profile = pp.read_text(encoding="utf-8") if pp.exists() else ""
         new_facts = "\n".join(f"- {c}" for (c,) in rows)
         if signal:
             new_facts = f"[场景整理请求画像更新(优先处理)]\n{signal}\n\n{new_facts}"
         data = llm_judge.chat_json(
             brain_cfg, _PROFILE_SYSTEM,
-            f"当前用户画像:\n{old_profile or '(空)'}\n\n最近新事实:\n{new_facts}",
+            f"当前自我画像:\n{old_profile or '(空)'}\n\n最近新事实:\n{new_facts}",
             timeout=60.0)
         text = str((data or {}).get("profile") or "").strip()
         if not text:

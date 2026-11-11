@@ -431,3 +431,51 @@ def test_usage_of_extracts_cached_and_legacy_fields():
     assert sl._usage_of(legacy) == {"in": 11, "out": 22, "cached": 0}
     assert sl._usage_of(types.SimpleNamespace(output=[])) is None
     assert sl._usage_of(None) is None
+
+
+# --- 6. 压缩后重新贴回处境信号（2026-11-11 钉前缀改动） ------------------------
+NOTE = "<current-context>\ncontext=group:7\n</current-context>"
+
+
+def _note_model(summarizer, note=NOTE):
+    inner = _InnerModel()
+    model = _CompactionModel(inner, threshold_tokens=1000, retain_ratio=0.5,
+                             summarize=summarizer, context_note=note)
+    return model, inner
+
+
+def test_context_note_reapplied_after_compaction():
+    """压缩切掉起始 items 后，请求副本头部仍有处境信号，且只贴一次。"""
+    model, inner = _note_model(lambda items, si=None: "摘要：已完成 A、B 两步")
+    _invoke(model, _msgs(10))
+    sent = inner.calls[0]["input"]
+    assert sent[0]["content"] == NOTE
+    assert sent[1]["content"].startswith("[历史压缩摘要]")
+    assert sum(1 for it in sent if it.get("content") == NOTE) == 1
+
+
+def test_context_note_reapplied_when_summary_fails():
+    """摘要失效退化到 _hard_keep 时也必须重新贴。"""
+    model, inner = _note_model(lambda items, si=None: None)
+    _invoke(model, _msgs(10))
+    sent = inner.calls[0]["input"]
+    assert sent and sent[0]["content"] == NOTE
+
+
+def test_no_context_note_keeps_legacy_shape():
+    """note 为空（子任务零注入）时压缩产物保持旧形态。"""
+    model, inner = _note_model(lambda items, si=None: "摘要", note="")
+    _invoke(model, _msgs(10))
+    assert inner.calls[0]["input"][0]["content"].startswith("[历史压缩摘要]")
+
+
+def test_reapply_context_note_after_hard_keep_is_idempotent():
+    """硬滑窗改真 items：贴一次、重复贴不叠加、子任务零注入不贴。"""
+    items = [_msg("old"),
+             {"type": "function_call", "name": "t"},
+             {"type": "function_call_output", "call_id": "c", "output": "r"}]
+    kept = sl._hard_keep(items, 1)
+    out = sl._reapply_context_note(kept, NOTE)
+    assert out[0]["content"] == NOTE
+    assert sl._reapply_context_note(out, NOTE) == out
+    assert sl._reapply_context_note(kept, "") == kept

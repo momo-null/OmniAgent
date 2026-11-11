@@ -422,9 +422,9 @@ export interface RuntimeSnapshot {
   project_id: string;
 }
 
-// ── P0 用户画像（/api/runtime/profile） ─────────────
+// ── P0 她的自我画像（/api/runtime/profile） ─────────────
 export interface ProfileIndex {
-  profile: string; // user_profile.md 全文（用户直接维护；LLM 自动维护待 A8 基建）
+  profile: string; // self_profile.md 全文（用户直接维护；L3 巩固周期自动增量维护）
   enabled: boolean; // 画像注入是否开启（knowledge.profile.enabled，默认开）
 }
 

@@ -1,7 +1,9 @@
 """``context_signal`` —— run 级结构化场合信号（plan personal-agent-memory §4.1，M1）。
 
 Working 层一等输入：run 起始**单点构造一次**、run 内只读，序列化为
-``<current-context>``（≤ ``context.context_chars`` 缺省 200 字符）进 system 稳定段。
+``<current-context>``（≤ ``context.context_chars`` 缺省 200 字符）。
+2026-11-11 起由 ``sdk_bridge`` 合并进**当轮 user 输入前部**，不再进 system
+稳定段——它是唯一逐 run 变化的信号，留在 system 会让静态前缀跨 run 失效。
 该块是**运行时处境**（在哪个场合、跟谁、最近聊什么），不是记忆检索结果，也不构成
 按通道开注入特例（§6.1）。
 

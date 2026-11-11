@@ -451,7 +451,7 @@ def test_instructions_injected_and_drift_logged_to_trajectory(monkeypatch, tmp_p
 
 # --- 6. 记忆稳定段进 system（TAM 对齐；尾部机制移除） -------------------
 def test_profile_in_system_not_tail(monkeypatch, tmp_path):
-    """TAM 对齐：纪律 → system；画像 → system 稳定段（<user-persona>）；尾部机制已移除。"""
+    """TAM 对齐：纪律 → system；自我画像 → system 稳定段（<self-persona>）；尾部机制已移除。"""
     g = tmp_path / "g.md"
     g.write_text("DISCIPLINE", encoding="utf-8")
 
@@ -459,7 +459,7 @@ def test_profile_in_system_not_tail(monkeypatch, tmp_path):
     loop.knowledge_cfg["profile"] = True
     _cfg(monkeypatch)
     _pin_agents(monkeypatch, g)
-    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
+    monkeypatch.setattr(ki, "load_self_text", lambda *a, **k: "PROFILE-TEXT")
 
     captured = {}
 
@@ -473,7 +473,7 @@ def test_profile_in_system_not_tail(monkeypatch, tmp_path):
                       traj=None, user_input="hi")
 
     assert "DISCIPLINE" in captured["instructions"]          # 纪律 → system
-    assert "<user-persona>" in captured["instructions"]      # 画像 → system 稳定段
+    assert "<self-persona>" in captured["instructions"]      # 自我画像 → system 稳定段
     assert "PROFILE-TEXT" in captured["instructions"]
     assert "tail_inject_block" not in captured               # 尾部注入机制已删除
     assert "lead_in_message" not in captured                 # P1：lead-in 通道整体删除（检索结果永不自动注入）

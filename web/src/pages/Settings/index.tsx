@@ -31,7 +31,7 @@ const CATEGORIES: NavCategory[] = [
   },
   {
     id: "companion", label: "伙伴", icon: <FaceSlightlySmilingIcon />, keywords:
-      ["角色卡", "人格", "助手名", "用户画像", "记忆", "注入", "character", "profile"],
+      ["角色卡", "人格", "助手名", "自我画像", "记忆", "注入", "character", "profile"],
     Section: CompanionSection,
   },
   {

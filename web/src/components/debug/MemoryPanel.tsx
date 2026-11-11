@@ -2,7 +2,8 @@
 // 无横向 Tab、无卡片网格、无全屏放大；所有层级在一条纵向滚动流里展开。
 // 数据只读聚合自 /api/debug/memory/*；纠正 / 遗忘 / 删除复用 memory_brain 原语。
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Box, Button, MenuItem, Stack, TextField, Typography } from "@mui/material";
+import { Box, Button, IconButton, MenuItem, Stack, TextField, Typography } from "@mui/material";
+import { DeleteOutline } from "@mui/icons-material";
 import ScrollArea from "../ScrollArea.tsx";
 import {
   debugApi, type DocumentText, type MemoryAtomRow, type MemoryDocument,
@@ -11,6 +12,16 @@ import {
 import { Empty, GroupLabel, KV, Pre, Row, Section, StatusBar, TinyBar, Toolbar, num } from "./shared";
 
 const PAGE = 50;
+
+/** 展示年龄（关系卡冻结退役的可见化：7 天窗外停更，不删——「最后活跃 N 天前」）。 */
+function ageOf(iso: string): string {
+  if (!iso) return "—";
+  const ms = Date.now() - new Date(iso).getTime();
+  const days = Math.floor(ms / 86400000);
+  if (days >= 1) return `${days}天前`;
+  const hours = Math.floor(ms / 3600000);
+  return hours >= 1 ? `${hours}小时前` : "刚刚";
+}
 
 function docKeyFor(row: NarrativeRow, docs: MemoryDocument[]): string {
   const id = row.doc_id.split(":").pop() || row.doc_id;
@@ -161,6 +172,13 @@ export default function MemoryPanel() {
     if (!window.confirm(`物理删除这条记忆？不可恢复。\n\n${a.content.slice(0, 120)}`)) return;
     setBusy(true);
     debugApi.deleteMemory(a.record_id).then(afterWrite).catch(fail);
+  };
+
+  const doRetireCard = (d: MemoryDocument) => {
+    const uid = d.name.endsWith(".md") ? d.name.slice(0, -3) : d.name;
+    if (!window.confirm(`注销关系卡 ${d.name}？删正文 + 撤索引，不可恢复（主人卡除外）。`)) return;
+    setBusy(true);
+    debugApi.deleteRelationCard(uid).then(afterWrite).catch(fail);
   };
 
   const kindEntries = useMemo(
@@ -323,7 +341,7 @@ export default function MemoryPanel() {
 
           <Section title="L3 · profile" count="3">
             {([
-              ["profile", "profile/user_profile.md"],
+              ["profile", "profile/self_profile.md"],
               ["character", "character/character.md"],
               ["agents", "agents/global"],
             ] as const).map(([k, key]) => {
@@ -360,8 +378,33 @@ export default function MemoryPanel() {
                   <GroupLabel>{layer} · {items.length}</GroupLabel>
                   {items.map((d) => (
                     <Box key={d.key}>
-                      <Row label={d.name} value={`${num(d.chars / 1024)} KB`}
-                        selected={openDoc === d.key} onClick={() => toggleDoc(d.key)} title={d.name} />
+                      {d.kind === "relation" ? (
+                        <Stack direction="row" alignItems="center" spacing={0.5}
+                          onClick={() => toggleDoc(d.key)} title={d.name}
+                          sx={{
+                            pl: 1, pr: 0.5, minHeight: 23, cursor: "pointer",
+                            borderLeft: "2px solid",
+                            borderColor: openDoc === d.key ? "primary.main" : "transparent",
+                            bgcolor: openDoc === d.key ? "action.selected" : "transparent",
+                            "&:hover": { bgcolor: "action.hover" },
+                          }}>
+                          <Typography sx={{ fontSize: 10.5, flex: 1, minWidth: 0 }} noWrap>
+                            {d.name}
+                          </Typography>
+                          <Typography sx={{ fontSize: 10, color: "text.disabled" }} noWrap>
+                            {ageOf(d.updated)}
+                          </Typography>
+                          <IconButton size="small" sx={{ p: 0.25 }}
+                            title="注销这张卡（删正文+撤索引；主人卡除外）"
+                            disabled={busy}
+                            onClick={(e) => { e.stopPropagation(); doRetireCard(d); }}>
+                            <DeleteOutline fontSize="inherit" />
+                          </IconButton>
+                        </Stack>
+                      ) : (
+                        <Row label={d.name} value={`${num(d.chars / 1024)} KB`}
+                          selected={openDoc === d.key} onClick={() => toggleDoc(d.key)} title={d.name} />
+                      )}
                       {openDoc === d.key && <DocInline docKey={d.key} onClose={() => setOpenDoc("")} />}
                     </Box>
                   ))}

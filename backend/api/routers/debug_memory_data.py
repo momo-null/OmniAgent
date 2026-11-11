@@ -128,7 +128,7 @@ def list_documents(mb) -> List[Dict[str, Any]]:
     except Exception:
         pass
 
-    add_one("L3", "profile", "user_profile.md", rp.user_profile(), "profile/user_profile.md")
+    add_one("L3", "profile", "self_profile.md", rp.self_profile(), "profile/self_profile.md")
     add_one("L3", "character", "character.md", rp.character_card(), "character/character.md")
     add_one("L3", "agents", "AGENTS.md（全局）", rp.global_agents_file(), "agents/global")
     try:
@@ -172,7 +172,7 @@ def read_document(mb, key: str) -> Dict[str, Any]:
             p = _child(rp.project_dir(pid), fname) if pid else None
         elif kind == "profile":
             # 固定文件也要校验 key 尾部，避免 ``profile/任意串`` 被当成合法别名
-            p = rp.user_profile() if rest == rp.user_profile().name else None
+            p = rp.self_profile() if rest == rp.self_profile().name else None
         elif kind == "character":
             p = rp.character_card() if rest == rp.character_card().name else None
         elif kind == "agents":
@@ -377,7 +377,7 @@ def landscape(mb) -> Dict[str, Any]:
                "session_files": doc_by_kind.get("session", 0)},
         "l2": {"narrative_index": narr_total, "by_kind": by_narr_kind,
                "scenes": scenes[:120], "documents": doc_by_kind},
-        "l3": {"profile": _asset(rp.user_profile()),
+        "l3": {"profile": _asset(rp.self_profile()),
                "character": _asset(rp.character_card()),
                "agents": _asset(rp.global_agents_file())},
         "context": {"count": db["circle_notes"], "notes": circle,
@@ -420,13 +420,17 @@ def _observation_metrics(mb, days: int = 30) -> Dict[str, Any]:
         pass
     today = datetime.now().astimezone().date()
     day_keys = [(today - timedelta(days=i)).isoformat() for i in range(days - 1, -1, -1)]
-    daily = {d: {"runs": 0, "calls": 0, "hits": 0, "zero": 0, "context_chars": 0}
-             for d in day_keys}
+    daily = {d: {"runs": 0, "calls": 0, "hits": 0, "zero": 0,
+                 "context_chars": 0, "missed": 0} for d in day_keys}
     by_tool: Dict[str, int] = {}
     calls = hits = zero = ctx_chars = ctx_injected = cross = external = llm_delta = 0
+    evidence_runs = bundle_taken = quota_blocked = 0
+    no_candidate = missed_candidate = fetched = 0
     last_ts = ""
     for r in rows:
         c = int(r.get("calls") or 0)
+        ev = int(r.get("evidence") or 0)
+        bt = int(r.get("bundle_taken") or 0)
         calls += c
         hits += int(r.get("hits") or 0)
         zero += 1 if r.get("zero_query") or c == 0 else 0
@@ -435,6 +439,17 @@ def _observation_metrics(mb, days: int = 30) -> Dict[str, Any]:
         cross += int(r.get("narrative_cross") or 0)
         external += 1 if r.get("source_external") else 0
         llm_delta += int(r.get("llm_calls_delta") or 0)
+        evidence_runs += 1 if ev > 0 else 0
+        bundle_taken += bt
+        quota_blocked += int(r.get("quota_blocked") or 0)
+        missed = False
+        if c > 0 or bt > 0:
+            fetched += 1
+        elif ev > 0:
+            missed_candidate += 1
+            missed = True
+        else:
+            no_candidate += 1
         for k, v in (r.get("by_tool") or {}).items():
             if isinstance(v, (int, float)):
                 by_tool[str(k)] = by_tool.get(str(k), 0) + int(v)
@@ -447,6 +462,7 @@ def _observation_metrics(mb, days: int = 30) -> Dict[str, Any]:
             daily[d]["hits"] += int(r.get("hits") or 0)
             daily[d]["zero"] += 1 if r.get("zero_query") or c == 0 else 0
             daily[d]["context_chars"] += int(r.get("context_chars") or 0)
+            daily[d]["missed"] += 1 if missed else 0
     n = len(rows)
     return {
         "runs": n, "calls": calls, "hits": hits,
@@ -456,11 +472,17 @@ def _observation_metrics(mb, days: int = 30) -> Dict[str, Any]:
         "context_injected_runs": ctx_injected,
         "narrative_cross": cross, "external_runs": external,
         "llm_calls_delta": llm_delta,
+        "evidence_runs": evidence_runs,
+        "bundle_taken": bundle_taken, "quota_blocked": quota_blocked,
+        "no_candidate": no_candidate, "missed_candidate": missed_candidate,
+        "fetched": fetched,
+        "missed_rate": round(missed_candidate / n, 3) if n else None,
         "by_tool": dict(sorted(by_tool.items(), key=lambda kv: -kv[1])),
         "daily": [{"date": d, **daily[d]} for d in day_keys],
         "last_ts": last_ts,
         "files": len(list(_mem_dir(mb).glob("memory_recall-*.jsonl"))) if n else 0,
-        "note": "每 run 一行观测；hit_rate = hits/calls，zero_rate = 0 召回 run 占比",
+        "note": "每 run 一行观测；zero_rate 是零自取率（非 0 召回率）；"
+                "missed_candidate = 有高置信候选却一次都没取",
     }
 
 
@@ -524,7 +546,8 @@ def metrics(mb) -> Dict[str, Any]:
         writer = {}
     conn = mb.open_brain()
     try:
-        active = _count(conn, "atoms")
+        active = int(conn.execute("SELECT COUNT(*) FROM atoms WHERE state='active'")
+                     .fetchone()[0] or 0)
         tomb = int(conn.execute("SELECT COUNT(*) FROM atoms WHERE state != 'active'")
                    .fetchone()[0] or 0)
         salience = conn.execute("SELECT AVG(salience), MAX(salience) FROM atoms "

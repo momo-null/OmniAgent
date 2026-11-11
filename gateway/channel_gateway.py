@@ -18,7 +18,7 @@ from typing import Any, Dict, List
 
 from . import dispatch
 from .channels import context
-from .scheduler import Scheduler
+from .scheduler import Scheduler, submit_via_web
 
 _ADAPTER_FACTORIES = {}  # name -> build(cfg)  惰性注册（避免 import 不必要 SDK）
 
@@ -134,8 +134,12 @@ def _on_message(msg) -> None:
     project_id, session_id = _route_chat(msg)
     # 结构化说话人：适配层能归一就直接用；只给 user_id 的通道在边界层补成
     # 通用的 ``标识(标识)`` 形态，使任何通道的人都能进同一套人物聚合。
+    # 主人归一（2026-11-11）：speaker/uid 命中主人在任何通道都落到同一张关系卡——
+    # 必须在下面的 ``uid(uid)`` 兜底**之前**做，否则群名片各异/私聊裸 uid 会裂成多卡。
+    from omni_core.local.identity import normalize_master
     _speaker = str(getattr(msg, "speaker", "") or "")
     _uid = str(getattr(msg, "user_id", "") or "")
+    _speaker = normalize_master(_speaker, _uid)
     if not _speaker and _uid:
         _speaker = f"{_uid}({_uid})"
     # 能力门透传：外部可达通道默认 allow_tools=False → 该来源任务为纯对话（无任何工具）。
@@ -197,7 +201,7 @@ def main() -> int:
 
     sched = None
     if not no_scheduler:
-        sched = Scheduler(dispatch.submit)
+        sched = Scheduler(submit_via_web)
         sched.start()
         print("[gateway] 调度器已启动（jobs 热加载）")
 

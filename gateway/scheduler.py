@@ -358,9 +358,131 @@ def _channel_gate(job: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# ── 定时任务主路径：送进 Web 端 chat 轮次（2026-11-11） ──────────────────────
+# 与人工聊天同一条 _dispatch_chat 轮次，因此同样落 extra.meta（前端完成信息条）。
+# 定时任务不是外部调用：source_kind=task，source_external 沿用 Web 链路缺省 False。
+_BACKEND_URL_ENV = "OMNIAGENT_BACKEND_URL"
+_BACKEND_URL_DEFAULT = "http://127.0.0.1:8000"
+_WATCH_TIMEOUT_S = 3600
+_WATCH_POLL_S = 2
+
+
+def _backend_url() -> str:
+    import os
+    return (os.environ.get(_BACKEND_URL_ENV) or _BACKEND_URL_DEFAULT).rstrip("/")
+
+
+def _in_backend_process() -> bool:
+    """backend 进程内直接调 chat 链路，避免 HTTP 自调用把 event loop 堵死。"""
+    import sys
+    return any(name in sys.modules for name in
+               ("backend.api.router_cron", "backend.api.router_runtime", "backend.server"))
+
+
+def _task_state(task_id: str) -> str:
+    try:
+        from omni_core.local.task_store import TaskStore
+        return str((TaskStore.get(task_id) or {}).get("state") or "")
+    except Exception:
+        return ""
+
+
+def _last_agent_text(task_id: str) -> str:
+    """轮次结论（跨进程同一份文件真相，无需 HTTP 轮询）。"""
+    try:
+        from omni_core.local.task_store import TaskStore, ProjectStore
+        meta = TaskStore.get(task_id) or {}
+        pid, sid = str(meta.get("project_id") or ""), str(meta.get("session_id") or "")
+        if not (pid and sid):
+            return ""
+        recs = ProjectStore.coalesce_records(ProjectStore.read_session(pid, sid))
+        for rec in reversed(recs):
+            if (str(rec.get("role") or "") in ("agent", "assistant")
+                    and str(rec.get("content") or "").strip()):
+                return str(rec["content"]).strip()[:800]
+    except Exception:
+        pass
+    return ""
+
+
+def _broadcast_result(notify_channel: str, source: str, task_id: str,
+                      ok: bool, summary: str) -> None:
+    """回发沿用网关进程的通道注册表；backend 进程内无适配器时静默跳过。"""
+    try:
+        from .channels import context as _ctx
+        adapter = _ctx.get_adapter(notify_channel)
+        if adapter:
+            body = f"{'✅' if ok else '⚠️'} [{source} {task_id[:8]}]\n" \
+                   f"{summary or '(这一轮没有产出内容)'}"
+            adapter.broadcast(body[:3500])
+    except Exception:
+        pass
+
+
+def _watch_chat_turn(task_id: str, job_id: str, source: str,
+                     notify_channel: str) -> None:
+    """等 Web 轮次收口 → 写运行记录 + 回发（尽力而为，绝不拖慢调度）。"""
+    state = ""
+    deadline = time.time() + _WATCH_TIMEOUT_S
+    while time.time() < deadline:
+        time.sleep(_WATCH_POLL_S)
+        state = _task_state(task_id)
+        if state in ("done", "failed"):
+            break
+    ok = state == "done"
+    summary = _last_agent_text(task_id)
+    if job_id:
+        record_run(job_id, task_id, "ok" if ok else "error",
+                   summary=summary, error="" if ok else "Web 轮次未正常收口")
+    if notify_channel:
+        _broadcast_result(notify_channel, source, task_id, ok, summary)
+
+
+def submit_via_web(objective: str, done_when: str = "", max_steps: int = 40, *,
+                   source: str = "manual", project_id: Optional[str] = None,
+                   notify_channel: Optional[str] = None,
+                   job_id: Optional[str] = None) -> str:
+    """定时任务入站：走 Web chat 链路；Web 不可达时回落网关派发，不断档。"""
+    payload = {
+        "objective": objective,
+        "project_id": project_id or "",
+        "done_when": done_when or "",
+        "max_steps": int(max_steps or 0),
+        "mode": "task",
+        "source_kind": "task",
+        "title": job_id or source,
+    }
+    task_id = ""
+    try:
+        if _in_backend_process():
+            from backend.api.routers.chat_runtime import launch_scheduled_turn
+            task_id = launch_scheduled_turn(
+                objective, project_id=payload["project_id"],
+                done_when=payload["done_when"], max_steps=payload["max_steps"],
+                mode="task", source_kind="task", title=payload["title"])
+        else:
+            import requests
+            resp = requests.post(
+                f"{_backend_url()}/api/runtime/internal/scheduled_turn",
+                json=payload, timeout=3)
+            task_id = str((resp.json() if resp.ok else {}).get("task_id") or "")
+    except Exception:
+        task_id = ""
+    if not task_id:
+        from . import dispatch
+        return dispatch.submit(objective, done_when, max_steps, source=source,
+                               project_id=project_id, notify_channel=notify_channel,
+                               job_id=job_id)
+    if job_id:
+        record_run(job_id, task_id, "running")
+        threading.Thread(target=_watch_chat_turn,
+                         args=(task_id, job_id, source, notify_channel or ""),
+                         daemon=True).start()
+    return task_id
+
+
 def run_now(job_id: str) -> Optional[str]:
     """「立即运行」（前端按钮/调试用）：绕过 cron 直接派发。返回 task_id 或 None。"""
-    from . import dispatch
     job = next((j for j in load_jobs() if j["id"] == job_id), None)
     if not job:
         return None
@@ -372,7 +494,7 @@ def run_now(job_id: str) -> Optional[str]:
         except Exception:
             pass
         return None
-    return dispatch.submit(
+    return submit_via_web(
         job["objective"], job.get("done_when", ""), int(job.get("max_steps") or 0),
         source=f"manual:{job_id}", project_id=job.get("project_id") or None,
         notify_channel=job.get("notify_channel") or None, job_id=job_id,

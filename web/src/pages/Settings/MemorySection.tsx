@@ -31,7 +31,7 @@ export default function MemorySection() {
     <Group title="记忆" desc="记忆轴的总闸，管记忆全链路。">
       <SwitchRow
         title="启用记忆"
-        desc="开启后，任务收尾提炼记忆（L1 atoms）、整理场景块（L2），并把记忆与画像注入后续任务的系统提示；关闭后不记录、不维护、不注入。"
+        desc="开启后，任务收尾提炼记忆（L1 atoms）、整理场景块（L2），并把记忆与她的自我画像注入后续任务的系统提示；关闭后不记录、不维护、不注入。"
         checked={enabled}
         disabled={!loaded}
         onChange={(v) => { setEnabled(v); void save(v); }}

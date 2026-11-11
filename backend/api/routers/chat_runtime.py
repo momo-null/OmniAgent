@@ -65,6 +65,17 @@ router = APIRouter(tags=["runtime"])
 #: 240 条足够覆盖，长会话因此不再被整份解析（文件可达 MB 量级）。
 _MODEL_HISTORY_RECORDS = 240
 
+
+def _master_speaker() -> str:
+    """Web 入口的主人 speaker（2026-11-11）：Web 控制台的使用者就是主人（admin），
+    user 消息落库时恒盖章 ``主人(master)``（合成 key，零配置）——所有表面的主人
+    聚到同一张关系卡；通道侧标识靠认领名单匹配（local/identity.py）。"""
+    try:
+        from omni_core.local.identity import master_speaker
+        return master_speaker()
+    except Exception:
+        return ""
+
 # 注意力预算 / did_work 判定用：这些工具是"机制"或"只读"，不产出事实，因此不算干活。
 # 判定口径（plan §3.3）：本轮有**真实**工具调用（写文件 / 跑命令 / 抓网页 …）或派出去
 # 的任务确实执行了 → did_work=True，L2 场景维护才允许写。
@@ -93,7 +104,7 @@ def _did_work(turn_steps: List[Dict[str, Any]], result: Optional[Dict[str, Any]]
     return False
 
 
-def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, full_access: Optional[bool] = None, agent_id: str = AGENT_MAIN, model: Optional[str] = None, mode: str = "auto", persona: str = "", tools_enabled: Optional[bool] = None, tool_allowlist: Optional[List[str]] = None):
+def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, full_access: Optional[bool] = None, agent_id: str = AGENT_MAIN, model: Optional[str] = None, mode: str = "auto", persona: str = "", tools_enabled: Optional[bool] = None, tool_allowlist: Optional[List[str]] = None, source_kind: str = "chat"):
     """统一 agent 入口（单入口处理闲聊 + 双 agent 任务执行）。
 
     一个会话 = 一个 task（首条消息由调用方在外部建好 task 并传入 task_id）。
@@ -305,8 +316,8 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             from omni_core.local.loop import context_signal as _cs
             from omni_core.local.task_store import TaskStore as _TS
             _sid = str((_TS.get(task_id) or {}).get("session_id") or "")
-            _gwctx.set_source_kind("chat")
-            _cs.set_boundary(context_key=f"web:{_sid}", source_kind="chat",
+            _gwctx.set_source_kind(source_kind)
+            _cs.set_boundary(context_key=f"web:{_sid}", source_kind=source_kind,
                              session_id=_sid, sent_count=_gwctx.sent_count)
         except Exception:
             pass
@@ -709,7 +720,8 @@ async def api_inject(request: Request):
         _pid = _meta.get("project_id", "") if _meta else ""
         _sid = _meta.get("session_id", "") if _meta else ""
         if _pid and _sid:
-            ProjectStore.append_message(_pid, _sid, "user", text, task_id=task_id)
+            ProjectStore.append_message(_pid, _sid, "user", text, task_id=task_id,
+                                        speaker=_master_speaker())
     except Exception:
         pass
     return JSONResponse({"ok": True, "msg": "已注入"})
@@ -816,7 +828,8 @@ async def api_chat(request: Request):
     session_id = meta.get("session_id", "")
     if project_id and session_id:
         try:
-            ProjectStore.append_message(project_id, session_id, "user", last_user, task_id=task_id)
+            ProjectStore.append_message(project_id, session_id, "user", last_user,
+                                        task_id=task_id, speaker=_master_speaker())
         except Exception:
             pass
 
@@ -899,7 +912,8 @@ async def api_wake(request: Request):
     session_id = meta.get("session_id", "")
     if project_id and session_id:
         try:
-            ProjectStore.append_message(project_id, session_id, "user", wake_text, task_id=task_id)
+            ProjectStore.append_message(project_id, session_id, "user", wake_text,
+                                        task_id=task_id, speaker=_master_speaker())
         except Exception:
             pass
 
@@ -918,3 +932,80 @@ async def api_wake(request: Request):
     threading.Thread(target=_rt._dispatch_chat,
                      args=(task_id, messages, max_steps, None, AGENT_MAIN), daemon=True).start()
     return JSONResponse({"ok": True, "task_id": task_id, "msg": "已唤醒"})
+
+
+def launch_scheduled_turn(objective: str, *, project_id: str = "",
+                          done_when: str = "", max_steps: int = 0,
+                          mode: str = "task", source_kind: str = "task",
+                          title: str = "") -> str:
+    """内部事件触发一轮 Web chat；返回 task_id，冲突/失败返回空串。
+
+    复用 ``/chat`` 的建 task → 置 running → 派发三段，因此同样落 ``extra.meta``
+    （前端完成信息条）。不走 HTTP，backend 进程内直调也安全，避免自调用死锁。
+    ``source_kind`` 显式标为 task：任务目标不伪装成聊天原话（INV-13）。
+    """
+    text = str(objective or "").strip()
+    if not text:
+        return ""
+    TaskStore = _task_store()
+    ProjectStore = _project_store()
+    steps = int(max_steps or config.get_config("runtime.default_max_steps", 40))
+    try:
+        meta = TaskStore.create(objective=text, done_when=done_when,
+                                project_id=project_id or None, title=title)
+    except Exception:
+        return ""
+    task_id = str(meta.get("task_id") or "")
+    pid = str(meta.get("project_id") or "")
+    sid = str(meta.get("session_id") or "")
+    if pid and sid:
+        try:
+            ProjectStore.append_message(pid, sid, "user", text, task_id=task_id,
+                                        l0_kind="task", speaker=_master_speaker())
+        except Exception:
+            pass
+    lane = "work" if mode == "task" else "chat"
+    if not _try_start_task(task_id, AGENT_MAIN, lane=lane):
+        return ""
+    try:
+        TaskStore.update(task_id, state="running", mode=mode)
+    except Exception:
+        pass
+    mark_turn_start(task_id)
+    push_chat("user", text, task_id=task_id)
+    threading.Thread(
+        target=_rt._dispatch_chat,
+        args=(task_id, [{"role": "user", "content": text}], steps, None,
+              AGENT_MAIN, None, mode, "", None, None, source_kind),
+        daemon=True).start()
+    return task_id
+
+
+@router.post("/internal/scheduled_turn")
+async def internal_scheduled_turn(request: Request):
+    """跨进程入站：把内部事件（定时任务等）送进 Web chat 链路。
+
+    通用事件入站，不含业务/场景词；project_id / mode / 步数由调用方给出。
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "请求体不是合法 JSON"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"ok": False, "error": "请求体必须是 JSON 对象"}, status_code=400)
+    try:
+        steps = int(payload.get("max_steps") or 0)
+    except (TypeError, ValueError):
+        steps = 0
+    task_id = launch_scheduled_turn(
+        str(payload.get("objective") or ""),
+        project_id=str(payload.get("project_id") or ""),
+        done_when=str(payload.get("done_when") or ""),
+        max_steps=steps,
+        mode=str(payload.get("mode") or "task"),
+        source_kind=str(payload.get("source_kind") or "task"),
+        title=str(payload.get("title") or ""),
+    )
+    if not task_id:
+        return JSONResponse({"ok": False, "error": "派发失败或目标为空"}, status_code=409)
+    return JSONResponse({"ok": True, "task_id": task_id})

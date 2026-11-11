@@ -44,8 +44,8 @@ def _seed_layers(tmp_path):
     rel = rp.global_relations()
     rel.mkdir(parents=True, exist_ok=True)
     (rel / "u1.md").write_text("-----META-END-----\n甲，爱看展。", encoding="utf-8")
-    rp.user_profile().parent.mkdir(parents=True, exist_ok=True)
-    rp.user_profile().write_text("主人偏好清淡。", encoding="utf-8")
+    rp.self_profile().parent.mkdir(parents=True, exist_ok=True)
+    rp.self_profile().write_text("她偏好清淡饮食。", encoding="utf-8")
     rp.global_agents_file().parent.mkdir(parents=True, exist_ok=True)
     rp.global_agents_file().write_text("说人话。", encoding="utf-8")
     scenes = rp.project_dir("demo") / "memory" / "scene_blocks"
@@ -80,7 +80,7 @@ def test_landscape_covers_all_layers(client, tmp_path):
     assert brain["circle_notes"] == 1 and brain["by_kind"].get("fact", 0) >= 2
     assert "atoms_fts_gap" in d["health"] and "last_consolidation" in d["health"]
     assert d["l0"]["recent"][0]["text"] == "你好呀"
-    assert d["l3"]["profile"]["exists"] and "主人偏好清淡" in d["l3"]["profile"]["preview"]
+    assert d["l3"]["profile"]["exists"] and "她偏好清淡饮食" in d["l3"]["profile"]["preview"]
     assert d["context"]["notes"][0]["summary"] == "群里聊看展"
     assert "tables" in brain and "writer" in d
     kinds = {x["kind"] for x in d["documents"]}
@@ -122,7 +122,7 @@ def test_document_read_whitelist(client, tmp_path):
     assert docs and all("key" in x and "chars" in x for x in docs)
     r = client.get("/api/debug/memory/document", params={"key": "diary/diary-2026-11-01.md"})
     assert r.json()["ok"] and "看了展" in r.json()["text"]
-    assert client.get("/api/debug/memory/document", params={"key": "profile/user_profile.md"}).json()["text"] == "主人偏好清淡。"
+    assert client.get("/api/debug/memory/document", params={"key": "profile/self_profile.md"}).json()["text"] == "她偏好清淡饮食。"
     assert client.get("/api/debug/memory/document", params={"key": "scene/demo/topic.md"}).json()["ok"]
     assert client.get("/api/debug/memory/document", params={"key": "session/demo/s_1.jsonl"}).json()["ok"]
     for bad in ("diary/../secret.txt", "nope/x", "diary//etc/passwd", "profile/../../config.py"):

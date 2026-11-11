@@ -4,7 +4,7 @@ P1（方案 C，2026-11-02）：**L1 检索结果永不自动注入**——lead-
 模型经 memory_recall 工具自取；system 常驻 <memory-usage-rules>（必查场景 + 每轮 ≤3 次）。
 本文件锁死四条不变量：
 
-1. 稳定段（<memory-usage-rules> + <scene-navigation> + <user-persona>）进 system，
+1. 稳定段（<memory-usage-rules> + <scene-navigation> + <self-persona>）进 system，
    且在指纹计算之前合并；
 2. run 起始**没有** <relevant-memories>，inject_text_brain 不被自动调用；
    检索结果只经工具返回进上下文一次；
@@ -87,7 +87,7 @@ def test_stable_block_scene_nav_and_profile_in_system(monkeypatch):
                                           {"filename": "diary-2026-10-31.md",
                                            "summary": "DIARY-SUM", "heat": 0,
                                            "updated": "2026-11-01T00:00:00+00:00"}])
-    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
+    monkeypatch.setattr(ki, "load_self_text", lambda *a, **k: "PROFILE-TEXT")
 
     block, layers = loop._memory_stable_block(False, task_id="tid")
     assert "<scene-navigation>" in block and "</scene-navigation>" in block
@@ -98,8 +98,8 @@ def test_stable_block_scene_nav_and_profile_in_system(monkeypatch):
     # 固定配额——固定日记条目不进导航（叙事经 narrative_search 按需检索）
     assert "DIARY-SUM" not in block and "diary-2026-10-31" not in block
     assert "read_scene" in block, "导航必须指引按需读取（渐进披露）"
-    assert "<user-persona>" in block and "PROFILE-TEXT" in block
-    assert layers == ["memory_rules", "scene_nav", "user_profile"]
+    assert "<self-persona>" in block and "PROFILE-TEXT" in block
+    assert layers == ["memory_rules", "scene_nav", "self_profile"]
     assert "<memory-usage-rules>" in block, "P1：使用规则常驻 system（检索结果永不自动注入）"
     # NP-2：叙事能力声明（零内容）+ 不得转述规则 + 七工具配额口径
     assert "narrative_search" in block and "narrative_read" in block
@@ -121,7 +121,7 @@ def test_stable_block_rules_survive_empty_scene_and_profile(monkeypatch):
     loop.knowledge_cfg["memory"] = True
     loop.knowledge_cfg["profile"] = True
     monkeypatch.setattr(scene_executor, "load_scene_nav", lambda pid, **k: [])
-    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "  ")
+    monkeypatch.setattr(ki, "load_self_text", lambda *a, **k: "  ")
     block, layers = loop._memory_stable_block(False, task_id="tid")
     assert "<memory-usage-rules>" in block and layers == ["memory_rules"]
 
@@ -134,7 +134,7 @@ def test_bridge_merges_stable_block_into_instructions_before_fingerprint(monkeyp
     _cfg(monkeypatch)
     monkeypatch.setattr(scene_executor, "load_scene_nav",
                         lambda pid, **k: [{"filename": "a.md", "summary": "SCENE-SUM", "heat": 1}])
-    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
+    monkeypatch.setattr(ki, "load_self_text", lambda *a, **k: "PROFILE-TEXT")
 
     captured = {}
     monkeypatch.setattr(sl, "run_subtask_sdk", _fake_sdk(captured))
@@ -142,7 +142,7 @@ def test_bridge_merges_stable_block_into_instructions_before_fingerprint(monkeyp
                       traj=None, user_input="hi")
 
     instr = captured["instructions"] or ""
-    assert "<scene-navigation>" in instr and "<user-persona>" in instr
+    assert "<scene-navigation>" in instr and "<self-persona>" in instr
     assert loop._fp_system_prompt == instr, "指纹输入必须是拼接稳定段后的 system"
 
 
@@ -161,7 +161,7 @@ def test_search_results_never_auto_injected_rules_in_system(monkeypatch):
     monkeypatch.setattr(scene_executor, "load_scene_nav",
                         lambda pid, **k: [{"filename": "a.md", "summary": "S", "heat": 1}])
     monkeypatch.setattr(mb, "inject_text_brain", _spy_inject)
-    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
+    monkeypatch.setattr(ki, "load_self_text", lambda *a, **k: "PROFILE-TEXT")
 
     captured = {}
     monkeypatch.setattr(sl, "run_subtask_sdk", _fake_sdk(captured))
@@ -177,12 +177,16 @@ def test_search_results_never_auto_injected_rules_in_system(monkeypatch):
     assert "合计不超过 3 次" in instr
     placements = {r["placement"]: r for r in traj.records("memory_injected")}
     assert set(placements) == {"system"}
-    assert placements["system"]["layers"] == ["memory_rules", "scene_nav", "user_profile"]
+    assert placements["system"]["layers"] == ["memory_rules", "scene_nav", "self_profile"]
     assert "<current-context>" not in instr, "空信号零注入"
 
 
-def test_context_signal_layer_in_stable_block(monkeypatch):
-    """M1（plan §6.1）：<current-context> 随稳定段进 system，layers 带 context_signal。"""
+def test_context_signal_moved_out_of_system(monkeypatch):
+    """2026-11-11 钉前缀：逐 run 变化的 <current-context> 不再进 system。
+
+    静态知识块（rules / scene_nav / profile）留在 system 跨 run 字节一致；
+    处境信号改由当轮 user 输入携带，单独落 context_signal_injected 轨迹。
+    """
     from omni_core.local.loop import context_signal as cs
 
     loop = _loop()
@@ -190,25 +194,24 @@ def test_context_signal_layer_in_stable_block(monkeypatch):
     loop.knowledge_cfg["profile"] = True
     _cfg(monkeypatch)
     monkeypatch.setattr(scene_executor, "load_scene_nav", lambda pid, **k: [])
-    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "")
-    cs._CURRENT.clear()
-    cs._CURRENT.update({"context_key": "group:7", "source_kind": "chat", "peer": "甲(1)",
-                        "project_id": "", "recent_topics": ["白米饭"], "tone": "",
-                        "run_id": "t:rk"})
-    try:
-        captured = {}
-        monkeypatch.setattr(sl, "run_subtask_sdk", _fake_sdk(captured))
-        traj = _Rec()
-        loop._run_via_sdk(_spec(), {"model": "m"}, "SYS", types.SimpleNamespace(),
-                          traj=traj, user_input="hi")
-        instr = captured["instructions"] or ""
-        assert instr.count("<current-context>") == 1      # 每 run 只注入一次
-        assert "context=group:7" in instr
-        placements = {r["placement"]: r for r in traj.records("memory_injected")}
-        assert "context_signal" in placements["system"]["layers"]
-        assert len(instr.split("<current-context>")) - 1 <= 200  # ≤200 字符量级红线
-    finally:
-        cs._CURRENT.clear()
+    monkeypatch.setattr(ki, "load_self_text", lambda *a, **k: "")
+    monkeypatch.setattr(cs, "build_run", lambda **k: dict(cs._CURRENT))
+    monkeypatch.setattr(cs, "render",
+                        lambda *a, **k: "<current-context>\ncontext=group:7\n"
+                                        "</current-context>")
+    captured = {}
+    monkeypatch.setattr(sl, "run_subtask_sdk", _fake_sdk(captured))
+    traj = _Rec()
+    loop._run_via_sdk(_spec(), {"model": "m"}, "SYS", types.SimpleNamespace(),
+                      traj=traj, user_input="hi")
+    instr = captured["instructions"] or ""
+    assert "<current-context>" not in instr, "动态信号不得进 system（否则前缀逐 run 失效）"
+    assert "context=group:7" in str(captured.get("user_input") or ""), \
+        "处境信号随当轮输入进上下文"
+    placements = {r["placement"]: r for r in traj.records("memory_injected")}
+    assert set(placements) == {"system"}
+    assert "context_signal" not in placements["system"]["layers"]
+    assert traj.records("context_signal_injected"), "新 kind 单独落轨迹"
 
 
 def test_memory_gate_off_zero_injection(monkeypatch):
@@ -218,7 +221,7 @@ def test_memory_gate_off_zero_injection(monkeypatch):
     _cfg(monkeypatch)
     monkeypatch.setattr(scene_executor, "load_scene_nav",
                         lambda pid, **k: [{"filename": "a.md", "summary": "S", "heat": 1}])
-    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
+    monkeypatch.setattr(ki, "load_self_text", lambda *a, **k: "PROFILE-TEXT")
 
     captured = {}
     monkeypatch.setattr(sl, "run_subtask_sdk", _fake_sdk(captured))
@@ -304,7 +307,7 @@ def test_subtask_gets_no_memory_injection(monkeypatch):
     loop.knowledge_cfg["profile"] = True
     monkeypatch.setattr(scene_executor, "load_scene_nav",
                         lambda pid, **k: [{"filename": "a.md", "summary": "S", "heat": 1}])
-    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "PROFILE-TEXT")
+    monkeypatch.setattr(ki, "load_self_text", lambda *a, **k: "PROFILE-TEXT")
 
     assert loop._memory_stable_block(True, task_id="t") == ("", [])
 
@@ -423,7 +426,7 @@ def test_we_memory_rhythm_switch_default_off(monkeypatch):
     loop.knowledge_cfg["memory"] = True
     loop.knowledge_cfg["profile"] = True
     monkeypatch.setattr(scene_executor, "load_scene_nav", lambda pid, **k: [])
-    monkeypatch.setattr(ki, "load_profile_text", lambda *a, **k: "")
+    monkeypatch.setattr(ki, "load_self_text", lambda *a, **k: "")
     _cfg(monkeypatch)
     base, _ = loop._memory_stable_block(False, task_id="tid")
     assert "把话递回去" not in base                      # 缺省关：行为与现状一致

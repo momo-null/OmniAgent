@@ -94,8 +94,8 @@ def test_recent_topics_no_llm_circle_note_first(brain, monkeypatch):
     assert all(len(t) <= 12 for t in topics) and len(topics) <= 4
 
 
-def test_stable_block_injects_context_once(brain):
-    """稳定段含 <current-context> 且只出现一次（M1 验收：每 run 只注入一次）。"""
+def test_stable_block_is_static_context_rendered_separately(brain):
+    """2026-11-11：稳定段不含动态处境，<current-context> 由 cs.render() 单独产出。"""
     cs._CURRENT.update({"context_key": "group:7", "source_kind": "chat",
                         "peer": "甲(1)", "project_id": "qq",
                         "recent_topics": ["白米饭"], "run_id": "t:rk"})
@@ -105,9 +105,14 @@ def test_stable_block_injects_context_once(brain):
             self.knowledge_cfg = {"memory": True}
 
     block, layers = _FakeLoop()._memory_stable_block(False, task_id="t1")
-    assert block.count("<current-context>") == 1
-    assert block.count("</current-context>") == 1
-    assert "context_signal" in layers
+    assert "<current-context>" not in block, "动态信号留在 system 会破坏跨 run 前缀"
+    assert "context_signal" not in layers
+    assert "<memory-usage-rules>" in block
+    # 处境信号仍是每 run 一次、≤200 字符，只是不再由稳定段承载
+    rendered = cs.render()
+    assert rendered.count("<current-context>") == 1
+    assert rendered.count("</current-context>") == 1
+    assert len(rendered) <= 200
     # 子任务零注入
     block_sub, layers_sub = _FakeLoop()._memory_stable_block(True, task_id="t1")
     assert block_sub == "" and layers_sub == []

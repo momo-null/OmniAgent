@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from omni_core.local.runtime_paths import (
-    character_card, global_skills, project_skills, user_profile,
+    character_card, global_skills, project_skills, self_profile,
 )
 from omni_core.local.skill_library import SkillLibrary
 from omni_core.local import llm_judge
@@ -46,14 +46,15 @@ def _resolve_project_id(task_id: str) -> str:
         return "default"
 
 
-def load_profile_text() -> str:
-    """读取全局用户画像 user_profile.md 并截断管控；不存在/异常返回空。
+def load_self_text() -> str:
+    """读取她的自我画像 self_profile.md 并截断管控；不存在/异常返回空。
 
-    画像为**独立注入块**（与记忆段分开），携带弱注入语义；
+    自我画像是**角色本人的演化层**（她的兴趣/品味/生活史/能力面），与静态
+    character.md 互补；独立注入块（与记忆段分开），携带弱注入语义。
     未落地/空文件时返回空串（零注入），不影响主流程。
     """
     try:
-        p = user_profile()
+        p = self_profile()
         if not p.exists():
             return ""
         return p.read_text(encoding="utf-8")[:_PROFILE_TRUNCATE]
@@ -80,7 +81,7 @@ def load_character_text() -> str:
 # 放置原则（按「授权面 + 变更面」，2026-09-21 定论；2026-10-07 TAM 对齐修订）：
 #   * 用户单写、run 内不变的**稳定纪律**（AGENTS.md）→ system prompt
 #     （缓存命中 + 覆盖语义正确「用户当轮指令覆盖一切」+ 注入面收敛）；
-#   * 记忆稳定段（scene 摘要导航 / 用户画像）→ system prompt（同上，TAM stable 段）；
+#   * 记忆稳定段（scene 摘要导航 / 她的自我画像）→ system prompt（同上，TAM stable 段）；
 #   * L1 检索记忆 → run 开始一条 user 消息（TAM 动态段，每轮一次，不重发）；
 #   * L2 场景全文 → **不注入**，read_scene 工具按需读取（渐进披露）。
 _MEMORY_HEADER = (

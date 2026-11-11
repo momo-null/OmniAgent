@@ -44,8 +44,14 @@ export default function MetricsPanel() {
             <Row label="观测 run 数" value={obs?.runs ?? "—"} />
             <Row label="检索命中率" value={pct(obs?.hit_rate)}
               tone={(obs?.hit_rate ?? 1) >= 0.5 ? "ok" : "warn"} />
-            <Row label="0 召回率" value={pct(obs?.zero_rate)}
+            <Row label="零自取率" value={pct(obs?.zero_rate)}
               tone={(obs?.zero_rate ?? 1) <= 0.1 ? "ok" : "warn"} />
+            <Row label="有候选 run" value={obs?.evidence_runs ?? "—"} />
+            <Row label="该取未取" value={obs?.missed_candidate ?? "—"}
+              tone={(obs?.missed_candidate ?? 0) === 0 ? "ok" : "warn"} />
+            <Row label="本来无候选" value={obs?.no_candidate ?? "—"} />
+            <Row label="候选包取用 / 配额拦截"
+              value={`${obs?.bundle_taken ?? 0} / ${obs?.quota_blocked ?? 0}`} />
             <Row label="平均注入字符" value={num(obs?.avg_context_chars, 1)} />
             <Row label="叙事跨场合" value={obs?.narrative_cross ?? "—"} />
             <Row label="外部来源 run" value={obs?.external_runs ?? "—"} />
@@ -85,7 +91,7 @@ export default function MetricsPanel() {
                   </Typography>
                 </Stack>
                 <Typography sx={{ fontSize: 10, color: "text.disabled", mt: 0.3 }}>
-                  柱高 = run 数，红段 = 0 召回 run
+                  柱高 = run 数，红段 = 零自取 run；该取未取见上方
                 </Typography>
               </Box>
             )}

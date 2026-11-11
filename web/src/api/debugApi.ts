@@ -142,8 +142,12 @@ export interface MetricsReport {
     hit_rate?: number | null; zero_runs?: number; zero_rate?: number | null;
     avg_context_chars?: number | null; context_injected_runs?: number;
     narrative_cross?: number; external_runs?: number; llm_calls_delta?: number;
+    evidence_runs?: number; bundle_taken?: number; quota_blocked?: number;
+    no_candidate?: number; missed_candidate?: number; fetched?: number;
+    missed_rate?: number | null;
     by_tool?: Record<string, number>;
-    daily?: { date: string; runs: number; calls: number; hits: number; zero: number; context_chars: number }[];
+    daily?: { date: string; runs: number; calls: number; hits: number; zero: number;
+              context_chars: number; missed?: number }[];
     last_ts?: string; files?: number; note?: string;
   };
   effect_report?: {
@@ -170,6 +174,9 @@ export const debugApi = {
   // 旧版兼容转储（单库 atoms + overview）
   memory: (params?: { task_id?: string; limit?: number }) =>
     http.get<DebugMemoryResponse>("/api/debug/memory", { params }),
+  // 手动注销关系卡（admin：删正文+撤索引；主人卡拒绝）
+  deleteRelationCard: (uid: string) =>
+    http.delete(`/api/debug/memory/relation-card`, { params: { uid } }),
   deleteMemory: (recordId: string) =>
     http.post<{ ok: boolean; error?: string }>("/api/debug/memory/delete", {
       record_id: recordId,

@@ -323,6 +323,13 @@ CONTEXT_DEFAULTS: Dict[str, Any] = {
             "auto_maintain": True,
             "trigger_every_n": 20,
         },
+        # 关系卡（对人的印象卡）。master_uids = 主人的通道标识名单（认领界面读写，
+        # 支持多号；值属本地隐私不入仓库，默认空 = 通道侧零归一——Web 控制台恒为主人
+        # 不受影响）。归一/认领逻辑在 local/identity.py 与 backend 认领端点。
+        "relations": {
+            "enabled": True,
+            "master_uids": [],
+        },
         # 场景块（L2，scene_executor = TAM scene-extractor 移植）：
         # max_blocks 容量上限（TAM maxScenes 缺省 15，三级预警强制合并）；
         # prompt_mode 提炼家族开关（personal=场景知识；work 家族将来加 prompt 常量即接入）

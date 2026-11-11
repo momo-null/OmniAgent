@@ -461,8 +461,12 @@ class _CompactionModel(Model):
         prune_threshold: int = 0,
         prune_head: int = 0,
         prune_tail: int = 0,
+        context_note: str = "",
     ):
         self._inner = inner
+        # 2026-11-11：逐 run 的处境说明已从 system 移到起始 items。压缩会切掉
+        # 起始 items，故在压缩产物上重新贴一次（同一 run 内文本不变）。
+        self._context_note = str(context_note or "")
         self._threshold = int(threshold_tokens or 0)
         self._retain_ratio = float(retain_ratio or 0.0) or 0.5
         self._summarize = summarize
@@ -548,29 +552,42 @@ class _CompactionModel(Model):
 
         阈值判断走 ``_predict``（真实 usage 校准）：有样本时用「校准预测」替代纯
         估算，无样本/端点不回 usage 时退化为原纯估算——行为分支只可能更准。
+
+        2026-11-11：``<current-context>`` 从 system 移到起始 user 输入后，压缩
+        会把它连同起始 items 一起切掉。压缩产物（摘要 / 滑窗）必须重新贴一次，
+        否则超长任务后半程再也看不到场合信号。只贴请求副本，不动 SDK 原始 items。
         """
         if self._threshold <= 0 or self._summarize is None:
             return None
         if not isinstance(items, list) or not items:
             return None
+
+        def _with_note(out):
+            if not self._context_note or out is None:
+                return out
+            head = out[0] if out and isinstance(out[0], dict) else None
+            if head and head.get("content") == self._context_note:
+                return out                              # 已贴过，不重复
+            return [{"role": "user", "content": self._context_note}] + list(out)
+
         # Prune-First：先砍超长工具输出再判阈值（只改本次请求副本，不落 SDK items）
         if self._prune_threshold > 0:
             items, _ = _prune_tool_results(
                 items, self._prune_threshold, self._prune_head, self._prune_tail
             )
             if self._predict(_estimate_tokens(items)) <= self._threshold:
-                return items                               # 修剪后已达标：不必压缩
+                return items                               # 修剪后已达标：原样，起始输入自带信号
         elif self._predict(_estimate_tokens(items)) <= self._threshold:
             return None                                    # 低于阈值：透传、零开销
         cut = self._cut_index(items)
         summary = self._sticky_summary(system_instructions, items, cut)
         if summary is None:
-            return _hard_keep(items, self._keep_rounds)   # 摘要失效：纯滑窗降级
+            return _with_note(_hard_keep(items, self._keep_rounds))   # 摘要失效：纯滑窗降级
         tail_from = max(cut, self.kept_from)
         new_items = [summary] + list(items[tail_from:])
         if self._hard and self._predict(_estimate_tokens(new_items)) > self._hard:
-            return _hard_keep(items, self._keep_rounds)   # 硬上限兜底
-        return new_items
+            return _with_note(_hard_keep(items, self._keep_rounds))   # 硬上限兜底
+        return _with_note(new_items)
 
     def _cut_index(self, items: List[Any]) -> int:
         """按保留比例算出「尾部会话」起点：从末尾累计到保留预算为止。"""
@@ -1536,6 +1553,8 @@ def _assemble_agent_stack(
     prune_threshold: int = 0,
     prune_head: int = 0,
     prune_tail: int = 0,
+    # 2026-11-11：压缩后重新贴回的逐 run 处境说明（"" = 子任务零注入）
+    context_note: str = "",
     # M8（修复）：运行期人类软注入通道——人类 user 消息在下一请求边界注入（不依赖 checkpoint）
     human_injection: Optional[_HumanInjection] = None,
     # S9 视觉主链路：工具结果携带的图片附件注入通道（同一「请求级注入」范式；
@@ -1601,6 +1620,7 @@ def _assemble_agent_stack(
             prune_threshold=prune_threshold,
             prune_head=prune_head,
             prune_tail=prune_tail,
+            context_note=context_note,
         )
     # T4.7：输出截断检测——包在最外层，拿到最终响应的 usage 用量
     if max_output_tokens > 0:
@@ -1700,6 +1720,9 @@ def run_subtask_sdk(
     todo_store: Any = None,
     available_slots: Optional[List[str]] = None,
     skill_catalog: Optional[str] = None,
+    # 2026-11-11：逐 run 处境说明（已从 system 移到起始 user 输入）。压缩/硬滑窗
+    # 会切掉起始 items，压缩模型据此在请求副本上重新贴一次；"" = 子任务零注入。
+    context_note: str = "",
     budget_hint_ratio: float = 0.0,
     on_llm: Optional[Callable[[str, str, List[Any]], None]] = None,
     on_llm_delta: Optional[Callable[[str, str], None]] = None,
@@ -1758,6 +1781,7 @@ def run_subtask_sdk(
         prune_threshold=prune_threshold,
         prune_head=prune_head,
         prune_tail=prune_tail,
+        context_note=context_note,
         human_injection=human_injection,
         tool_attachments=tool_attachments,
         on_llm_timing=on_llm_timing,
@@ -1923,6 +1947,7 @@ def run_subtask_sdk(
                     overflow_retried = True
                     keep_rounds = getattr(model, "_keep_rounds", 0) or 8
                     items = _hard_keep(items, keep_rounds)
+                    items = _reapply_context_note(items, context_note)
                     continue
                 # 上下文溢出重试仍失败 -> 落入下方原有失败逻辑（落 reason）
             elif _is_length_truncation(e):
@@ -1937,6 +1962,7 @@ def run_subtask_sdk(
                         llm_calls=state.llm_calls, **_usage_kwargs(state), repeat_failures=state.repeat_failures)
                 keep_rounds = getattr(model, "_keep_rounds", 0) or 8
                 items = _hard_keep(items, keep_rounds)
+                items = _reapply_context_note(items, context_note)
                 items = _append_runtime_note(items, _LEN_TRUNC_MSG)
                 continue
             elif _is_tool_not_found(e):
@@ -2087,6 +2113,7 @@ def run_subtask_sdk(
             pass
         elif history_keep and history_keep > 0:
             items = _hard_keep(items, history_keep)
+            items = _reapply_context_note(items, context_note)
 
     # 走到这里 = 步数预算耗尽（未 task_done、未 verify 通过、未升级）。
     # 与旧循环一致：预算耗尽即失败，并写 budget_exhausted 供编排层终止。
@@ -2094,6 +2121,21 @@ def run_subtask_sdk(
 
 
 
+
+
+def _reapply_context_note(items: List[Any], note: str) -> List[Any]:
+    """硬滑窗改的是**真 items**（不可恢复），裁完把处境说明重新贴回头部。
+
+    与 ``_CompactionModel._compact`` 的副本级补贴互补：那条覆盖「本次请求被
+    压缩」，这条覆盖「SDK 原始 items 被硬裁」。同一 run 内 note 文本不变，
+    且贴前检查避免重复。
+    """
+    if not note or not items:
+        return items
+    first = items[0] if isinstance(items[0], dict) else None
+    if first and first.get("content") == note:
+        return items
+    return [{"role": "user", "content": note}] + list(items)
 
 
 def _hard_keep(items: List[Any], keep: int) -> List[Any]:

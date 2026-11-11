@@ -119,11 +119,23 @@ export const systemApi = {
   gpu: () => http.get("/api/system/gpu"),
 };
 
-// ── P0 用户画像（/api/runtime/profile） ─────────────
+// ── 主人身份（认领，/api/runtime/identity） ─────────────
+export const identityApi = {
+  // 主人状态：认领名单 + 主人卡元信息
+  master: () => http.get<any>("/api/runtime/identity/master"),
+  // 认领候选：近 7 天活跃说话人（q 非空 = 全量前缀搜索）
+  speakers: (q: string) => http.get<any>("/api/runtime/identity/speakers", { params: { q } }),
+  // 认领：并入主人卡（名单 + 回填 + 收编旧卡 + 宽窗重建）
+  claim: (uid: string) => http.post<any>("/api/runtime/identity/claim", { uid }),
+  // 解除认领
+  unclaim: (uid: string) => http.delete("/api/runtime/identity/claim", { data: { uid } }),
+};
+
+// ── P0 她的自我画像（/api/runtime/profile） ─────────────
 export const profileApi = {
   // 画像正文 + 候选区 + 注入开关
   get: () => http.get<ProfileIndex>("/api/runtime/profile"),
-  // 人工写画像正文（唯一人工入口，覆盖 user_profile.md）
+  // 人工写画像正文（唯一人工入口，覆盖 self_profile.md）
   update: (profile: string) => http.put("/api/runtime/profile", { profile }),
 };
 

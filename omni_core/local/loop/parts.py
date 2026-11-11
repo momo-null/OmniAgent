@@ -149,19 +149,32 @@ def _subtask_artifacts(world: Any) -> List[str]:
         if t and t not in out:
             out.append(t)
     return out[:_ARTIFACT_MAX]
-def _request_fingerprint(system_prompt: str, tool_names, session_len: int) -> str:
-    """T4.6（RH-1）：生成请求指纹 ``<系统提示哈希>-<工具列表哈希>-<会话长度>``。
+def _request_fingerprint(system_prompt: str, tool_names, session_len: int,
+                         context_note: str = "", tool_schemas: Any = None) -> str:
+    """T4.6（RH-1）：生成请求指纹 ``<内容哈希>-<工具名哈希>-<会话长度>``。
 
-    仅用于链路溯源（同一指纹 = 同一系统提示 + 同一工具集 + 同一会话长度），
-    不依赖任何厂商字段。
+    仅用于链路溯源，不依赖任何厂商字段。2026-11-11：把「移出 system 的
+    run 级处境说明」与「工具 schema 正文」并入内容哈希，否则动态块离开
+    system 后指纹不再覆盖模型可见内容（O5+ Model-visible ⟺ logged 失守），
+    且 schema 悄悄改了也发现不了。tool_schemas 按 name 排序后序列化，
+    工具**列表顺序**仍不影响指纹（既有回归锁不变）。
     """
     import hashlib
+    import json
 
     def _h(text: str) -> str:
         return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:8]
 
     names = "|".join(sorted(str(t) for t in (tool_names or [])))
-    return f"{_h(str(system_prompt or ''))}-{_h(names)}-{int(session_len or 0)}"
+    try:
+        schemas = sorted(tool_schemas or [],
+                         key=lambda t: str(getattr(t, "name", None)
+                                           or (t.get("name") if isinstance(t, dict) else "")))
+        schema_blob = json.dumps(schemas, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        schema_blob = ""
+    payload = "\x00".join((str(system_prompt or ""), str(context_note or ""), schema_blob))
+    return f"{_h(payload)}-{_h(names)}-{int(session_len or 0)}"
 def _recheck_spec(condition: str):
     """T4.4：仅供二次复核使用的轻量 TaskSpec（只带完成条件，不落盘不跑任务）。"""
     try:

@@ -749,7 +749,7 @@ def _snapshot(task_id: str) -> dict:
     }
 
 def _profile_enabled() -> bool:
-    """知识层弱注入（user_profile）是否开启，取自配置 runtime.knowledge.profile.enabled（默认开）。"""
+    """知识层弱注入（self_profile 自我画像）是否开启，取自配置 runtime.knowledge.profile.enabled（默认开）。"""
     cfg = _config()
     return bool((((cfg.get("runtime") or {}).get("knowledge") or {}).get("profile") or {}).get("enabled", True))
 

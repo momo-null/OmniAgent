@@ -299,6 +299,21 @@ class SdkBridgeMixin:
         # 「用户当轮指令覆盖一切」+ 注入面收敛）；记忆稳定段（使用规则/scene 导航/画像）
         # 同放置原则，见下方 _memory_stable_block。L1 检索结果**不再自动注入**
         # （P1，2026-11-02 方案 C）：模型经 memory_recall 自取，run 收尾落观测行。
+        # 2026-11-11 钉前缀：场合信号必须**先构造再渲染**。旧链路 render() 在
+        # _memory_stable_block（本函数 311 行附近）、build_run() 在 541 行，
+        # 导致渲染读到的是上一 run 的 _CURRENT。现在提前到 system 组装之前，
+        # 且 <current-context> 不再进 system（改由本轮 user 输入携带）。
+        _context_note = ""
+        if not is_sub:
+            try:
+                from omni_core.local.loop import context_signal as _cs
+                _cs.build_run(
+                    task_id=str(getattr(spec, "task_id", "") or ""),
+                    objective=str(getattr(spec, "objective", "") or ""),
+                    run_key=str(getattr(spec, "run_key", "") or ""))
+                _context_note = _cs.render() or ""
+            except Exception:
+                _context_note = ""
         _instr_snapshot = self._load_instructions_snapshot(spec)
         system_prompt = self._merge_instructions(system_prompt, _instr_snapshot)
         system_prompt = self._merge_character(system_prompt)
@@ -317,6 +332,13 @@ class SdkBridgeMixin:
                 "layers": _mem_layers, "placement": "system",
                 # §8.3：观测主键同写——「注入了什么 vs 查了什么」由此与
                 # memory_recall-YYYY-MM.jsonl 按 run_id 关联
+                "run_id": (context_signal_run_id() or "")})
+        # 动态处境说明单独落一条轨迹（新 kind，不进 memory_injected 的 placements，
+        # 既有「placement 恒 system」断言仍成立）；内容随当轮 user 输入可见。
+        if _context_note:
+            self._log_knowledge_injection(traj, {
+                "kind": "context_signal_injected", "chars": len(_context_note),
+                "placement": "user_input",
                 "run_id": (context_signal_run_id() or "")})
         if getattr(_instr_snapshot, "injected", False):
             self._log_knowledge_injection(traj, {
@@ -342,13 +364,31 @@ class SdkBridgeMixin:
         # AGENTS.md 内容跨 run 变化、run 内不变，保证「Model-visible ⟺ logged」。
         try:
             self._fp_system_prompt = system_prompt or ""
-            _tools_for_fp = list(tools or []) or list(getattr(self, "tool_schemas", None) or [])
+            # 修 T4.6 老坑：这里原来引用未定义的 ``tools`` → NameError 被吞 →
+            # 工具名恒为空、指纹第二段永远是 sha1("")=da39a3ee。
+            try:
+                _tools_for_fp = list(self._sdk_tools() or [])
+            except Exception:
+                _tools_for_fp = list(getattr(self, "tool_schemas", None) or [])
             self._fp_tool_names = sorted(
                 str(getattr(t, "name", t) if not isinstance(t, dict) else t.get("name", t))
                 for t in _tools_for_fp
             )
+            # schema 正文纳入指纹（按 name 排序，工具列表顺序仍不影响），
+            # 避免工具定义悄悄变化而链路溯源看不出来。
+            self._fp_tool_schemas = [
+                {"name": str(getattr(t, "name", "") if not isinstance(t, dict)
+                             else t.get("name", "") or ""),
+                 "schema": str(getattr(t, "params_json_schema", None)
+                               or getattr(t, "schema", None)
+                               or (t.get("params_json_schema") if isinstance(t, dict) else "")
+                               or "")}
+                for t in _tools_for_fp]
+            self._fp_context_note = _context_note
         except Exception:
             self._fp_tool_names = []
+            self._fp_tool_schemas = []
+            self._fp_context_note = ""
         # T4.6（O5+）：技能目录注入落轨迹（记录字符数 / 技能数 / 名称 / 来源，补齐可观测维度）
         if skill_catalog:
             try:
@@ -535,18 +575,8 @@ class SdkBridgeMixin:
                 except Exception:
                     pass
 
-        # M1（plan personal-agent-memory §4.1）：run 起始单点构造场合信号——
-        # ``<current-context>`` 由 _memory_stable_block 渲染进 system；子任务不构造。
+        # 场合信号已在 system 组装之前由 build_run 单点构造（见本函数前段）；
         # 仅主链——子 agent 在同进程嵌套跑，不得覆盖主链信号。
-        if not is_sub:
-            try:
-                from omni_core.local.loop import context_signal as _cs
-                _cs.build_run(
-                    task_id=str(getattr(spec, "task_id", "") or ""),
-                    objective=str(getattr(spec, "objective", "") or ""),
-                    run_key=str(getattr(spec, "run_key", "") or ""))
-            except Exception:
-                pass
         # P1 观测（2026-11-02）：本 run 的记忆自取行为从零记起，收尾落 memory_recall.jsonl
         # （lead-in 自动注入已全局下线，检索结果只经 memory_recall 工具进上下文）。
         # 仅主链——子 agent 在同一进程里嵌套跑，reset/take 都会踩父亲的账本。
@@ -557,6 +587,26 @@ class SdkBridgeMixin:
                 _mt.reset_recall_stats()
                 # P2：conversation_search 的 scope=current 靠 task → 会话归属解析，同款绑定
                 _mt.set_l0_task_context(str(getattr(spec, "task_id", "") or ""))
+                # 读侧候选包：run 起始用现有带分数的检索器备好高置信线索，只存 run 级
+                # 内存（不进 system/items，INV-4）；query 取本轮最后一条用户原话，
+                # 取不到才退回目标文本——零格式假设、零场合键分支。
+                try:
+                    from omni_core.local.loop import context_signal as _cs_bundle
+                    _sig = _cs_bundle.current() or {}
+                    _q = ""
+                    for _m in reversed(list(getattr(spec, "history", None) or [])):
+                        if isinstance(_m, dict) and str(_m.get("role") or "") == "user":
+                            _q = str(_m.get("content") or "")
+                            break
+                    if not _q:
+                        _q = str(getattr(spec, "objective", "") or "")
+                    _mt.build_candidate_bundle(
+                        query=_q[:200],
+                        context_key=str(_sig.get("context_key") or ""),
+                        session_id=str(_sig.get("session_id") or ""),
+                        peer=str(_sig.get("peer") or ""))
+                except Exception:
+                    pass
             except Exception:
                 _mt = None
         # 收尾意图门（仅主链;子任务有 verify 门控,不走信任大脑路径）
@@ -598,6 +648,20 @@ class SdkBridgeMixin:
             user_input or self._build_user(spec, world, step=0),
             list(getattr(spec, "attachments", None) or []),
         )
+        # 逐 run 变化的处境信号挂在**当轮输入**里，而不是 system：
+        # ① system 跨 run 字节稳定 → 前缀缓存可复用；
+        # ② 与当轮问题同一条消息 → 离输入最近；
+        #    超长任务触发 _compact / _hard_keep 时起始 items **会被切掉**，
+        #    故把 note 一并传给 run_subtask_sdk，由压缩层在请求副本上重新贴
+        #    （sdk_loop._CompactionModel._compact / _reapply_context_note）。
+        # ③ 会话历史仍只存 display_text 原话，这段包装不落盘。
+        if _context_note:
+            if isinstance(_user_content, str):
+                _user_content = f"{_context_note}\n\n{_user_content}"
+            elif isinstance(_user_content, list) and _user_content:
+                _first = dict(_user_content[0])
+                _first["text"] = _context_note + "\n\n" + str(_first.get("text") or "")
+                _user_content = [_first] + list(_user_content[1:])
         res = run_subtask_sdk(
             brain,
             instructions=system_prompt,
@@ -638,6 +702,7 @@ class SdkBridgeMixin:
             history_items=history_items,
             todo_store=todo_store,
             skill_catalog=skill_catalog,
+            context_note=_context_note,
             human_injection=human_injection,
             tool_attachments=attach_channel,
             on_llm=on_llm,
