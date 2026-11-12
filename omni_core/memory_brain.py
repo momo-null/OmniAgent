@@ -125,6 +125,24 @@ CREATE VIRTUAL TABLE IF NOT EXISTS narrative_fts USING fts5(
 CREATE INDEX IF NOT EXISTS idx_narr_kind_date ON narrative_index(kind, date_from);
 """
 
+# 向量召回臂（分支 feat/vector-recall，doc/plans/vector-recall-2026-11-13.md）：
+# 向量与 FTS 是并列候选通道，vectors 表独立（不碰 atoms_fts/l0_fts 的一行一条不变量）。
+# **只加幂等 DDL，严禁推进 _SCHEMA_VERSION**——版本不符会触发 _rebuild_brain_schema
+# 整库重建（DROP 全部表）；格式标识由每行 model/dim 承担，src_hash 供欠账判定。
+_VECTOR_SCHEMA = """
+CREATE TABLE IF NOT EXISTS vectors(
+  source    TEXT NOT NULL,
+  record_id TEXT NOT NULL,
+  vec   BLOB NOT NULL,
+  src_hash  TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL,
+  dim   INTEGER NOT NULL,
+  created   TEXT NOT NULL,
+  PRIMARY KEY(source, record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_vectors_model ON vectors(model);
+"""
+
 # 圈层语境链（plan §4.2 / §5.2，M3）：context_buffer 按 context_key 累积通用信号（覆盖不
 # 追加）；circle_note 一行一场合（**索引键，非物理分区**，INV-2）——语境预期（聊什么/
 # 什么分寸/共同话题词面），不是可引用事实：永不进 atoms、不参与四态（INV-5）。
@@ -569,8 +587,9 @@ def search_l0(keyword: str, *, context_key: str = "", session_id: str = "",
         if not _l0_fts_ok(c):
             return []
         match, like_terms = _match_expr(c, keyword)
-        if not match and not like_terms:
-            return []
+        vec_ready = _vec_ready()
+        if not match and not like_terms and not vec_ready:
+            return []  # 无词面且无向量通道（有向量时走纯语义路径）
         try:
             n = max(1, min(20, int(limit)))
         except Exception:
@@ -627,6 +646,19 @@ def search_l0(keyword: str, *, context_key: str = "", session_id: str = "",
                     _push(row)
             except Exception:
                 continue
+        # 向量候选（并列通道）：JOIN 源表沿用时间窗/会话 ACL/进料道分道的全部既有
+        # WHERE——只新增候选行，FTS/LIKE 行原样；兜底查询前补一点欠账（预算帽）。
+        if _vec_enabled() and _vec_ready():
+            try:
+                _vector_catch_up(budget=10, time_budget=2.0)
+                qv = _vec_encode([keyword])
+                if qv and qv[0]:
+                    vrows = _vec_l0_candidates(c, qv[0], 2 * n, _vec_model(),
+                                               cutoff, scope, params, sk_sql, sk_params)
+                    for row in vrows:
+                        _push(row)
+            except Exception:
+                pass
         out.sort(key=lambda d: str(d.get("when") or ""))
         return out[-n:]
     except Exception:
@@ -738,6 +770,7 @@ def open_brain() -> sqlite3.Connection:
     conn.executescript(_L0_SCHEMA.format(tokenizer=tok))
     conn.executescript(_NARRATIVE_SCHEMA.format(tokenizer=tok))
     conn.executescript(_CONTEXT_SCHEMA)
+    conn.executescript(_VECTOR_SCHEMA)
     _l0_fts_ok(conn)
     _narr_fts_ok(conn)
     _meta_set(conn, "schema_version", _SCHEMA_VERSION)
@@ -886,6 +919,12 @@ def _flush_tail(project_id: str, brain_cfg: Optional[Dict[str, Any]],
     except Exception:
         pass
     maybe_consolidate(brain_cfg)
+    # 向量欠账批嵌（分支 feat/vector-recall）：writer worker 线程里离主链消化积压，
+    # 预算内小步补——查询入口的 lazy 补只兜「自己写的立刻查得到」。
+    try:
+        _vector_catch_up(budget=16)
+    except Exception:
+        pass
 
 
 def _new_id() -> str:
@@ -972,6 +1011,158 @@ def _query_terms(query: str) -> List[str]:
 _recent_ring: deque = deque(maxlen=64)
 
 
+# ---- 向量召回臂（分支 feat/vector-recall，doc/plans/vector-recall-2026-11-13.md）----
+# 并列候选通道：只产候选（余弦），排序/过滤机制全部沿用既有公式（INV-3 同纪律）。
+# 嵌入推理在独立 venv 的 sidecar（omni_core/local/embedder.py HTTP 客户端），主 .venv
+# 零改动；任何一层不可用 → ready()=False → 检索静默降级 FTS-only。
+
+def _vec_enabled() -> bool:
+    try:
+        import config
+        return bool(config.get_config("runtime.knowledge.memory.vector.enabled", False))
+    except Exception:
+        return False
+
+
+def _vec_ready() -> bool:
+    if not _vec_enabled():
+        return False
+    try:
+        from omni_core.local import embedder
+        return embedder.ready()
+    except Exception:
+        return False
+
+
+def _vec_encode(texts: List[str]) -> Optional[List[List[float]]]:
+    from omni_core.local import embedder
+    return embedder.encode(texts)
+
+
+def _vec_model() -> str:
+    try:
+        import config
+        return str(config.get_config("runtime.knowledge.memory.vector.model",
+                                     "bge-m3") or "bge-m3")
+    except Exception:
+        return "bge-m3"
+
+
+def _vec_src_hash(text: str) -> str:
+    import hashlib
+    return hashlib.md5(str(text or "").encode("utf-8")).hexdigest()
+
+
+def _vec_write(conn: sqlite3.Connection, source: str, rid: str, vec,
+               text: str, model: str) -> None:
+    import numpy as _np
+    conn.execute(
+        "INSERT OR REPLACE INTO vectors(source, record_id, vec, src_hash, model, dim, created) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (source, rid, _np.asarray(vec, dtype="<f4").tobytes(),
+         _vec_src_hash(text), model, len(vec), _now()))
+
+
+def _vec_atom_candidates(c: sqlite3.Connection, qvec: List[float], top: int,
+                         model: str) -> List[Tuple[str, float]]:
+    """atoms 的向量候选：JOIN 源表沿用 state='active' scope，余弦取 top。"""
+    import numpy as _np
+    q = _np.asarray(qvec, dtype="<f4")
+    rows = c.execute(
+        "SELECT v.record_id, v.vec FROM vectors v JOIN atoms a ON a.record_id = v.record_id "
+        "WHERE v.source='atom' AND v.model=? AND a.state IN ('active')", (model,)).fetchall()
+    if not rows:
+        return []
+    mat = _np.stack([_np.frombuffer(r[1], dtype="<f4") for r in rows])
+    mat = mat / (_np.linalg.norm(mat, axis=1, keepdims=True) + 1e-12)
+    qv = q / (_np.linalg.norm(q) + 1e-12)
+    cos = mat @ qv
+    order = _np.argsort(-cos)[:max(1, int(top))]
+    return [(str(rows[i][0]), float(cos[i])) for i in order]
+
+
+def _vec_l0_candidates(c: sqlite3.Connection, qvec: List[float], top: int, model: str,
+                       cutoff: str, scope: str, scope_params: List[str],
+                       sk_sql: str, sk_params: List[str]) -> List[Any]:
+    """L0 的向量候选：JOIN 源表**沿用全部既有 WHERE**（时间窗/会话 ACL/进料道分道）——
+    绝不先在全库 vectors 上取 top 再过滤（别的会话内容会挤占名额/跨会话泄漏）。"""
+    import numpy as _np
+    sql = ("SELECT l.record_id, l.context_key, l.session_id, l.kind, l.role, l.speaker, "
+           "l.text, l.recorded_at, v.vec FROM l0_messages l "
+           "JOIN vectors v ON v.record_id = l.record_id "
+           "WHERE v.source='l0' AND v.model=? AND l.recorded_at >= ? " + scope + " " + sk_sql)
+    rows = c.execute(sql, tuple([model, cutoff] + list(scope_params) + list(sk_params))).fetchall()
+    if not rows:
+        return []
+    q = _np.asarray(qvec, dtype="<f4")
+    q = q / (_np.linalg.norm(q) + 1e-12)
+    scored = []
+    for r in rows:
+        v = _np.frombuffer(r[8], dtype="<f4")
+        v = v / (_np.linalg.norm(v) + 1e-12)
+        scored.append((float(v @ q), r))
+    scored.sort(key=lambda x: -x[0])
+    return [r for _s, r in scored[:max(1, int(top))]]
+
+
+def _vector_catch_up(budget: int = 16, time_budget: float = 2.0) -> int:
+    """把 l0/atoms 的向量欠账补齐（≤budget 条且 ≤time_budget 秒）；返回补齐条数。
+
+    供三处调用：检索前 lazy 补（预算帽，保证自己写的立刻查得到）、flush_tail
+    收尾（writer worker 线程，离主链）、心跳/回填脚本（大预算）。任何异常静默。
+    """
+    if not (_vec_enabled() and _vec_ready()):
+        return 0
+    import time as _t
+    from omni_core.local import embedder
+
+    model = _vec_model()
+    t0 = _t.time()
+    done = 0
+    try:
+        conn = open_brain()
+        row = conn.execute("SELECT v FROM meta WHERE k='vectors_l0_wm'").fetchone()
+        wm = int(row[0] or 0) if row else 0
+        rows = conn.execute(
+            "SELECT l.rowid, l.record_id, l.text FROM l0_messages l "
+            "WHERE l.rowid > ? ORDER BY l.rowid LIMIT ?", (wm, budget)).fetchall()
+        conn.close()
+        if rows:
+            vecs = _vec_encode([r[2] for r in rows])
+            if vecs:
+                conn = open_brain()
+                for (rowid, rid, text), v in zip(rows, vecs):
+                    _vec_write(conn, "l0", rid, v, text, model)
+                conn.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('vectors_l0_wm',?)",
+                             (str(rows[-1][0]),))
+                conn.commit()
+                conn.close()
+                done += len(rows)
+
+        if done < budget and _t.time() - t0 < time_budget:
+            conn = open_brain()
+            arows = conn.execute(
+                "SELECT a.record_id, a.content FROM atoms a WHERE a.state='active'").fetchall()
+            existing = {r[0]: r[1] for r in conn.execute(
+                "SELECT record_id, src_hash FROM vectors WHERE source='atom' AND model=?",
+                (model,)).fetchall()}
+            conn.close()
+            need = [(rid, content) for rid, content in arows
+                    if _vec_src_hash(content) != existing.get(rid)][: max(0, budget - done)]
+            if need:
+                vecs = _vec_encode([x[1] for x in need])
+                if vecs:
+                    conn = open_brain()
+                    for (rid, content), v in zip(need, vecs):
+                        _vec_write(conn, "atom", rid, v, content, model)
+                    conn.commit()
+                    conn.close()
+                    done += len(need)
+        return done
+    except Exception:
+        return done
+
+
 def search_brain(query: str, k: Optional[int] = None,
                  reinforce: bool = True,
                  conn: Optional[sqlite3.Connection] = None,
@@ -994,9 +1185,11 @@ def search_brain(query: str, k: Optional[int] = None,
         if not _fts_ok(c):
             return []
         match, like_terms = _match_expr(c, query)
+        vec_ready = _vec_ready()
         # trigram 模式下纯 2 字 query 只有 like_terms（无 MATCH）——不能因此直接
-        # 返回空，否则 LIKE 兜底永远走不到（2 字中文词召回恒 0 的老坑）
-        if not match and not like_terms:
+        # 返回空，否则 LIKE 兜底永远走不到（2 字中文词召回恒 0 的老坑）。
+        # 向量通道就绪时，无词面命中也能走纯语义路径（转述召回的入口）。
+        if not match and not like_terms and not vec_ready:
             return []
         k = int(k or _cfg("top_k", 5))
         floor = float(_cfg("inject_floor", 0.30))
@@ -1026,6 +1219,18 @@ def search_brain(query: str, k: Optional[int] = None,
                 f"JOIN atoms a ON a.record_id = f.record_id "
                 f"WHERE atoms_fts MATCH ? AND a.state IN {states} "
                 f"ORDER BY r LIMIT ?", tuple(params)).fetchall()
+        # 向量候选（并列通道，分支 feat/vector-recall）：JOIN 源表沿用 state='active'
+        # scope；取 top-2k，只新增候选行——FTS 候选行的 rel 一律用 bm25 原值（零退化）。
+        vec_cand: List[Tuple[str, float]] = []
+        if vec_ready:
+            try:
+                qv = _vec_encode([query])
+                if qv and qv[0]:
+                    vec_cand = _vec_atom_candidates(c, qv[0], 2 * k,
+                                                    _vec_model())
+            except Exception:
+                vec_cand = []
+        fts_cand_ids = {str(r[0]) for r in rows}
         hits: List[Dict[str, Any]] = []
         qterms = _query_terms(query)
         df_cache: Dict[str, int] = {}
@@ -1044,17 +1249,13 @@ def search_brain(query: str, k: Optional[int] = None,
         # 控量靠 k + 去冗余 + 轮换，不靠 threshold（plan §2.4）。覆盖门槛只打「 glue 」：
         # 命中仅盖住 query 的一个有效词、该词在 query≥3 词时覆盖率 <0.34、且是库内
         # 高频词（df>3）才丢——单命中低频/专名（白丝、便签）是真主题，留。
-        for rid, content, rank, kind, imp, acc, upd, la, pr, ach in rows:
+        # 打分块提取为 _score_hit（2026-11-13 向量臂）：FTS 行与向量专属行走**同一**
+        # 公式块——FTS 行 rel 仍为 bm25 原值，逐值不变的回归锁在 test_vector_recall。
+        def _score_hit(rid: str, content: str, kind: str, imp: Any,
+                       upd: str, la: str, pr: str, ach: str, rel: float) -> Optional[Dict[str, Any]]:
             cl = str(content or "").lower()
-            if qterms:
-                matched = [t for t in qterms if t in cl]
-                if (not matched or (len(matched) == 1 and len(qterms) > 2
-                                    and _term_df(matched[0]) > 3)):
-                    continue
-            rel = bm25_rank_to_score(rank)
-            last_touch = upd or la or ""
             sal = float(imp or 0.5)   # P7：salience=importance，零衰减
-            rec = pow(2.718281828459045, -_days_since(last_touch) / 180.0)
+            rec = pow(2.718281828459045, -_days_since(upd or la) / 180.0)
             final = w_r * rel + w_s * sal + w_t * rec
             ctx_hit = False
             if context_key and str(ach or "") == str(context_key):
@@ -1067,10 +1268,36 @@ def search_brain(query: str, k: Optional[int] = None,
             if str(rid) in _recent_ring:
                 final *= 0.85                    # 新鲜度轮换：只降权不排除
             if final < floor:
+                return None
+            return {"record_id": rid, "content": content, "score": round(final, 6),
+                    "kind": kind, "salience": round(sal, 4), "peer": str(pr or ""),
+                    "context_key": str(ach or ""), "ctx_hit": ctx_hit}
+
+        for rid, content, rank, kind, imp, acc, upd, la, pr, ach in rows:
+            cl = str(content or "").lower()
+            if qterms:
+                matched = [t for t in qterms if t in cl]
+                if (not matched or (len(matched) == 1 and len(qterms) > 2
+                                    and _term_df(matched[0]) > 3)):
+                    continue
+            h = _score_hit(rid, content, kind, imp, upd, la, pr, ach,
+                           bm25_rank_to_score(rank))
+            if h:
+                hits.append(h)
+        # 向量专属行：有 FTS rank 的行一律用 bm25 原值（本块只收「FTS 候选里没有」的行），
+        # rel = max(0, cos)——转述召回的落点；glue 词面过滤不适用于语义行。
+        for rid, cos in vec_cand:
+            if rid in fts_cand_ids:
                 continue
-            hits.append({"record_id": rid, "content": content, "score": round(final, 6),
-                         "kind": kind, "salience": round(sal, 4), "peer": str(pr or ""),
-                         "context_key": str(ach or ""), "ctx_hit": ctx_hit})
+            arow = c.execute(
+                "SELECT content, kind, importance, updated, last_access, peer, context_key "
+                "FROM atoms WHERE record_id=? AND state IN ('active')", (rid,)).fetchone()
+            if not arow:
+                continue
+            h = _score_hit(rid, arow[0], arow[1], arow[2], arow[3], arow[4],
+                           arow[5], arow[6], max(0.0, min(1.0, float(cos))))
+            if h:
+                hits.append(h)
         hits.sort(key=lambda h: h["score"], reverse=True)
         # 同主题去冗余：(kind, peer, 主题前缀 12 字) 同组只留最高分——
         # 保证「k 条是 k 个方面」，不是同一条的 k 种说法
