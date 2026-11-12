@@ -51,26 +51,29 @@ cross-encoder 重排（phase 2 备选）；不动 narrative/scene（量小、词
 
 ## 4. 嵌入服务（`omni_core/local/embedder.py`）
 
-- **模型**：默认 `bge-m3`（BAAI，多语/中文强、1024 维、8k 上下文）；备选
-  `bge-small-zh-v1.5`（~100MB，低配用）。模型文件放 model_hub 约定目录，
+- **模型**：默认 `bge-small-zh-v1.5`（BAAI，中文专精，**24M 参数 / 512 维 / ~0.1GB
+  显存 / CPU 单条 5-20ms**）——在她的规模（短文本、中文查询、库为千级）下质量足够
+  且资源占用低一个数量级；`bge-m3`（568M/1024 维/多语）作为**配置升级选项**——
+  语料含日文专名（品牌/地名）是 m3 的相对优势，A/B 报告显示小模型天花板不够时
+  一键换模型（换模型自动重嵌，§5）。模型文件放 model_hub 约定目录，
   **不进 requirements 主链**（C-2：sentence-transformers/torch 未装 →
   `ready()=False` → 全链静默降级 FTS-only，工具照常返回）。
 - **设备降级链（配置驱动）**：
   ```
   knowledge.relations.vector.device = auto | gpu | cpu   （缺省 auto）
-  auto: CUDA 可用 且 空闲显存 ≥ 阈值(2.5GB，给语音引擎留共存空间) → GPU(fp16)
-        否则 → CPU
+  auto: CUDA 可用 且 空闲显存 ≥ 阈值(1.0GB，给语音引擎留共存空间) → GPU(fp16)
+        否则 → CPU（small-zh 在 CPU 上 5-20ms/条，完全可用）
   gpu:  尝试 CUDA；加载失败/超时 → 降 CPU 并记日志
   cpu:  强制 CPU
   运行中：encode 抛 CUDA OOM → 自动落 CPU 重试并钉住（本进程内不再上 GPU）
   任何一层不可用 → ready()=False → FTS-only
   ```
-- **显存共存分析**：5060 8GB 上还常驻语音引擎（GPT-SoVITS）。bge-m3 fp16 约
-  2.2GB——`auto` 必须探测**空闲**显存而非总量；语音激活的瞬间可能挤压，
-  OOM 回落 CPU 是兜底而不是异常。
+- **显存共存分析**：5060 8GB 上还常驻语音引擎（GPT-SoVITS）。small-zh 约 0.1GB——
+  与语音共存几乎零竞争，`auto` 的显存探测只是防御位；若升级 bge-m3（fp16 约
+  1.5GB），探测阈值的意义才真正显现，OOM 回落 CPU 是兜底而不是异常。
 - **进程内单例懒加载**（网关/后端各自一份；首条查询时加载，之后常驻）。
-- **query 嵌入延迟**：GPU 5-15ms / CPU 50-150ms——记忆检索本来是秒级工具调用，
-  尾巴无感；这是 CPU 可作为默认档的依据。
+- **query 嵌入延迟**：GPU 1-3ms / CPU 5-20ms——尾巴无感；写入即嵌也因此重新
+  可行，但欠账模型（§5）仍保留为更稳形态。
 
 ## 5. 存储与欠账模型
 
@@ -122,7 +125,7 @@ cross-encoder 重排（phase 2 备选）；不动 narrative/scene（量小、词
 | 键 | 缺省 | 说明 |
 |---|---|---|
 | `runtime.knowledge.memory.vector.enabled` | False | 总开关（缺省关=行为与今日完全一致；设置页「伙伴→记忆」加「向量召回」开关） |
-| `runtime.knowledge.memory.vector.model` | bge-m3 | 模型名（model_hub 目录解析） |
+| `runtime.knowledge.memory.vector.model` | bge-small-zh-v1.5 | 模型名（model_hub 目录解析；可切 bge-m3，换模型自动重嵌） |
 | `runtime.knowledge.memory.vector.device` | auto | auto / gpu / cpu（§4 降级链） |
 
 Web 可见性原则（configs-must-be-web-visible）：设置页记忆节加开关 + 设备下拉，
