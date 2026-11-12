@@ -104,7 +104,7 @@ def test_stable_block_scene_nav_and_profile_in_system(monkeypatch):
     # NP-2：叙事能力声明（零内容）+ 不得转述规则 + 七工具配额口径
     assert "narrative_search" in block and "narrative_read" in block
     assert "不得把日记/月记/对人的印象直接转述到对外消息" in block
-    assert "合计不超过 3 次" in block and "不超过 2 次" in block
+    assert "不要反复换关键词硬查" in block
     assert "SCENE-CONTENT" not in block, "全文不得进稳定段（只准摘要 + read_scene）"
 
 
@@ -174,7 +174,7 @@ def test_search_results_never_auto_injected_rules_in_system(monkeypatch):
         "L1 检索结果不得进 system，也不得被 run 起始自动检索"
     assert "lead_in_message" not in captured, "lead-in 通道已删除"
     assert "<memory-usage-rules>" in instr and "memory_recall" in instr
-    assert "合计不超过 3 次" in instr
+    assert "不要反复换关键词硬查" in instr
     placements = {r["placement"]: r for r in traj.records("memory_injected")}
     assert set(placements) == {"system"}
     assert placements["system"]["layers"] == ["memory_rules", "scene_nav", "self_profile"]

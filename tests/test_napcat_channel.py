@@ -93,6 +93,102 @@ def test_group_with_at_dispatched(adapter, monkeypatch):
     assert isinstance(msg.reply, NapcatReply)
 
 
+# === 戳一戳（notice/notify/poke） ===
+
+@pytest.fixture
+def poke_adapter(adapter):
+    """预置 self_id：跳过首事件的身份同步（会走 OneBot API 取昵称），单测不联网。"""
+    adapter._self_id = "111"
+    return adapter
+
+
+def _poke(self_id=111, user_id=222, target_id=111, group_id=None):
+    raw = {"post_type": "notice", "notice_type": "notify", "sub_type": "poke",
+           "self_id": self_id, "user_id": user_id, "target_id": target_id, "time": 1}
+    if group_id:
+        raw["group_id"] = group_id
+    return raw
+
+
+def test_poke_private_wakes(poke_adapter):
+    got, emit = _collector()
+    poke_adapter._handle_event(_poke(), emit)
+    assert len(got) == 1
+    msg = got[0]
+    assert msg.chat_id == "private:222"
+    assert msg.origin == "named"
+    assert msg.reply_mode == "explicit"
+    assert "[戳一戳]" in msg.text
+    assert "戳了你一下" in msg.text
+    assert "msg_send_text" in msg.text          # 回不回由模型显式决定
+    assert msg.display_text.endswith("[戳一戳]")
+
+
+def test_poke_group_wakes(poke_adapter, monkeypatch):
+    monkeypatch.setattr(poke_adapter, "group_name", lambda gid: "")
+    monkeypatch.setattr(poke_adapter, "_member_names", lambda gid: {})
+    got, emit = _collector()
+    poke_adapter._handle_event(_poke(group_id=333), emit)
+    assert len(got) == 1
+    assert got[0].chat_id == "group:333"
+    assert "群 333" in got[0].text
+    assert "戳了你一下" in got[0].text
+
+
+def test_poke_from_self_ignored(poke_adapter):
+    """自己戳别人也上报同结构 notice：user_id==self_id 时不能把自己唤醒。"""
+    got, emit = _collector()
+    poke_adapter._handle_event(_poke(user_id=111, target_id=222), emit)
+    assert got == []
+
+
+def test_poke_other_target_ignored(poke_adapter):
+    """戳的不是我（target_id != self_id）→ 不唤醒。"""
+    got, emit = _collector()
+    poke_adapter._handle_event(_poke(user_id=222, target_id=444), emit)
+    assert got == []
+
+
+def test_poke_disabled_by_config(monkeypatch):
+    a = NapcatAdapter({"enabled": True, "reply_poke": False})
+    a._self_id = "111"
+    got, emit = _collector()
+    a._handle_event(_poke(), emit)
+    assert got == []
+
+
+def test_poke_group_gate(monkeypatch):
+    a = NapcatAdapter({"enabled": True, "reply_groups": False})
+    a._self_id = "111"
+    got, emit = _collector()
+    a._handle_event(_poke(group_id=333), emit)
+    assert got == []
+
+
+def test_poke_private_allow_users(monkeypatch):
+    a = NapcatAdapter({"enabled": True, "allow_users": ["999"]})
+    a._self_id = "111"
+    got, emit = _collector()
+    a._handle_event(_poke(), emit)
+    assert got == []
+
+
+def test_poke_t0_dedup(poke_adapter):
+    """同一人 90 秒内连戳只唤醒一次（往安静倒）。"""
+    got, emit = _collector()
+    poke_adapter._handle_event(_poke(), emit)
+    poke_adapter._handle_event(_poke(), emit)
+    assert len(got) == 1
+
+
+def test_poke_non_poke_notice_ignored(poke_adapter):
+    got, emit = _collector()
+    raw = _poke()
+    raw["sub_type"] = "input_status"
+    poke_adapter._handle_event(raw, emit)
+    assert got == []
+
+
 # === 会话标题 / 消息原文（显示层与模型上下文分离） ===
 
 def test_private_title_and_display_text(adapter):

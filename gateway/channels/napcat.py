@@ -22,6 +22,7 @@
     token_env: NAPCAT_TOKEN   # 也可从环境变量取（优先 token 非空）
     reply_groups: true        # 是否响应群消息；false = 群消息全部忽略（@ 也不回）
     reply_private: true       # 是否响应私聊；false = 私聊全部忽略
+    reply_poke: true          # 戳一戳（notice/notify/poke）唤醒；false = 完全忽略
     require_at: true          # 群聊必须 @ 才响应（reply_groups 总闸之后再用）
     allow_users: []           # 私聊白名单（空 = 不限）
     allow_groups: []          # 群响应范围（空 = 不限；非空 = 只在这些群里响应）
@@ -238,6 +239,9 @@ _SEND_RULE = ("要说话必须调用 msg_send_text（文字）或 msg_send_voice
               "只写最终回答不算任何投递决定——它只进运行记录，对方看不到。"
               "简短的附和/答应/感叹（「好呀」「哈哈是吗」）也算说话，"
               "同样必须走工具——直接写成正文对方永远收不到。")
+
+#: 戳一戳的文本投影：notice 事件没有 message_id 与正文，会话历史与 T0 冷却都用它占位。
+_POKE_TEXT = "[戳一戳]"
 
 #: 每 chat 滑动窗频控（防恶意刷把 agent 拖垮；点名/波次一视同仁）
 _RATE_MAX = 30
@@ -500,6 +504,7 @@ class NapcatAdapter:
         # 白名单/require_at 是开闸后的细筛；出站 msg_send_* / cron 不受此门连坐。
         self.reply_groups = bool(cfg.get("reply_groups", True))
         self.reply_private = bool(cfg.get("reply_private", True))
+        self.reply_poke = bool(cfg.get("reply_poke", True))
         self.require_at = bool(cfg.get("require_at", True))
         self.allow_users = {str(x) for x in (cfg.get("allow_users") or [])}
         self.allow_groups = {str(x) for x in (cfg.get("allow_groups") or [])}
@@ -1448,7 +1453,11 @@ class NapcatAdapter:
             if self.presence is not None:
                 self.presence.set_self_info(self_id, self._bot_nickname())
             self._note_self_name(self_id)
-        # 只消费新消息；message_sent（自己发的）/ meta_event / notice / request 一律忽略
+        # 戳一戳走 notice 分支（NapCat：notice/notify/poke）。其余 notice / request /
+        # meta_event 与 message_sent（自己发的，经 WS 回流会自激）一律忽略。
+        if raw.get("post_type") == "notice":
+            self._handle_notice(raw, on_message)
+            return
         if raw.get("post_type") != "message":
             return
         user_id = str(raw.get("user_id") or "")
@@ -1643,6 +1652,91 @@ class NapcatAdapter:
             allow_tools=self.allow_tools,
             attachments=attachments,
             voice=voice_in,
+        ))
+
+    def _handle_notice(self, raw: Dict[str, Any], on_message: OnMessage) -> None:
+        """戳一戳（``notice/notify/poke``）→ 归一成普通入站消息。
+
+        事件里 ``user_id`` 是戳的人、``target_id`` 是被戳的人；NapCat 连**自己
+        戳别人**也会上报同结构，所以必须按 target 过滤（否则戳一下对方就把自己
+        唤醒）。poke 没有 message_id 也没有正文：文本用 ``[戳一戳]`` 占位，
+        连戳去重沿用 T0 冷却（同一人 90 秒内只醒一次，往安静倒）。
+
+        回不回、回什么是模型的决定：这里只交代「谁戳了你一下」与显式发送约定，
+        不塞任何固定话术。
+        """
+        if not self.reply_poke:
+            return
+        if str(raw.get("notice_type") or "") != "notify":
+            return
+        if str(raw.get("sub_type") or "") != "poke":
+            return
+        user_id = str(raw.get("user_id") or "")
+        target_id = str(raw.get("target_id") or "")
+        # fail-closed：身份未就位 / 自己戳别人 / 戳的不是我，都不唤醒
+        if not user_id or not self._self_id:
+            return
+        if user_id == self._self_id or target_id != self._self_id:
+            return
+        group_id = str(raw.get("group_id") or "")
+        if group_id:
+            if not self.reply_groups:
+                return
+            if self.allow_groups and group_id not in self.allow_groups:
+                return
+            chat_id = f"group:{group_id}"
+        else:
+            if not self.reply_private:
+                return
+            if self.allow_users and user_id not in self.allow_users:
+                return
+            chat_id = f"private:{user_id}"
+        # 连戳去重先于频控：被冷却的重复戳不该吃掉正常消息的额度
+        if self._t0_dup(group_id or chat_id, user_id, _POKE_TEXT):
+            return
+        if not self._rate_ok(chat_id):
+            return
+        sender = raw.get("sender") if isinstance(raw.get("sender"), dict) else {}
+        name = sanitize_name(str(sender.get("card") or sender.get("nickname") or ""))
+        if not name and group_id:
+            name = sanitize_name(self._member_names(group_id).get(user_id, ""))
+        display = f"「{name}」({user_id})" if name else f"QQ {user_id}"
+        logger.info("napcat 戳一戳唤醒: chat=%s user=%s", chat_id, user_id)
+        if group_id:
+            _gname = self.group_name(group_id)
+            title = group_title(_gname, group_id)
+            _where = f"群「{_gname}」({group_id})" if _gname else f"群 {group_id}"
+            _vmode = self._voice_mode_note(self._group_voice_mode(chat_id))
+            text = (f"（这是你的 QQ。你在{_where}。"
+                    f"{display} 戳了你一下（QQ 的戳一戳，不是消息），{_vmode}"
+                    f"{_SEND_RULE}）\n{_POKE_TEXT}")
+            # 被戳是明确呼叫：不占主动开话预算；notice 没有 message_id，不挂引用段
+            self._wake_origin[chat_id] = ("named", time.time(), "")
+            if self.presence is not None and self.presence.want(group_id):
+                self.presence.note_named(group_id)
+        else:
+            title = private_title(name, user_id)
+            text = (f"（这是你的 QQ。你在跟 {display} 私聊。"
+                    f"{display} 戳了你一下（QQ 的戳一戳，不是消息）。"
+                    f"{_SEND_RULE}）\n{_POKE_TEXT}")
+        on_message(InboundMessage(
+            channel="napcat",
+            chat_id=chat_id,
+            user_id=user_id,
+            text=text,
+            title=title,
+            display_text=f"{display}: {_POKE_TEXT}",
+            speaker=f"{name}({user_id})" if name else user_id,
+            reply_mode="explicit",
+            origin="named",
+            raw={"poke": True,
+                 "message_type": "group" if group_id else "private",
+                 "group_id": group_id,
+                 "self_id": self._self_id,
+                 "nickname": name,
+                 "ts": raw.get("time") or time.time()},
+            reply=NapcatReply(self, chat_id),
+            allow_tools=self.allow_tools,
         ))
 
     @staticmethod

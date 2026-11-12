@@ -27,6 +27,9 @@ timeout_sec: 10                 # 单次 HTTP API 调用超时（秒）
 # ── 触发闸门（三层，顺序固定：总闸 → 范围 → 形态）───────────────────────────
 reply_groups: true              # 群消息总闸。false = 群消息**入口整体忽略**（@ 也不回）
 reply_private: true             # 私聊总闸。false = 私聊整体忽略
+reply_poke: true                # 戳一戳唤醒（notice/notify/poke）。只认「戳的是自己」，
+                                # 自己戳别人不会自激；同一人连戳 90 秒内只醒一次。
+                                # 回不回、回什么由模型决定（显式发送，不自动回话）
 require_at: true                # 群聊必须 @ 才响应（总闸开了才轮到它；false = 群消息全回，慎用）
 allow_groups: []                # 响应范围白名单（群号字符串数组）；空 = 不限
                                 # ⚠ 这是「哪些群允许她出现」，与 reply_groups 的「要不要理群」不同层
