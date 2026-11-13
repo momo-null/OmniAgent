@@ -105,7 +105,7 @@
 
 - **纪律注入**：加载全局 `AGENTS.md` \+ 任务私有`AGENTS.md` 纪律文件，在任务启动时读取快照并锁定至 system prompt 尾部，单次 run 周期内不重复读取，文件更新仅在下一轮任务生效，同时落盘轨迹日志。
 
-- **记忆注入**：run 起始只往 system 稳定段拼三段——`<memory-usage-rules>`（使用规则）、`<scene-navigation>`（L2 索引：文件名 + 热度/日期 + summary）、`<user-persona>`（L3 画像），一次注入、不每步重发。**检索结果永不自动注入**（2026-11-02 方案 C，原 `<relevant-memories>` lead-in 通道已删除）：L1 摘要由 `memory_recall`、L0 逐字原文由 `conversation_search`、L2 全文由 `read_scene` 按需自取，一个 run 内自取工具合计 ≤3 次（见 `doc/plans/implemented/memory-architecture.md` §4/§5）。
+- **记忆注入**：run 起始只往 system 稳定段拼三段——`<memory-usage-rules>`（使用规则）、`<scene-navigation>`（L2 索引：文件名 + 热度/日期 + summary）、`<self-persona>`（L3 自我画像），一次注入、不每步重发。**检索结果永不自动注入**（2026-11-02 方案 C，原 `<relevant-memories>` lead-in 通道已删除）：L1 摘要由 `memory_recall`、L0 逐字原文由 `conversation_search`、L2 全文由 `read_scene` 按需自取，一个 run 内自取工具合计 ≤3 次（见 `doc/plans/implemented/memory-architecture.md` §4/§5）。
 
 # 4\. Agents SDK Runner 核心 API 与块循环机制（`omni_core/brain/sdk_loop.py`）
 

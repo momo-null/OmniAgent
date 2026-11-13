@@ -191,8 +191,8 @@ def _openai_request(req, base: str, tail: str) -> bytes:
     except Exception as e:  # noqa: BLE001
         raise RuntimeError(
             f"语音端点不可用（{base}{tail}）: {e}。"
-            "本地服务请确认 engine_service 已启动（desktop 自动拉起；"
-            "手动：python -m plugins.voice.engine_service）") from e
+            "本地服务请确认语音引擎已由后端服务管理器拉起；"
+            "手动：python -m model_hub.servers.voice_engine）") from e
 
 
 def _openai_transcribe(wav_bytes: bytes) -> str:

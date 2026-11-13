@@ -309,7 +309,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                         history=list(model_messages),
                         task_mode=_task_mode,
                         run_key=run_key)
-        # M1（plan personal-agent-memory F-4）：Web 直连是「与主人对话」——进料道
+        # M1（F-4）：Web 直连是「与主人对话」——进料道
         # 标 chat，context_signal 据此构造 <current-context>（与 QQ 通道同一套结构）。
         try:
             from gateway.channels import context as _gwctx

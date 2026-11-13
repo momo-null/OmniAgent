@@ -55,6 +55,12 @@ export const modelApi = {
   stopAll: () => http.post("/api/stop-all"),
   // C：强制释放所有 llama-server 进程（含未接管孤儿），后端崩溃残留也能清
   killOrphans: () => http.post("/api/models/kill-orphans"),
+  // 服务型模型（向量 sidecar / 语音引擎 / GGUF）：资源层开关与启停
+  services: () => http.get("/api/models/services"),
+  startService: (name: string) => http.post(`/api/models/services/${name}/start`),
+  stopService: (name: string) => http.post(`/api/models/services/${name}/stop`),
+  updateService: (name: string, body: Record<string, unknown>) =>
+    http.put(`/api/models/services/${name}`, body),
   scan: (models_dir?: string) =>
     http.get("/api/scan", models_dir ? { params: { models_dir } } : {}),
   gpu: () => http.get("/api/gpu"),

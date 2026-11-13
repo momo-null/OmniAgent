@@ -13,9 +13,9 @@
 | 你想要 | 它实际做的 |
 |---|---|
 | 有个能连续聊的助手 | 桌面端 / 浏览器单页对话，流式输出、思考与工具过程可见、可打断、可排队；每条会话带 `chat / task` 取向胶囊（取向与会话状态解绑、按会话记忆）；可给单个任务开「完全访问」 |
-| 它记得我 | 每轮自动沉淀：原子记忆库 → 场景块（含**她自己的日记 / 月记**）→ 用户画像；召回由模型自取（`memory_recall` / `conversation_search` / `read_scene`），画像与角色卡都可手改 |
+| 它记得我 | 每轮自动沉淀：原子记忆库 → 场景块（含**日记 / 月记**）→ 用户画像；召回由模型自取（`memory_recall` / `conversation_search` / `read_scene`），画像与角色卡都可手改 |
 | 它也记得身边每个人 | 关系卡 `memory/relations/<uid>.md`：按人存一份三行印象（最近交手 / 他对我的态度 / 我对他的态度），QQ 被 @ 或私聊时随场合自述注入 |
-| 帮我回消息 | QQ（NapCat）、飞书、企微常驻通道，以**主人的身份**代答；群聊三层闸门 + 自然存在感（被点名 / 主动接话 / 旁听），支持语音进 / 语音出、图片理解 |
+| 帮我回消息 | QQ（NapCat）、飞书、企微常驻通道，以**用户的身份**代答；群聊三层闸门 + 自然存在感（被点名 / 主动接话 / 旁听），支持语音进 / 语音出、图片理解 |
 | 到点自己干活 | cron 定时任务，跑完把结果推回指定通道，Web 里可增删改查 + 看运行记录 |
 | 用我自己的声音说话 | 语音引擎是**一个独立常驻服务**（OpenAI 音频兼容端点）：SenseVoice 转写 + GPT-SoVITS 微调合成；Web 按住说话 / 免提 VAD / 播报中说话即打断 |
 | 点首歌 | 群成员点歌名 → 曲库里有就直接清唱回一条；库外可开在线曲库：搜歌 → 下载 → 分离 → 副歌 → 定 key → 入库 → 唱（总闸默认关） |
@@ -49,7 +49,7 @@ cd web && npm install && cd ..
 3. 起网关：`python -m gateway.channel_gateway`（桌面端会自动拉起，不用手动跑）；
 4. 私聊直接回；群聊**默认必须 @ 它**才响应。语音进来会转写成 `[语音] <内容>`，**要不要用语音回由模型决定**（`msg_send_voice` vs `msg_send_text`，通道不自动改发送形式），图片真的看懂。
 
-想让她「像个人一样在群里待着」，就在同一份 yaml 里开 `group_presence`：`enabled_groups`（缺省全关）、`talk_value`（话痨度）、`thread_hot_min`（自己发过言后的跟进期）、`quiet_hours`（安静时段）、`aliases`（没打 @ 喊名字也算）。**回不回是通道侧算出来的**：一轮里她没调发送工具就什么都不会发，内心独白不外泄，这类「静默轮」也不会再喂回下一轮上下文。
+想让助手「像个人一样在群里待着」，就在同一份 yaml 里开 `group_presence`：`enabled_groups`（缺省全关）、`talk_value`（话痨度）、`thread_hot_min`（自己发过言后的跟进期）、`quiet_hours`（安静时段）、`aliases`（没打 @ 喊名字也算）。**回不回是通道侧算出来的**：一轮里助手没调发送工具就什么都不会发，内心独白不外泄，这类「静默轮」也不会再喂回下一轮上下文。
 
 外部通道默认**纯对话**（`allow_tools: false`，模型侧连工具清单都没有）：别人给你发消息可以聊天，但碰不到你的文件和电脑。飞书 / 企微同构，各自一份 yaml 即可。
 
@@ -57,7 +57,7 @@ cd web && npm install && cd ..
 
 Web「定时任务」页新建（或改 `~/.omniagent/cron/jobs.json`，热加载不用重启，容忍 `//` 注释；逐字段说明见 `examples/cron/jobs.json`）：写一句 objective + cron 表达式 + 完成条件，选 `notify_channel` 指定结果推到哪个通道。运行记录与失败原因都能在页面看到。
 
-### 4. 让她开口说话、唱一句
+### 4. 让助手开口说话、唱一句
 
 语音拆成**服务端 / 调用端两份配置**，换引擎只改端点，代码与前端都不用动：
 
@@ -148,7 +148,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | `~/.omniagent/cron/jobs.json` | 定时任务（改文件即时生效） | 网关调度器 |
 | `~/.omniagent/character.md` | 助手角色卡（人格，随 system prompt 注入，设置页可改） | 注入层 |
 | `~/.omniagent/AGENTS.md` | 全局纪律文件（跨任务共享；不存在则零注入） | 注入层 |
-| `~/.omniagent/memory/` | 原子记忆库 `brain.db`（L1 atoms + L0 逐字索引）+ 全局画像 `user_profile.md` + 关系卡 `relations/<uid>.md` | 记忆层 |
+| `~/.omniagent/memory/` | 原子记忆库 `brain.db`（L1 atoms + L0 逐字索引）+ 全局自我画像 `self_profile.md` + 关系卡 `relations/<uid>.md` | 记忆层 |
 | `~/.omniagent/models/` | 本地模型资产：`sense-voice/`、`gptsovits/`（`weights/` + `voices/`）、`sing/`（RVC 声库） | 语音服务 |
 | `~/.omniagent/song_sources/` | 在线曲库站点源（**不入公开仓**） | 唱歌管线 |
 | `~/.omniagent/projects/<project>/` | 会话历史 `*.jsonl`、场景块（含 `diary-*` / 月记）、技能、项目级 `AGENTS.md` | 知识层 |
@@ -164,7 +164,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 - 记忆机制已真机验证，**长期有效性仍在观察**；召回验收阈值是在很小的语料上校准的，目前仍有指标未达标——这是刻意不调线的，语料长起来才重测。不是"过目不忘"。
 - **记忆层不是原创**：L0–L3 分层、多文件场景块与巩固周期移植自开源项目 **TencentDB Agent Memory**（上游 TypeScript 实现，本仓库以 Python + SQLite FTS5 重写）。哪里改了、哪里丢了、哪些是自创，摘要见「技术架构」一节的移植偏差表，逐条登记见 [`doc/plans/implemented/memory-architecture.md`](doc/plans/implemented/memory-architecture.md) §13.1（2026-11-06 吸收自 2 号方案）。
 - 群聊轮不产 L1 原子（防记忆投毒），这是登记在案的刻意取舍：他人可控文本不进事实库，只走叙事层沉淀（场景块 + 日记）。「按人记住」靠关系卡，但它已改成**可检索的自传体资产**——通道自动注入已删除，模型经 `narrative_search`/`narrative_read` 按需自取，外部来源只给摘要（2026-11-06）。
-- 记忆的 P6 增量（2026-11-07）：日记带**经历质地**（触发物/心境/带说话人的原话片段，观察见闻同篇可检索）；日记与关系卡可标**共同经历**参与人（配置驱动，缺省关）；本地 `/memory/*` API 给主人**查看/纠正/遗忘**入口（tombstone 软删、审计可溯）。第三方能力「干净引入」门禁已固化，当前未引入任何第三方包。
+- 记忆的 P6 增量（2026-11-07）：日记带**经历质地**（触发物/心境/带说话人的原话片段，观察见闻同篇可检索）；日记与关系卡可标**共同经历**参与人（配置驱动，缺省关）；本地 `/memory/*` API 给用户**查看/纠正/遗忘**入口（tombstone 软删、审计可溯）。第三方能力「干净引入」门禁已固化，当前未引入任何第三方包。
 - 唱歌走的是「分离离线缓存 + 歌声转换在线」：库内点歌十几秒级，库外整条管线是分钟级（下载占大头），音质取决于声库素材与显存；在线曲库闸门默认关，站点源不入公开仓。
 - 语音服务默认只听回环；放到局域网而不设 token，等于让任何人白嫖你的显卡。
 - 技能自动蒸馏默认关闭，早期试点未观察到步数收益，A/B 仍待补测。
@@ -268,8 +268,8 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | What you want | What it actually does |
 |---|---|
 | A continuous assistant | Desktop / browser chat with streaming output, visible reasoning and tool steps, interrupt & queue, a per-task "full access" toggle; each session carries a `chat / task` orientation capsule (decoupled from session state, remembered per session) |
-| It remembers me | Every turn is distilled automatically: atomic memories → scene blocks (including **her own diary and monthly notes**) → user profile; recall is fetched by the model itself (`memory_recall` / `conversation_search` / `read_scene`), profile and character card stay hand-editable |
-| It remembers people too | Relation cards at `memory/relations/<uid>.md` — one card per person, three lines (recent exchange / their attitude to me / my attitude to them), injected with the channel narration when someone @s her or messages her privately |
+| It remembers me | Every turn is distilled automatically: atomic memories → scene blocks (including **diaries and monthly notes**) → user profile; recall is fetched by the model itself (`memory_recall` / `conversation_search` / `read_scene`), profile and character card stay hand-editable |
+| It remembers people too | Relation cards at `memory/relations/<uid>.md` — one card per person, three lines (recent exchange / their attitude to me / my attitude to them), injected with the channel narration when someone @s it or messages it privately |
 | Reply for me | Always-on channels for QQ (NapCat), Feishu, WeCom — replies **as you**; three-layer group gates plus natural presence (mentioned / volunteering / ambient); voice-in/voice-out; image understanding |
 | Work on schedule | Cron jobs with result push-back to a channel, plus a web UI for CRUD and run history |
 | Speak in my voice | The voice engine is **a standalone resident service** (OpenAI-audio-compatible endpoint): SenseVoice transcription + fine-tuned GPT-SoVITS synthesis; hold-to-talk, hands-free VAD, and speaking over playback interrupts it |
@@ -303,7 +303,7 @@ Prefer fewer windows? Use the desktop app (see [Quick Start](#quick-start)).
 3. Start the gateway: `python -m gateway.channel_gateway` (the desktop app spawns it for you);
 4. Private chats reply directly; group chats need an @ by default. Incoming voice is transcribed as `[voice] <content>`, and **the model decides** whether to answer with voice (`msg_send_voice`) or text — the channel never rewrites the medium. Images are genuinely understood.
 
-To let her just hang out in a group, enable `group_presence` in the same yaml: `enabled_groups` (empty = off everywhere), `talk_value`, `thread_hot_min`, `quiet_hours`, `aliases` (her name counts as a mention). **Whether to speak is computed channel-side**: if no send tool is called nothing is sent, the inner monologue never leaks, and those silent runs are dropped from the next round's context.
+To let the assistant just hang out in a group, enable `group_presence` in the same yaml: `enabled_groups` (empty = off everywhere), `talk_value`, `thread_hot_min`, `quiet_hours`, `aliases` (its name counts as a mention). **Whether to speak is computed channel-side**: if no send tool is called nothing is sent, the inner monologue never leaks, and those silent runs are dropped from the next round's context.
 
 External channels are **chat-only** by default (`allow_tools: false`, the model never sees a tool schema): people can talk to it, but cannot touch your files or machine. Feishu / WeCom are structurally identical — one yaml each.
 
@@ -324,7 +324,7 @@ copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
 
 - The service listens on loopback only, lazy-loads models and releases them on idle (the process keeps listening); to expose it on your LAN set `service_host` **and a `service_token`**.
 - One timbre = `voices/<name>.wav` (reference audio) + a same-named `.txt` (prosody reference); the voice itself lives in the fine-tuned weights.
-- The online song-library gate `sing_online` is **off by default**: when on, an unknown song is acknowledged first and delivered asynchronously once the pipeline finishes (a failure still says something); when off she simply says "I can't sing that one". Site sources live in `~/.omniagent/song_sources/` and are not published in this repo.
+- The online song-library gate `sing_online` is **off by default**: when on, an unknown song is acknowledged first and delivered asynchronously once the pipeline finishes (a failure still says something); when off it simply says "I can't sing that one". Site sources live in `~/.omniagent/song_sources/` and are not published in this repo.
 - UI entry: **Settings → Models**, the voice engine card (endpoint + service config + probe + preview). The plugin itself is `enabled: false` out of the box.
 
 ## Feature List
@@ -402,7 +402,7 @@ Or run `pack_desktop.bat` from the repo root (builds `web/dist` first). The shel
 | `~/.omniagent/cron/jobs.json` | Cron jobs (hot-reloaded) | gateway scheduler |
 | `~/.omniagent/character.md` | Assistant character card (injected with the system prompt, editable in Settings) | injection layer |
 | `~/.omniagent/AGENTS.md` | Global discipline file (shared across tasks; absent = zero injection) | injection layer |
-| `~/.omniagent/memory/` | `brain.db` (L1 atoms + L0 verbatim index) + `user_profile.md` (L3) + `relations/<uid>.md` | memory layer |
+| `~/.omniagent/memory/` | `brain.db` (L1 atoms + L0 verbatim index) + `self_profile.md` (L3) + `relations/<uid>.md` | memory layer |
 | `~/.omniagent/models/` | Local model assets: `sense-voice/`, `gptsovits/` (`weights/` + `voices/`), `sing/` (RVC voice bank) | voice service |
 | `~/.omniagent/song_sources/` | Online song-library site sources (**not published in this repo**) | singing pipeline |
 | `~/.omniagent/projects/<project>/` | Session `*.jsonl`, scene blocks (incl. `diary-*` and monthly notes), skills, project `AGENTS.md` | knowledge layer |
@@ -418,7 +418,7 @@ In the UI: right-click a project to rename (display name only) or delete (cascad
 - The memory mechanism is live-verified, but **long-term effectiveness is still under observation**; the recall acceptance thresholds were calibrated on a very small corpus and some metrics still miss them — deliberately not re-tuned until the corpus grows. This is not perfect recall.
 - Group turns do not produce L1 atoms (memory-poisoning defence), a deliberate registered trade-off: externally controllable text never enters the fact store; chat traffic settles through the narrative layer (scene blocks + diary). "Remembering a person" relies on relation cards, which are now **searchable autobiographical assets** — channel auto-injection was removed; the model fetches them on demand via `narrative_search`/`narrative_read`, and external sources get summary-only (2026-11-06).
 - **The memory layer is not original work**: the L0–L3 tiers, the multi-file scene blocks and the consolidation cycle are ported from the open-source **TencentDB Agent Memory** (upstream is TypeScript; rewritten here in Python + SQLite FTS5). The summary table at the end of the Architecture section lists what changed, what was dropped and what is self-authored; the itemised record lives in [`doc/plans/implemented/memory-architecture.md`](doc/plans/implemented/memory-architecture.md) §13.1 (absorbed from the 2026-11-02 plan on 2026-11-06).
-- Memory P6 additions (2026-11-07): diaries carry **experience texture** (triggers/mood/speaker-attributed quotes; observation notes join the same entry and are searchable); diaries and relation cards can be tagged with **shared-experience** participants (config-driven, off by default); a local `/memory/*` API gives the owner **view/correct/forget** controls (tombstone soft-delete, auditable). Third-party capability gates are codified; no third-party package is currently bundled.
+- Memory P6 additions (2026-11-07): diaries carry **experience texture** (triggers/mood/speaker-attributed quotes; observation notes join the same entry and are searchable); diaries and relation cards can be tagged with **shared-experience** participants (config-driven, off by default); a local `/memory/*` API gives the user **view/correct/forget** controls (tombstone soft-delete, auditable). Third-party capability gates are codified; no third-party package is currently bundled.
 - Singing follows "offline separation cache + online voice conversion": library songs return in seconds, a brand-new song takes minutes end to end (download dominates), and quality depends on the voice-bank material and your VRAM. The online gate is off by default and site sources are not published.
 - The voice service listens on loopback by default; exposing it to your LAN without a token means anyone can burn your GPU.
 - Automatic skill distillation is off by default: an early pilot showed no step savings, A/B still pending.

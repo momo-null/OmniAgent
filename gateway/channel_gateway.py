@@ -216,6 +216,14 @@ def main() -> int:
     print("[gateway] 启动（Ctrl+C 退出）")
     dispatch.ensure_worker()
     _ensure_plugins()
+    # 本地服务统一拉起（model_hub 清单）：网关独立运行时也要保证向量/语音可用。
+    # 幂等：端口已占用即视为已有实例；失败不阻断网关启动。
+    try:
+        from model_hub.services import ServiceManager
+
+        ServiceManager().ensure_started()
+    except Exception as e:  # noqa: BLE001
+        print(f"[gateway] 本地服务拉起失败（已忽略）: {e}")
 
     n = 0 if no_channels else start_channels()
     if not no_channels and n == 0:

@@ -234,7 +234,8 @@ def _run_source() -> str:
 
 
 def log_recall_run(project: str = "", context_key: str = "", source_kind: str = "",
-                   source_external: bool = False, injected_context: bool = False,
+                   source_external: bool = False, peer: str = "",
+                   injected_context: bool = False,
                    context_chars: int = 0, sent: bool = False,
                    llm_calls_delta: int = 0) -> None:
     """run 收尾：把本 run 的自取行为落一行观测记录（fail-soft）。
@@ -254,6 +255,7 @@ def log_recall_run(project: str = "", context_key: str = "", source_kind: str = 
             context_key=str(context_key or sig.get("context_key") or ""),
             source_kind=str(source_kind or sig.get("source_kind") or ""),
             source_external=bool(source_external),
+            peer=str(peer or sig.get("peer") or ""),
             injected_context=bool(injected_context),
             context_chars=int(context_chars or 0),
             by_tool=st.get("by_tool") or {},
@@ -416,21 +418,53 @@ def _is_external_source() -> bool:
         return False
 
 
+def _is_public_context(chat: str) -> bool:
+    """按结构键判断可见面：一对一会话之外都算公开面（定不到场合也按公开算）。
+
+    一对一的可见面只有对话双方，再收窄到「当前会话」没有意义——问另一处说过什么
+    本来就该查得到。多人场合才要防「一个人问、一群人看」，外部来源必须锁在当前场合。
+    定不到场合时 fail-closed 按公开处理。
+    """
+    kind = str(chat or "").strip().lower().split(":", 1)[0]
+    return kind != "private"
+
+
+def _is_master_source() -> bool:
+    """本轮发言人是否主人（复用 identity 的归一：裸 uid / ``name(uid)`` / 认领名单）。
+
+    主人自己的提问不做范围限制——哪怕在多人场合问「他今天说了什么」，也该一次查全。
+    外部门（``tools_enabled``）不参与判断，保持原样。
+    """
+    try:
+        from omni_core.local import identity as _id
+        from omni_core.local.loop import context_signal as _cs
+        peer = str((_cs.boundary() or {}).get("peer") or "")
+        if not peer:
+            return False
+        return _id.MASTER_KEY in _id.resolve_peer_uids(peer)
+    except Exception:
+        return False
+
+
 @function_tool(
     name="conversation_search",
     description=("按关键词检索原始对话记录（逐字，含各场合与你自己说的话，不是提炼后的记忆摘要）。"
                  "问到具体的人、时间、旧约定、原话时用；memory_recall 只有摘要或查不到时用。"
-                 "keyword 用 2-4 字关键词最有效，scope=current 只查当前会话/群，all 查全部会话。"),
+                 "keyword 用 2-4 字关键词最有效；问「某个人说过什么/找这个人」时用 peer 填名字或标识，"
+                 "此时 keyword 可留空。缺省查全部会话（各个场合都算），"
+                 "不用为了跨场合去配 scope；只有公开面里的他人发言会自动收窄。"),
 )
-def conversation_search(keyword: str = "", scope: str = "current",
-                        days: int = 30, limit: int = 8) -> Dict[str, Any]:
+def conversation_search(keyword: str = "", scope: str = "all",
+                        days: int = 30, limit: int = 8,
+                        peer: str = "") -> Dict[str, Any]:
     """检索 L0 原始聊天记录。
 
     Args:
-        keyword: 关键词（人名/昵称/数字/名词片段，2-4 字最有效）。
-        scope: current(当前场合) | all(全部会话；外部来源不支持)。
+        keyword: 关键词（人名/昵称/数字/名词片段，2-4 字最有效；给了 peer 时可留空）。
+        scope: all(缺省，全部会话) | current(只查当前场合)。
         days: 回溯天数（1-365，缺省 30）。
         limit: 最多几条（1-20，缺省 8）。
+        peer: 只查这个人说过的话（名字/昵称/标识都可以；空 = 不限对象）。
     """
     b = _brain()
     if not b.enabled():
@@ -439,24 +473,33 @@ def conversation_search(keyword: str = "", scope: str = "current",
     if blocked:
         return blocked
     kw = (keyword or "").strip()
-    if not kw:
-        return {"ok": False, "error": "keyword 不能为空"}
+    who = (peer or "").strip()
+    if not kw and not who:
+        return {"ok": False, "error": "keyword 与 peer 至少给一个"}
     chat, sid = _current_conversation()
-    scoped = str(scope or "current").strip().lower() != "all" or _is_external_source()
+    # 场合隔离（不是安全边界）：默认全量，新增场合/新人不必配任何东西；只有
+    # 「公开面 + 他人发言」才锁当前会话——这时答案是给多人看的，不该夹带别处的话。
+    # 一对一会话与主人发言不受限（可见面只有当事人，主人有权看自己的记忆）。
+    external = _is_external_source() and not _is_master_source()
+    scoped = (_is_public_context(chat)
+              and (external or str(scope or "all").strip().lower() != "all"))
     if scoped and not (chat or sid):
-        # 外部来源（他人可达）越权口子只有这一处：定不到当前会话就拒绝，绝不放成全局检索
-        return {"ok": False, "error": "无法确定当前会话，请改用 scope=all（仅内部来源可用）"}
+        return {"ok": False, "error": "外部来源必须能确定当前会话，否则不允许跨会话检索"}
     try:
         n = max(1, min(20, int(limit or 8)))
     except Exception:
         n = 8
     rows = b.search_l0(kw, context_key=chat if scoped else "", session_id=sid if scoped else "",
-                       days=days, limit=n)
+                       days=days, limit=n, speaker=who)
     note_self_fetch(len(rows), str(rows[0]["id"]) if rows else "", tool="conversation_search")
     return {"ok": True,
             "scope": "current" if scoped else "all",
             "count": len(rows),
-            "note": ("按时间正序；[时间] 谁：原话" if rows else "没有匹配的聊天记录"),
+            "note": ("按时间正序；[时间] 谁：原话" if rows else
+                     ("本轮检索范围里没找到这个人的话——不等于没说过，"
+                      "可换 peer / keyword，或把 days 调大" if who else
+                      "本轮检索范围里没匹配到——不等于没发生过，"
+                      "可换 keyword，或把 days 调大")),
             "results": [f"[{str(r['when'])[:16].replace('T', ' ')}] "
                         f"{r['who'] or ('我' if r['role'] == 'assistant' else '对方')}："
                         f"{r['text']}" for r in rows]}

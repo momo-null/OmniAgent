@@ -1,4 +1,4 @@
-"""统一本地日折算（plan personal-agent-memory-2026-11-05 D-1：统一切本地日）。
+"""统一本地日折算（统一切本地日）。
 
 背景：日记/月记此前按 UTC 取日（``datetime.now(timezone.utc).strftime``），
 跨 UTC 日界的本地一天（UTC+8 的白天）会被拆进两篇日记。本模块是**唯一**的

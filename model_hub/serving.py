@@ -97,7 +97,10 @@ class ServeMixin:
                 stdout=fo,
                 stderr=fe,
                 env=env,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                # CREATE_NO_WINDOW：Web 点「启动」拉起 llama-server 时不弹黑窗；
+                # 与 CREATE_NEW_PROCESS_GROUP 组合用于整组终止。
+                creationflags=(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                               | getattr(subprocess, "CREATE_NO_WINDOW", 0)),
             )
 
         self.processes[run_name] = {
@@ -183,7 +186,10 @@ class ServeMixin:
                 stdout=fo,
                 stderr=fe,
                 env=env,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                # CREATE_NO_WINDOW：Web 点「启动」拉起 llama-server 时不弹黑窗；
+                # 与 CREATE_NEW_PROCESS_GROUP 组合用于整组终止。
+                creationflags=(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                               | getattr(subprocess, "CREATE_NO_WINDOW", 0)),
             )
 
         self.processes[name] = {

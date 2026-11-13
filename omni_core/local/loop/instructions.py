@@ -144,7 +144,7 @@ class InstructionMixin:
         """记忆**稳定段**进 system prompt——使用规则 + scene 导航 + 她的自我画像。
 
         * ``<memory-usage-rules>``（P1，2026-11-02 方案 C）：L1 检索结果永不自动注入，
-          system 常驻的是「必查场景 + 每轮合计 ≤3 次」的使用规则；gate ``memory.enabled``；
+          system 常驻的是「何时该查」的通用判据 + 每轮合计配额；gate ``memory.enabled``；
         * ``<scene-navigation>``：L2 场景摘要 + 更新时间 + read_scene 指引——**只放索引**，
           全文由模型按需调 ``read_scene`` 读取（渐进披露）；gate ``runtime.knowledge.memory.enabled``；
         * ``<self-persona>``：她的自我画像（TAM 的 L3 persona 位置；角色本人的演化层，
@@ -161,15 +161,18 @@ class InstructionMixin:
         if self.knowledge_cfg.get("memory"):
             # P1（2026-11-02，方案 C）：L1 检索结果**永不自动注入**——常驻 system 的是
             # 使用规则，内容由模型经 memory_recall（及 P2 的 conversation_search）自取。
-            # NP-2（plan personal-agent-memory §13.3.2）：叙事能力声明零内容化 + 「叙事
+            # NP-2：叙事能力声明零内容化 + 「叙事
             # 不得转述到对外消息」；七工具配额口径统一。
             _rules = (
                 "<memory-usage-rules>\n"
                 "长期记忆（你与主人的事实/规则/偏好/事件）不会自动提供给你，需要时自己查：\n"
-                "- 必查：被问过往事件、以前的约定、人物关系、亲近的人的相关信息时，"
-                "先调 memory_recall 查过再回答，不凭印象编造；\n"
+                "- 判据：答案若只能来自已经发生过的事，就先查再答——包括不确定"
+                "「有没有」的情况，查过才说没有；纯闲聊、感受、当下正在发生的不必查。"
+                "不要凭印象编造；\n"
                 "- 要原话、具体时间、具体是谁说的：memory_recall 只有摘要或查不到时，"
                 "调 conversation_search 检索原始聊天记录（关键词用 2-4 字最有效）；\n"
+                "- 问「某个人说过什么/找这个人」：conversation_search 填 peer（名字或标识即可），"
+                "关键词可留空，会按说话人筛出这个人说过的话；\n"
                 "- 你的经历叙事（日记/月记/对人的印象卡）同样不自动提供：被问「上次/那天/"
                 "我们/某个人」时先调 narrative_search 找条目（返回日期/摘要），"
                 "要读全文再调 narrative_read；\n"

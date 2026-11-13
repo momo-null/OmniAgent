@@ -98,7 +98,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS l0_fts USING fts5(
   text, record_id UNINDEXED, tokenize='{tokenizer}');
 """
 
-# Narrative 自传体叙事索引（plan personal-agent-memory §13.2.1）：**只存指针不存正文**
+# Narrative 自传体叙事索引：**只存指针不存正文**
 # （INV-12）——正文文件（diary-*.md / relations/<uid>.md）仍是唯一真相，本表只存
 # 摘要/主题/场合标注/指针，供 narrative_search 检索。单一 upsert 通道
 # ``upsert_narrative_index``（先删后插）；LLM 沙箱无该表写权限。
@@ -502,24 +502,46 @@ def index_l0_message(session_id: str, role: str, text: str, *, context_key: str 
     context_key = str(context_key or "").strip() or str(session_id)
     body = text[:_L0_TEXT_MAX]
     rid = _l0_id(str(session_id or ""), now, role, body)
-    try:
-        with _lock:
-            conn = _l0_conn()
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO l0_messages(record_id, context_key, session_id, kind, "
-                "role, speaker, text, recorded_at, source_kind, provenance, source_external) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                (rid, str(context_key or ""), str(session_id or ""), kind, role,
-                 str(speaker or ""), body, now,
-                 source_kind, str(provenance or "")[:200],
-                 1 if _resolve_source_external(source_external) else 0))
-            if cur.rowcount:
-                conn.execute("INSERT OR IGNORE INTO l0_fts(record_id, text) VALUES(?,?)",
-                             (rid, body))
+    # 她的回复不带对方 speaker：否则「按人查」会把她的回话算到别人头上。
+    if role == "assistant":
+        speaker = ""
+    payload = (rid, str(context_key or ""), str(session_id or ""), kind, role,
+               str(speaker or ""), body, now,
+               source_kind, str(provenance or "")[:200],
+               1 if _resolve_source_external(source_external) else 0)
+    for attempt in (1, 2):
+        try:
+            with _lock:
+                conn = _l0_conn()
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO l0_messages(record_id, context_key, session_id, kind, "
+                    "role, speaker, text, recorded_at, source_kind, provenance, source_external) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?)", payload)
+                if cur.rowcount:
+                    conn.execute("INSERT OR IGNORE INTO l0_fts(record_id, text) VALUES(?,?)",
+                                 (rid, body))
+                # 无论是否新插入都提交：避免隐式事务悬挂，导致别的进程看不到本行。
                 conn.commit()
-        return rid
-    except Exception:
-        return ""
+            return rid
+        except Exception as e:
+            try:
+                with _lock:
+                    _l0_conn().rollback()
+            except Exception:
+                pass
+            logger.warning(
+                f"L0 写入失败 attempt={attempt} session={session_id!r} "
+                f"ctx={context_key!r}: {type(e).__name__}: {e}")
+            # 自愈：丢弃可能已坏的进程级长连接，下一次调用重开。
+            try:
+                with _lock:
+                    old = _L0_CONN.get("conn")
+                    _L0_CONN.update({"path": "", "conn": None})
+                if old is not None:
+                    old.close()
+            except Exception:
+                pass
+    return ""
 
 
 def _format_provenance(value: Any) -> str:
@@ -571,16 +593,20 @@ def _l0_cutoff(days: Any) -> str:
 
 
 def search_l0(keyword: str, *, context_key: str = "", session_id: str = "",
-              days: Any = 30, limit: int = 8, source_kind: str = "chat") -> List[Dict[str, Any]]:
+              days: Any = 30, limit: int = 8, source_kind: str = "chat",
+              speaker: str = "") -> List[Dict[str, Any]]:
     """L0 逐字检索（FTS + 时间窗）→ ``[{when, who, role, text, context_key, kind}]``，时间正序。
 
     范围（ACL 由调用方决定，本函数只认参数）：传 ``context_key`` / ``session_id`` = 只查该场合 / 会话
     （两个键取并集：实时写入行两个都有，回填行只有 session_id）；两者皆空 = 全部会话。
     ``source_kind``（INV-13）：缺省 ``chat``——「原始聊天记录」语义不含观察原文与
     任务输入；观察走 P5 的 ``observation_search``（同表按 ``source_kind=observation``）。
+    ``speaker`` 给定时只查该对象说过的话（``name(uid)`` / 裸 uid / 规范标签都认，
+    经 ``identity.resolve_peer_uids`` 归一）；此时 ``keyword`` 可为空 = 列出该对象的全部发言。
     """
     keyword = str(keyword or "").strip()
-    if not keyword or not enabled():
+    speaker = str(speaker or "").strip()
+    if (not keyword and not speaker) or not enabled():
         return []
     try:
         c = _l0_conn()
@@ -588,8 +614,8 @@ def search_l0(keyword: str, *, context_key: str = "", session_id: str = "",
             return []
         match, like_terms = _match_expr(c, keyword)
         vec_ready = _vec_ready()
-        if not match and not like_terms and not vec_ready:
-            return []  # 无词面且无向量通道（有向量时走纯语义路径）
+        if not match and not like_terms and not vec_ready and not speaker:
+            return []  # 无词面、无对象、无向量通道（有向量时走纯语义路径）
         try:
             n = max(1, min(20, int(limit)))
         except Exception:
@@ -609,15 +635,31 @@ def search_l0(keyword: str, *, context_key: str = "", session_id: str = "",
         if sk in ("chat", "observation", "task"):
             sk_sql = "AND l.source_kind = ?"
             sk_params = [sk]
+        # 对象范围：结构化 speaker 是 ``name(uid)``，按 uid 后缀匹配；归一含主人认领。
+        sp_sql, sp_params = "", []
+        if speaker:
+            try:
+                from omni_core.local.identity import resolve_peer_uids
+
+                uids = [u for u in resolve_peer_uids(speaker) if u]
+            except Exception:
+                uids = [speaker]
+            if uids:
+                # speaker 统一是 ``name(uid)``：既认 uid 后缀，也认名字前缀。
+                sp_sql = " AND (" + " OR ".join(
+                    "(l.speaker LIKE ? OR l.speaker LIKE ?)" for _ in uids) + ")"
+                sp_params = []
+                for u in uids:
+                    sp_params += [f"%({u})", f"{u}(%"]
         base = (f"SELECT l.record_id, l.context_key, l.session_id, l.kind, l.role, l.speaker, "
                 f"l.text, l.recorded_at FROM l0_messages l "
                 f"JOIN l0_fts f ON f.record_id = l.record_id "
-                f"WHERE l0_fts MATCH ? AND l.recorded_at >= ? {scope} {sk_sql} "
+                f"WHERE l0_fts MATCH ? AND l.recorded_at >= ? {scope} {sk_sql} {sp_sql} "
                 f"ORDER BY bm25(l0_fts) LIMIT ?")
         rows: List[Any] = []
         if match:
             try:
-                rows = c.execute(base, tuple([match, cutoff] + params + sk_params
+                rows = c.execute(base, tuple([match, cutoff] + params + sk_params + sp_params
                                              + [max(n * 3, 20)])).fetchall()
             except Exception:
                 rows = []
@@ -638,25 +680,77 @@ def search_l0(keyword: str, *, context_key: str = "", session_id: str = "",
         for kw in like_terms:
             lsql = ("SELECT l.record_id, l.context_key, l.session_id, l.kind, l.role, l.speaker, "
                     "l.text, l.recorded_at FROM l0_messages l WHERE l.text LIKE ? "
-                    "AND l.recorded_at >= ? " + scope + " " + sk_sql
+                    "AND l.recorded_at >= ? " + scope + " " + sk_sql + sp_sql
                     + " ORDER BY l.recorded_at DESC LIMIT ?")
             try:
                 for row in c.execute(lsql, tuple([f"%{kw}%", cutoff] + params + sk_params
-                                                 + [n])).fetchall():
+                                                 + sp_params + [n])).fetchall():
                     _push(row)
             except Exception:
                 continue
-        # 向量候选（并列通道）：JOIN 源表沿用时间窗/会话 ACL/进料道分道的全部既有
-        # WHERE——只新增候选行，FTS/LIKE 行原样；兜底查询前补一点欠账（预算帽）。
-        if _vec_enabled() and _vec_ready():
+        # 无词面、只按对象查：按时间倒序给该对象的发言（keyword 为空时走这里）。
+        if not match and not like_terms and sp_sql:
+            lsql = ("SELECT l.record_id, l.context_key, l.session_id, l.kind, l.role, l.speaker, "
+                    "l.text, l.recorded_at FROM l0_messages l "
+                    "WHERE l.recorded_at >= ? " + scope + " " + sk_sql + sp_sql
+                    + " ORDER BY l.recorded_at DESC LIMIT ?")
+            try:
+                for row in c.execute(lsql, tuple([cutoff] + params + sk_params
+                                                 + sp_params + [n])).fetchall():
+                    _push(row)
+            except Exception:
+                pass
+        # 向量候选（并列通道）：L0 的输出语义是「最新 n 条时间线」，没有相关性分，所以
+        # 向量行**不许无条件驱逐**词面命中行（实测 L4：cos 0.735 的 target 被 4 条 cos 0.55
+        # 的新行顶掉）。规则：
+        #   ① keyword 为空（只按对象查）不走向量——空串嵌入没有查询语义；
+        #   ② 有空槽就按 cos 补空槽；
+        #   ③ 窗口已满时，只允许替换「语义无关」的词面行（cos < floor），单次最多
+        #      `_L0_VEC_REPLACE` 条，且要求进来的向量行 cos 高出对方 0.05；
+        #   ④ 含查询字面串的词面行永不替换（编号/专名的精确命中优先）。
+        if keyword.strip() and _vec_enabled() and _vec_ready():
             try:
                 _vector_catch_up(budget=10, time_budget=2.0)
                 qv = _vec_encode([keyword])
                 if qv and qv[0]:
                     vrows = _vec_l0_candidates(c, qv[0], 2 * n, _vec_model(),
-                                               cutoff, scope, params, sk_sql, sk_params)
+                                               cutoff, scope, params, sk_sql, sk_params,
+                                               sp_sql, sp_params)
+                    qn = _vec_norm(qv[0])
+                    # _vec_l0_candidates 只回行；cos 从行里的向量现算（r[8] 是 vec）。
+                    vcos: Dict[str, float] = {str(r[0]): _vec_cos(r[8], qn) for r in vrows}
+                    vcos.update({rid: _vec_cos(b, qn)
+                                 for rid, b in _vec_blobs(c, [d["id"] for d in out],
+                                                          _vec_model()).items()})
+                    kw = keyword.strip().casefold()
+                    # 先把向量行并入池（已在池内的自动去重），再统一决定「窗口」
                     for row in vrows:
                         _push(row)
+                    out.sort(key=lambda d: str(d.get("when") or ""))
+                    if len(out) <= n:
+                        return out                      # 有空槽即全留（含向量补位）
+                    window = out[-n:]
+                    outside = out[:-n]
+                    # 窗外但语义相关（cos >= floor）的行，可以替换窗内语义无关行。
+                    inc = sorted(((vcos.get(d["id"], 0.0), d) for d in outside
+                                  if vcos.get(d["id"], 0.0) >= _vec_floor_l0()),
+                                 key=lambda x: -x[0])
+                    weak = sorted((vcos.get(d["id"], 1.0), d["id"]) for d in window
+                                  if vcos.get(d["id"], 1.0) < _vec_floor_l0()
+                                  and not (kw and kw in str(d.get("text") or "").casefold()))
+                    victims: List[str] = []
+                    picks: List[Dict[str, Any]] = []
+                    for cos_v, d in inc:
+                        if len(victims) >= _L0_VEC_REPLACE or not weak:
+                            break
+                        if cos_v < weak[0][0] + 0.05:
+                            break          # 不比最弱的行更贴近，不折腾
+                        victims.append(weak.pop(0)[1])
+                        picks.append(d)
+                    if victims:
+                        window = [d for d in window if d["id"] not in victims] + picks
+                        window.sort(key=lambda d: str(d.get("when") or ""))
+                    return window
             except Exception:
                 pass
         out.sort(key=lambda d: str(d.get("when") or ""))
@@ -864,7 +958,7 @@ def flush_brain(project_id: str, brain_cfg: Optional[Dict[str, Any]] = None,
                 allow_write: bool = True) -> Dict[str, int]:
     """任务收尾：语境链 → 关系卡 → L2 维护 → 巩固调度（公共尾段，见 ``_flush_tail``）。
 
-    2026-11-10 起写链为「事件 → 助手的取舍 → 记忆」（worklog lifelike-presence §11/§12）：
+    2026-11-10 起写链为「事件 → 助手的取舍 → 记忆」（2026-11-10 写链总纲定稿）：
     收尾**不再自动提炼 L1 原子**——L1 只走三条助手的选择路径：``memory_remember``（显式记）、
     巩固期 ``promote_observations``（内化助手自己记的观察）、episode→rule 抽象。
     防投毒与拟人取舍同源：世界可以灌进 L0，只有经过助手的手才变成「助手的」。
@@ -1049,18 +1143,108 @@ def _vec_model() -> str:
 
 
 def _vec_floor() -> float:
-    """向量候选的语义 floor（余弦下限）。
+    """atom 向量候选的语义 floor（余弦下限），缺省 0.58。
 
     为什么需要：final 公式的 importance/recency 两项会把**任何**向量专属行抬过
     既有 floor（cos=0 也有 0.15+0.15 基础分）——没有语义下限，无关查询也会被
-    塞满 k 条（实测满额率 1.0、负样本 20 条凭空召回）。校准：正样本 cos 最低
-    0.543、负样本最高 0.493（2026-11-13 实测），0.52 居间可分；可配置。
+    塞满 k 条（实测满额率 1.0、负样本 20 条凭空召回）。校准（2026-11-13 实测，
+    74 active 原子）：0.52 只挡离域负样本（最高 0.493），同域硬负仍 4/4 漏过
+    （0.5209–0.5774）；抬到 0.58 后 21 条语义场景命中 19/21、新增行 37→18、
+    同域硬负 4→1，且既有 36 条 fixture 命中不变（28/36）。可配置。
     """
     try:
         import config
-        return float(config.get_config("runtime.knowledge.memory.vector.cos_floor", 0.52))
+        return float(config.get_config("runtime.knowledge.memory.vector.cos_floor", 0.58))
+    except Exception:
+        return 0.58
+
+
+def _vec_floor_l0() -> float:
+    """L0 通道的 floor，缺省 0.52（与 atom 分开的理由见 _L0_VEC_REPLACE 注释）。
+
+    L0 没有相关性排序，向量行只用于「填空槽 / 替换语义无关行」，驱逐有护栏，
+    所以不需要用高 floor 压量；而它承载的是原话转述（cos 普遍低于原子摘要），
+    抬到 0.58 会直接丢掉实测 cos 0.546 的正确行。
+    """
+    try:
+        import config
+        return float(config.get_config("runtime.knowledge.memory.vector.cos_floor_l0", 0.52))
     except Exception:
         return 0.52
+
+
+def _vec_floor_narr() -> float:
+    """叙事（diary/month/relation）向量候选的 floor，缺省 **0.52**（不是 atom 的 0.58）。
+
+    为什么单独校准（2026-11-14 真库副本实测，38 条叙事、14 场景 / 5 负样本）：
+    叙事向量建在 ``summary + topics``（≤400 字的「提炼叙述」），目标条目的 cos 只有
+    0.499–0.686（atom 卡片普遍 0.58+）——用 0.58 会漏掉「改写幅度大」的正确条目。
+    扫描结果：floor 0.58 → 硬样本 8/11；0.55 → 8/11；**0.52 → 9/11 且负样本噪声不变**；
+    0.50 → 命中相同但负样本多漏进 1 条。故取 0.52（与 L0 通道同值，L0 承载的也是
+    口语/长句这类低 cos 文本）。可用 ``vector.cos_floor_narr`` 单独覆盖。
+    """
+    try:
+        import config
+        return float(config.get_config("runtime.knowledge.memory.vector.cos_floor_narr", 0.52))
+    except Exception:
+        return 0.52
+
+
+def _vec_rel_mode() -> str:
+    """向量行的相关性刻度（``cos`` 缺省 | ``calib`` 标定到 bm25 的 rel 尺度）。
+
+    背景：FTS 行的 rel 是 ``bm25_rank_to_score``（−3.5 → 0.777、−6 → 0.857），向量行
+    的 rel 是 cos（0.55–0.75）——同一个 ``w_r=0.55`` 乘上去，向量行天然低约 0.1。
+    ``calib`` 用同一 query 下「目标卡片同时被 FTS 与向量命中」的 39 个配对点最小二乘
+    拟合（rel = 0.296*cos + 0.665，r=0.40，2026-11-14 实测），把 cos 映射到 bm25 的
+    量纲。缺省仍是 ``cos``：实测 calib 会把「刚好过 floor」的行抬到 rel 0.83（≈ 很相关），
+    同域硬负随之变多（实测见 ``doc/plans/implemented/vector-recall-2026-11-13.md`` §13）。
+    """
+    try:
+        import config
+        return str(config.get_config("runtime.knowledge.memory.vector.rel_mode", "cos") or "cos")
+    except Exception:
+        return "cos"
+
+
+def _vec_rel(cos: float) -> float:
+    """把 cos 换成进 final 公式的 rel；calib 模式的系数可配（cos_rel_a/cos_rel_b）。"""
+    c = max(0.0, min(1.0, float(cos)))
+    if _vec_rel_mode() != "calib":
+        return c
+    try:
+        import config
+        a = float(config.get_config("runtime.knowledge.memory.vector.cos_rel_a", 0.296))
+        b = float(config.get_config("runtime.knowledge.memory.vector.cos_rel_b", 0.665))
+    except Exception:
+        a, b = 0.296, 0.665
+    return max(0.0, min(1.0, a * c + b))
+
+
+def _vec_quota() -> int:
+    """向量通道的保底名额（缺省 0 = 不保底，纯按 final 分竞争）。
+
+    为什么需要（候选方案 A/B/C 见 ``doc/plans/implemented/vector-recall-2026-11-13.md`` §13.5）：
+    实测剩余 miss 不是「召回不到」，而是 top-k 被
+    FTS 弱匹配的高分噪声占满（0.735–0.862）。保底名额让语义通道有固定席位；替换对象
+    只选「不含 query 任何字面词」的 FTS 行，精确 token 查询因此不受影响。
+    """
+    try:
+        import config
+        return max(0, int(config.get_config("runtime.knowledge.memory.vector.quota", 0)))
+    except Exception:
+        return 0
+
+
+def _vec_quota_gate(query: str, best_cos: float) -> bool:
+    """配额是否该触发（三道门，见 search_brain 内的注释）：自然语言问句（有效词 ≥4）、
+    无 ASCII 精确 token、最强候选 cos ≥ 0.62。抽成纯函数便于单测与复盘。"""
+    terms = _query_terms(query)
+    if len(terms) < 4:
+        return False
+    if any(t.isascii() and len(t) >= 2 for t in terms):
+        return False
+    return float(best_cos) >= 0.62
 
 
 def _vec_src_hash(text: str) -> str:
@@ -1104,22 +1288,140 @@ def _vec_atom_candidates(c: sqlite3.Connection, qvec: List[float], top: int,
     return out
 
 
+#: L0 满窗口时允许被向量行替换的词面行上限（每次检索）。实测 2 最平衡：4 条会把窗内
+#: 原话挤掉 7/8（时间窗本来就只有 n 个槽，替换越多、原线越少）；2 条可把 top1/top2 修回
+#: 目标行，同时保留 3 条原线。
+_L0_VEC_REPLACE = 2
+
+
+def _vec_narr_candidates(c: sqlite3.Connection, qvec: List[float], top: int, model: str,
+                         kind: str = "", date_from: str = "", date_to: str = "") -> List[Any]:
+    """叙事层的向量候选（分支 feat/vector-recall，doc 级）。
+
+    纪律与 atom/L0 通道一致：**JOIN 源表**（``narrative_index`` 里还在的行才可能有
+    候选），kind / 日期区间这些既有 WHERE 原样下推——绝不先在全库 vectors 上取 top
+    再过滤（否则别的 kind/区间的条目会挤占名额）。返回原始行元组，cos 由调用方
+    用 ``_vec_cos`` 现算（只返回行、不返回 cos 是本模块的既有形态）。
+    """
+    sql = ("SELECT n.doc_id, n.kind, n.project_id, n.date_from, n.date_to, n.time_from, "
+           "n.time_to, n.summary, n.topics, n.context_keys, n.peers, n.atmosphere, v.vec "
+           "FROM narrative_index n JOIN vectors v "
+           "ON v.record_id = (n.kind || '" + _NARR_VEC_SEP + "' || n.doc_id) "
+           "WHERE v.source='narrative' AND v.model=?" + (" AND n.kind=?" if kind else ""))
+    params: List[Any] = [model] + ([kind] if kind else [])
+    try:
+        rows = c.execute(sql, tuple(params)).fetchall()
+    except Exception:
+        return []
+    if not rows:
+        return []
+    qn = _vec_norm(qvec)
+    floor = _vec_floor_narr()
+    qf = str(date_from or "").strip()[:10]
+    qt = str(date_to or "").strip()[:10]
+    scored = []
+    for r in rows:
+        # 日期区间求交（与词面通道同口径：只比日期列，不看时间戳）
+        if qf and r[4] and str(r[4]) < qf:
+            continue
+        if qt and r[3] and str(r[3]) > qt:
+            continue
+        cos = _vec_cos(r[12], qn)
+        if cos >= floor:
+            scored.append((cos, r))
+    scored.sort(key=lambda x: -x[0])
+    return [r for _s, r in scored[:max(1, int(top))]]
+
+
+def _vec_narr_catch_up(budget: int, model: str) -> int:
+    """补齐叙事层向量欠账（≤budget 条）；src_hash 口径与 FTS 的 search_text 同源。
+
+    叙事行是「指针」级别的小表（现库 38 行），所以这里用**全表 src_hash 比对**
+    而不是水位线：行会被覆盖更新（doc_id+kind 幂等键），水位线对覆盖场景无效。
+    """
+    from omni_core.local import embedder  # noqa: F401  （与 l0/atom 同源依赖）
+    conn = open_brain()
+    try:
+        rows = conn.execute(
+            "SELECT doc_id, kind, summary, topics, atmosphere FROM narrative_index").fetchall()
+        existing = {r[0]: r[1] for r in conn.execute(
+            "SELECT record_id, src_hash FROM vectors WHERE source='narrative' AND model=?",
+            (model,)).fetchall()}
+        need: List[Tuple[str, str]] = []
+        for doc_id, kind, summary, topics, atm in rows:
+            text = _narr_search_text(summary, _json_list(topics), atm)
+            if not text:
+                continue
+            rid = _narr_vec_id(kind, doc_id)
+            if existing.get(rid) != _vec_src_hash(text):
+                need.append((rid, text))
+        if not need:
+            return 0
+        need = need[:max(0, int(budget))]
+        vecs = _vec_encode([t for _r, t in need])
+        if not vecs:
+            return 0
+        for (rid, text), v in zip(need, vecs):
+            _vec_write(conn, "narrative", rid, v, text, model)
+        conn.commit()
+        return len(need)
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def _vec_norm(v: Any) -> Any:
+    """L2 归一化后的查询向量（cos 计算用）。"""
+    import numpy as _np
+    q = _np.asarray(v, dtype="<f4")
+    return q / (_np.linalg.norm(q) + 1e-12)
+
+
+def _vec_blobs(c: sqlite3.Connection, ids: List[str], model: str) -> Dict[str, Any]:
+    """按 record_id 批量取 L0 向量（只读，缺失即视为「无向量」）。"""
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    try:
+        rows = c.execute(
+            "SELECT record_id, vec FROM vectors WHERE source='l0' AND model=? "
+            "AND record_id IN (" + ph + ")", tuple([model] + list(ids))).fetchall()
+    except Exception:
+        return {}
+    return {str(r[0]): r[1] for r in rows}
+
+
+def _vec_cos(blob: Any, qn: Any) -> float:
+    import numpy as _np
+    v = _np.frombuffer(blob, dtype="<f4") if isinstance(blob, (bytes, memoryview)) \
+        else _np.asarray(blob, dtype="<f4")
+    return float(v / (_np.linalg.norm(v) + 1e-12) @ qn)
+
+
 def _vec_l0_candidates(c: sqlite3.Connection, qvec: List[float], top: int, model: str,
                        cutoff: str, scope: str, scope_params: List[str],
-                       sk_sql: str, sk_params: List[str]) -> List[Any]:
-    """L0 的向量候选：JOIN 源表**沿用全部既有 WHERE**（时间窗/会话 ACL/进料道分道）——
-    绝不先在全库 vectors 上取 top 再过滤（别的会话内容会挤占名额/跨会话泄漏）。"""
+                       sk_sql: str, sk_params: List[str],
+                       sp_sql: str = "", sp_params: List[str] = ()) -> List[Any]:
+    """L0 的向量候选：JOIN 源表**沿用全部既有 WHERE**（时间窗/会话 ACL/进料道分道/
+    发言人过滤）——绝不先在全库 vectors 上取 top 再过滤（别的会话内容会挤占名额/跨会话泄漏）。
+
+    `sp_sql` 必须与词面通道同一条件：只按对象查（keyword 空）时不再调用本函数，
+    但带 keyword + speaker 的组合查询仍需把发言人条件下推，否则会混入他人发言。
+    """
     import numpy as _np
     sql = ("SELECT l.record_id, l.context_key, l.session_id, l.kind, l.role, l.speaker, "
            "l.text, l.recorded_at, v.vec FROM l0_messages l "
            "JOIN vectors v ON v.record_id = l.record_id "
-           "WHERE v.source='l0' AND v.model=? AND l.recorded_at >= ? " + scope + " " + sk_sql)
-    rows = c.execute(sql, tuple([model, cutoff] + list(scope_params) + list(sk_params))).fetchall()
+           "WHERE v.source='l0' AND v.model=? AND l.recorded_at >= ? " + scope + " " + sk_sql
+           + " " + sp_sql)
+    rows = c.execute(sql, tuple([model, cutoff] + list(scope_params) + list(sk_params)
+                                + list(sp_params))).fetchall()
     if not rows:
         return []
     q = _np.asarray(qvec, dtype="<f4")
     q = q / (_np.linalg.norm(q) + 1e-12)
-    floor = _vec_floor()
+    floor = _vec_floor_l0()
     scored = []
     for r in rows:
         v = _np.frombuffer(r[8], dtype="<f4")
@@ -1184,6 +1486,9 @@ def _vector_catch_up(budget: int = 16, time_budget: float = 2.0) -> int:
                     conn.commit()
                     conn.close()
                     done += len(need)
+        # 叙事层欠账（小表、覆盖更新为主）：每轮最多 8 条，不跟 atom/l0 抢预算
+        if done < budget and _t.time() - t0 < time_budget:
+            done += _vec_narr_catch_up(min(8, max(0, budget - done)), model)
         return done
     except Exception:
         return done
@@ -1246,13 +1551,15 @@ def search_brain(query: str, k: Optional[int] = None,
                 f"WHERE atoms_fts MATCH ? AND a.state IN {states} "
                 f"ORDER BY r LIMIT ?", tuple(params)).fetchall()
         # 向量候选（并列通道，分支 feat/vector-recall）：JOIN 源表沿用 state='active'
-        # scope；取 top-2k，只新增候选行——FTS 候选行的 rel 一律用 bm25 原值（零退化）。
+        # scope；取 top-max(3k,15)（与 FTS 候选上限对齐——2k=10 会截断 cos 名次 11-13 的
+        # 正确答案，实测 S18：假设分 0.6218 > 第 5 名 0.6092 却被候选帽挡在门外）；
+        # 只新增候选行——FTS 候选行的 rel 一律用 bm25 原值（零退化）。
         vec_cand: List[Tuple[str, float]] = []
         if vec_ready:
             try:
                 qv = _vec_encode([query])
                 if qv and qv[0]:
-                    vec_cand = _vec_atom_candidates(c, qv[0], 2 * k,
+                    vec_cand = _vec_atom_candidates(c, qv[0], max(3 * k, 15),
                                                     _vec_model())
             except Exception:
                 vec_cand = []
@@ -1309,9 +1616,11 @@ def search_brain(query: str, k: Optional[int] = None,
             h = _score_hit(rid, content, kind, imp, upd, la, pr, ach,
                            bm25_rank_to_score(rank))
             if h:
+                h["via"] = "fts"
                 hits.append(h)
         # 向量专属行：有 FTS rank 的行一律用 bm25 原值（本块只收「FTS 候选里没有」的行），
-        # rel = max(0, cos)——转述召回的落点；glue 词面过滤不适用于语义行。
+        # rel = cos（rel_mode=calib 时映射到 bm25 量纲）——转述召回的落点；
+        # glue 词面过滤不适用于语义行。
         for rid, cos in vec_cand:
             if rid in fts_cand_ids:
                 continue
@@ -1321,10 +1630,39 @@ def search_brain(query: str, k: Optional[int] = None,
             if not arow:
                 continue
             h = _score_hit(rid, arow[0], arow[1], arow[2], arow[3], arow[4],
-                           arow[5], arow[6], max(0.0, min(1.0, float(cos))))
+                           arow[5], arow[6], _vec_rel(cos))
             if h:
+                h["via"] = "vec"
+                h["cos"] = float(cos)
                 hits.append(h)
         hits.sort(key=lambda h: h["score"], reverse=True)
+        # 通道配额（向量臂 C 方案，缺省关）：语义通道保底 quota 个席位，救「top-k 全被
+        # FTS 弱匹配高分噪声占满」的命中。三道门，缺一不触发：
+        #   ① query 是自然语言问句（有效词 ≥4）——短词/关键词查询交给 FTS；
+        #   ② 无 ASCII 精确 token（编号/店名/型号），那类查询 FTS 才是唯一可靠通道；
+        #   ③ 最强的向量候选 cos ≥ 0.62（intent 明确），否则宁可空着。
+        # 受害者 = 分数最低、且**不含完整 query 串**的 FTS 行（完整串保护比逐词强得多，
+        # 逐 bigram 判定会让几乎所有中文行都成"含字面词"→ 实测配额从不触发）。
+        quota = _vec_quota()
+        if quota and hits:
+            vrows = [h for h in hits if h.get("via") == "vec"]
+            if vrows:
+                v_best = max(float(h.get("cos") or 0.0) for h in vrows)
+                v_in_top = sum(1 for h in hits[:k] if h.get("via") == "vec")
+                take_v = min(quota, len(vrows))
+                if take_v > v_in_top and _vec_quota_gate(query, v_best):
+                    q_str = str(query or "").strip().casefold()
+                    victims = [h for h in reversed(hits) if h.get("via") == "fts"
+                               and not (q_str and q_str in str(h.get("content") or "").casefold())]
+                    if victims:
+                        take_v = min(take_v, v_in_top + len(victims))
+                        sel_v = vrows[:take_v]
+                        drop = victims[: max(0, take_v - v_in_top)]
+                        hits = [h for h in hits if h not in drop]
+                        rest = [h for h in hits if h not in sel_v]
+                        head = rest[: max(0, k - take_v)]
+                        tail = rest[max(0, k - take_v):]
+                        hits = head + sel_v + tail
         # 同主题去冗余：(kind, peer, 主题前缀 12 字) 同组只留最高分——
         # 保证「k 条是 k 个方面」，不是同一条的 k 种说法
         deduped: List[Dict[str, Any]] = []
@@ -1339,6 +1677,7 @@ def search_brain(query: str, k: Optional[int] = None,
             if len(deduped) >= k:
                 break
         hits = deduped
+        hits.sort(key=lambda h: h["score"], reverse=True)   # 配额打乱过展示序，按分回正
         if reinforce and hits:
             now2 = _now()
             for h in hits:
@@ -1400,7 +1739,7 @@ def inject_text_brain(query: str = "",
 def log_recall_observability(project: str = "", source: str = "", calls: int = 0,
                              hits: int = 0, top1_id: str = "", run_id: str = "",
                              context_key: str = "", source_kind: str = "",
-                             source_external: bool = False,
+                             source_external: bool = False, peer: str = "",
                              injected_context: bool = False, context_chars: int = 0,
                              by_tool: Optional[Dict[str, int]] = None,
                              context_hits: int = 0, narrative_cross: int = 0,
@@ -1420,6 +1759,7 @@ def log_recall_observability(project: str = "", source: str = "", calls: int = 0
         rec = {"run_id": str(run_id or ""), "ts": _now(),
                "project": str(project or ""), "context_key": str(context_key or ""),
                "source_kind": str(source_kind or ""), "source_external": bool(source_external),
+               "peer": str(peer or ""),
                "injected_context": bool(injected_context),
                "context_chars": int(context_chars or 0),
                "by_tool": dict(by_tool or {}),
@@ -1442,6 +1782,24 @@ def log_recall_observability(project: str = "", source: str = "", calls: int = 0
 # ---- 叙事索引（§13.2，INV-12：只存指针不存正文；正文文件是唯一真相） ----
 
 _NARR_KINDS = ("diary", "month", "relation")
+
+#: 叙事向量的 record_id 键（``kind|doc_id``）：同一 doc_id 理论上可在不同 kind 下
+#: 重复（diary 与 month 都用文件名当 doc_id），单用 doc_id 会让两层的向量互相覆盖。
+_NARR_VEC_SEP = "|"
+
+
+def _narr_vec_id(kind: str, doc_id: str) -> str:
+    return f"{str(kind or '')}{_NARR_VEC_SEP}{str(doc_id or '')}"
+
+
+def _narr_search_text(summary: str, topics: Optional[List[str]],
+                      atmosphere: str = "") -> str:
+    """叙事索引的可检索面：summary + topics + atmosphere（不存正文，INV-12）。
+
+    FTS 与向量**必须**用同一口径——否则 ``src_hash`` 比对永远不等，回填会反复重算。
+    """
+    return (str(summary or "") + " " + " ".join(topics or []) + " "
+            + str(atmosphere or "")).strip()[:400]
 
 
 def _json_list(raw: Any) -> List[str]:
@@ -1508,8 +1866,7 @@ def upsert_narrative_index(doc_id: str, kind: str, project_id: str = "",
                  str(date_basis or "local"), _now()))
             conn.execute("DELETE FROM narrative_fts WHERE doc_id=? AND kind=?",
                          (doc_id, kind))
-            search_text = (str(summary or "") + " " + " ".join(topics) + " "
-                           + str(atmosphere or "")).strip()
+            search_text = _narr_search_text(summary, topics, atmosphere)
             if search_text:
                 conn.execute("INSERT INTO narrative_fts(search_text, doc_id, kind) "
                              "VALUES(?,?,?)", (search_text[:400], doc_id, kind))
@@ -1539,12 +1896,115 @@ def delete_narrative_index(doc_id: str, kind: str) -> bool:
                          (doc_id, kind))
             conn.execute("DELETE FROM narrative_fts WHERE doc_id=? AND kind=?",
                          (doc_id, kind))
+            # 向量是派生数据，索引撤了必须一起撤：否则「检索侧被 JOIN 挡住」的脏行
+            # 会永久占着 vectors 表（atom 通道已有 9 条 tombstone 孤儿，是同一个坑）。
+            conn.execute("DELETE FROM vectors WHERE source='narrative' AND record_id=?",
+                         (_narr_vec_id(kind, doc_id),))
             conn.commit()
             return True
         finally:
             conn.close()
     except Exception:
         return False
+
+
+def _dedupe_enabled() -> bool:
+    """入库去重（B/C 后台档）开关，缺省开；A 档（写路径精确重复）不受此开关控制。"""
+    try:
+        import config
+        return bool(config.get_config("runtime.knowledge.memory.dedupe.enabled", True))
+    except Exception:
+        return True
+
+
+def _log_dedupe(stats: Dict[str, Any]) -> None:
+    """去重观测：落 ``memory_dedupe-YYYY-MM.jsonl``（只读脚本消费，不进注入面）。"""
+    try:
+        rec = {"ts": _now(), "pairs_b": int(stats.get("pairs_b") or 0),
+               "pairs_c": int(stats.get("pairs_c") or 0),
+               "merged": int(stats.get("merged") or 0),
+               "conflicts": stats.get("conflicts") or []}
+        path = os.path.join(os.path.dirname(_BRAIN_PATH),
+                            f"memory_dedupe-{_now()[:7]}.jsonl")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _narr_body_exists(doc_id: str, kind: str, project_id: str = "") -> bool:
+    """正文文件是否还在（对账/读时修共用；文件是唯一真相，INV-12）。"""
+    try:
+        if kind == "relation":
+            from omni_core.local import runtime_paths as _rp
+
+            return (_rp.global_relations() / f"{doc_id}.md").is_file()
+        from omni_core.local import scene_executor
+
+        return bool(scene_executor.read_scene_block(str(project_id or ""), doc_id))
+    except Exception:
+        return True   # 判不了就当「还在」——对账只做保守删除，绝不误删
+
+
+def _reconcile_narrative_index(max_delete: int = 20) -> Dict[str, Any]:
+    """后台对账（巩固线程内）：撤掉「正文文件已不存在」的叙事索引行。
+
+    只删索引 + 它的向量，**永不删文件**；单条失败跳过；每次最多删 ``max_delete``
+    条（幂等，重复跑结果一致）。叙事表是指针级小表，全表 stat 一遍可忽略（现库 38 行）。
+    """
+    stats: Dict[str, Any] = {"scanned": 0, "missing": 0, "removed": 0}
+    try:
+        conn = open_brain()
+        try:
+            rows = conn.execute(
+                "SELECT doc_id, kind, project_id FROM narrative_index").fetchall()
+        finally:
+            conn.close()
+        stats["scanned"] = len(rows)
+        broken = [(str(r[0]), str(r[1])) for r in rows
+                  if not _narr_body_exists(str(r[0]), str(r[1]), str(r[2] or ""))]
+        stats["missing"] = len(broken)
+        for doc_id, kind in broken[:max(1, int(max_delete))]:
+            if delete_narrative_index(doc_id, kind):
+                stats["removed"] += 1
+    except Exception:
+        pass
+    return stats
+
+
+def _prune_orphan_vectors(max_delete: int = 50) -> int:
+    """清掉源表已无对应行的向量（atom / l0 / narrative 三通道），每次限量。
+
+    检索侧本来就靠 JOIN 源表挡住脏行（不会命中），这里只解决「无声膨胀」：
+    现在 atom 83 行向量里有 9 条属于 tombstone。
+    """
+    try:
+        conn = open_brain()
+        try:
+            cand: List[Tuple[str, str]] = []
+            cand += [("atom", str(r[0])) for r in conn.execute(
+                "SELECT v.record_id FROM vectors v LEFT JOIN atoms a "
+                "ON a.record_id = v.record_id WHERE v.source='atom' "
+                "AND a.record_id IS NULL LIMIT ?", (max_delete,)).fetchall()]
+            cand += [("l0", str(r[0])) for r in conn.execute(
+                "SELECT v.record_id FROM vectors v LEFT JOIN l0_messages l "
+                "ON l.record_id = v.record_id WHERE v.source='l0' "
+                "AND l.record_id IS NULL LIMIT ?", (max_delete,)).fetchall()]
+            cand += [("narrative", str(r[0])) for r in conn.execute(
+                "SELECT v.record_id FROM vectors v LEFT JOIN narrative_index n "
+                "ON v.record_id = (n.kind || '" + _NARR_VEC_SEP + "' || n.doc_id) "
+                "WHERE v.source='narrative' AND n.doc_id IS NULL LIMIT ?",
+                (max_delete,)).fetchall()]
+            n = 0
+            for src, rid in cand[:max(1, int(max_delete))]:
+                conn.execute("DELETE FROM vectors WHERE source=? AND record_id=?", (src, rid))
+                n += 1
+            conn.commit()
+            return n
+        finally:
+            conn.close()
+    except Exception:
+        return 0
 
 
 def get_narrative_row(doc_id: str, kind: str = "") -> Optional[Dict[str, Any]]:
@@ -1605,6 +2065,7 @@ def search_narrative(query: str = "", kind: str = "", date_from: str = "",
         n = max(1, min(20, int(limit or 8)))
     except Exception:
         n = 8
+    vec_ready = _vec_enabled() and _vec_ready()
     kind = str(kind or "").strip().lower()
     kind_sql, kind_params = "", []
     if kind in _NARR_KINDS:
@@ -1677,6 +2138,42 @@ def search_narrative(query: str = "", kind: str = "", date_from: str = "",
                         continue
                     seen.add(key)
                     cand.append((d, 0.0))
+            # 向量通道（doc 级，分支 feat/vector-recall）：只补「词面完全没命中」的行，
+            # rel = cos（rel_mode=calib 时映射到 bm25 量纲）——叙事层字面重叠天然低
+            # （长文叙述措辞漂移大），语义补召回的收益比 atom/L0 更直接。
+            # 纪律不变：kind/日期区间已在候选 SQL 里下推，这里只加候选不改过滤。
+            if vec_ready and str(query or "").strip():
+                try:
+                    qv = _vec_encode([query])
+                    if qv and qv[0]:
+                        # 注意：上面的「全量装载」已经把**每一行**都放进 cand（rel=0，
+                        # 供无 query 时按近因浏览）。所以向量候选不能按 key 跳过，
+                        # 否则永远撞上 seen、语义通道形同虚设——要按 key **升级 rel**
+                        # （取 max，绝不下调词面命中的 rel，守住 FTS 零退化）。
+                        pos = {f"{d['doc_id']}|{d['kind']}": i
+                               for i, (d, _r) in enumerate(cand)}
+                        for r in _vec_narr_candidates(
+                                conn, qv[0], max(3 * n, 15), _vec_model(),
+                                kind=kind, date_from=qf, date_to=qt):
+                            d = dict(zip(("doc_id", "kind", "project_id", "date_from",
+                                          "date_to", "time_from", "time_to", "summary",
+                                          "topics", "context_keys", "peers", "atmosphere"),
+                                         r[:12]))
+                            key = f"{d['doc_id']}|{d['kind']}"
+                            vrel = _vec_rel(_vec_cos(r[12], _vec_norm(qv[0])))
+                            if key in pos:
+                                i = pos[key]
+                                old_d, old_rel = cand[i]
+                                if vrel > old_rel:
+                                    cand[i] = (old_d, vrel)
+                                continue
+                            d["topics"] = _json_list(d.get("topics"))
+                            d["context_keys"] = _json_list(d.get("context_keys"))
+                            d["peers"] = _json_list(d.get("peers"))
+                            seen.add(key)
+                            cand.append((d, vrel))
+                except Exception:
+                    pass
         finally:
             conn.close()
     except Exception:
@@ -1761,6 +2258,14 @@ def read_narrative(doc_id: str, kind: str = "") -> Dict[str, Any]:
         raw = scene_executor.read_scene_block(project_id, fname)
         _, body = scene_executor.parse_scene_block(raw)
     if not body:
+        # 读时修（自愈，2026-11-14）：索引行还在、但正文文件已经不在了（用户手动删了
+        # 场景块/日记，或在文件系统里挪走了）——顺手撤索引 + 向量，避免后续检索反复
+        # 命中「指针指向空文件」的条目。只在有索引行时触发；单行 DELETE，代价 ~1ms。
+        if row is not None:
+            try:
+                delete_narrative_index(doc_id, kind)
+            except Exception:
+                pass
         return {"ok": False, "error": f"未找到叙事正文: {doc_id}"}
     return {"ok": True, "kind": kind, "doc_id": doc_id, "project_id": project_id,
             "chars": len(body), "text": body,
@@ -2201,7 +2706,7 @@ def promote_observations(brain_cfg: Optional[Dict[str, Any]],
                 "SELECT record_id, context_key, text, recorded_at, provenance "
                 "FROM l0_messages WHERE source_kind='observation' AND record_id NOT IN "
                 "(SELECT source_task FROM atoms WHERE source_task != '') "
-                # 投毒锁（worklog lifelike-presence §9.6）：外部可达来源记下的
+                # 投毒锁（2026-11 设计定稿）：外部可达来源记下的
                 # 见闻只留叙事层，永不升格为世界事实。「是否外部可达」由边界层在
                 # run 起始归一成结构信号随行落库，内核只读这一列，不解析场合键
                 # 取值或前缀（INV-4）。
@@ -2398,6 +2903,23 @@ def _consolidation_worker(brain_cfg: Dict[str, Any]) -> None:
             stats.update(_consolidate_impl(brain_cfg))
         except Exception as e:
             stats["error"] = f"{type(e).__name__}: {e}"
+        # 索引对账（两处自愈的后台半：读时修在 read_narrative，这里兜冷条目）。
+        # 只在后台线程跑、各限 20/50 条，绝不进会话主路径；失败静默不影响巩固。
+        try:
+            stats["reconcile"] = _reconcile_narrative_index(20)
+            stats["orphans_pruned"] = _prune_orphan_vectors(50)
+        except Exception:
+            pass
+        # 入库去重 B/C（A 已在写路径常开）：同 kind 近似重复 → 合并（可逆 tombstone）；
+        # 语义近但字面差异大（cos 0.80–0.95 且 Jaccard < 0.60）只报「冲突候选」，不合并。
+        try:
+            if _dedupe_enabled():
+                dstats = dedupe_atoms(apply=True, max_merge=10)
+                stats["dedupe"] = {k: v for k, v in dstats.items() if k != "conflicts"}
+                stats["dedupe_conflicts"] = len(dstats.get("conflicts") or [])
+                _log_dedupe(dstats)
+        except Exception:
+            pass
         try:
             conn = open_brain()
             conn.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('last_consolidation',?)",
@@ -2665,7 +3187,7 @@ def _diary_observation_lines(day: str) -> List[Tuple[str, str]]:
 
 
 def _diary_life_day_lines(day: str) -> List[Tuple[str, str]]:
-    """life 事件层素材（worklog lifelike-presence §10，2026-11-10）：各项目
+    """life 事件层素材（2026-11-10）：各项目
     ``days/<day>.md``（助手这天的客观流水，life 侧产出）→ ``[生活]`` 素材段。
 
     与 ``[见闻]`` 同理只作素材不落库；伪 ts 取当天 UTC 正午（= 本地晚八点），
@@ -2808,7 +3330,7 @@ def maintain_diary(brain_cfg: Optional[Dict[str, Any]],
     # P6-1（§16.3）/ N-17（§14.2）：当日观察见闻进素材——「我今天自己去看了什么」
     # 与对话经历同一篇、第一人称；纯观察日（没聊天但有事做）也算有素材的一天。
     obs_items = _diary_observation_lines(day) + _revisit_atom_lines(day)
-    # life 事件层交接（worklog lifelike-presence §10，2026-11-10）：项目 days/<day>.md
+    # life 事件层交接（2026-11-10）：项目 days/<day>.md
     # 是助手这一天的客观流水（life 侧产出、给人看），巩固期读进来由助手取舍写进
     # 主观日记——不逐字入库、不占日记键，只是素材。
     life_items = _diary_life_day_lines(day)
@@ -3430,6 +3952,164 @@ def maintain_month_diary(brain_cfg: Optional[Dict[str, Any]]) -> int:
     return written
 
 
+def _norm_text(s: Any) -> str:
+    """A/B 两档去重共用的归一化面：去空白与标点、ASCII 转小写（CJK 不受影响）。"""
+    return "".join(ch for ch in str(s or "").casefold() if ch.isalnum())
+
+
+def _bigrams(s: str) -> set:
+    return {s[i:i + 2] for i in range(len(s) - 1)} if len(s) > 1 else ({s} if s else set())
+
+
+def _jaccard(a: set, b: set) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / float(len(a | b))
+
+
+def find_duplicate_atom(conn: sqlite3.Connection, text: str, kind: str = "") -> str:
+    """A 档（常开，零向量依赖）：归一化后**完全相同**的 active 记忆 → 返回其 record_id。
+
+    为什么值得做：写路径最常见的重复是「同一句话被再说一遍」，这类不需要语义判断；
+    命中就直接复用旧条（提高 importance / 刷新 updated），不再新建一条抢槽位。
+    """
+    norm = _norm_text(text)
+    if not norm:
+        return ""
+    try:
+        rows = conn.execute(
+            "SELECT record_id, content, kind FROM atoms WHERE state='active'").fetchall()
+    except Exception:
+        return ""
+    for rid, content, kd in rows:
+        if kind and str(kd) != str(kind):
+            continue
+        if _norm_text(content) == norm:
+            return str(rid)
+    return ""
+
+
+def dedupe_atoms(apply: bool = False, jaccard_threshold: float = 0.85,
+                 cos_threshold: float = 0.95, max_merge: int = 10) -> Dict[str, Any]:
+    """B/C 两档去重 + 冲突提示（B 常开，C 仅在向量就绪时叠加）。
+
+    - **B**：同 kind、字符 bigram Jaccard ≥ 0.85 → 判为重复（无向量也能跑）；
+    - **C**：同 kind、cos ≥ 0.95 → 判为重复（仅 ``_vec_ready()`` 时叠加）；
+    - **冲突提示**：cos ∈ [0.80, 0.95) 且 Jaccard < 0.60 → 语义很近、字面差很多，
+      正是「同一件事两种说法」的高危区，只**报告**不合并（``conflicts``），
+      因为这类需要人/模型判断，自动合并会吃掉其中一条的真实信息。
+
+    合并语义（``apply=True``）：保留 keeper（importance 高者优先、同分取更长），
+    吸收 dup 的 access_count、importance 取 max；dup → tombstone 并记
+    ``superseded_by=keeper``（可逆，原文保留）。单次最多合并 ``max_merge`` 对。
+    """
+    stats: Dict[str, Any] = {"pairs_b": 0, "pairs_c": 0, "merged": 0,
+                             "conflicts": [], "apply": bool(apply)}
+    try:
+        conn = open_brain()
+    except Exception:
+        return stats
+    try:
+        rows = conn.execute(
+            "SELECT record_id, content, kind, importance, updated, access_count "
+            "FROM atoms WHERE state='active'").fetchall()
+        if len(rows) < 2:
+            return stats
+        items = [{"rid": str(r[0]), "text": str(r[1] or ""), "kind": str(r[2] or ""),
+                  "imp": float(r[3] or 0.0), "upd": str(r[4] or ""),
+                  "acc": int(r[5] or 0)} for r in rows]
+        for it in items:
+            it["norm"] = _norm_text(it["text"])
+
+        # B 档：同 kind 两两 Jaccard（现库几十条，O(n²) 可忽略）
+        dup_pairs: List[Tuple[str, str, str, float]] = []   # (keeper, dup, via, score)
+        for i in range(len(items)):
+            bg_i = _bigrams(items[i]["norm"])
+            for j in range(i + 1, len(items)):
+                if items[i]["kind"] != items[j]["kind"]:
+                    continue
+                jac = _jaccard(bg_i, _bigrams(items[j]["norm"]))
+                if jac >= jaccard_threshold:
+                    keeper, dup = _pick_keeper(items[i], items[j])
+                    dup_pairs.append((keeper["rid"], dup["rid"], "B", jac))
+                    stats["pairs_b"] += 1
+
+        # C 档（叠加）：向量就绪时按 cos 再找一遍，补「换了说法」的重复
+        if _vec_enabled() and _vec_ready():
+            try:
+                import numpy as _np
+
+                vrows = conn.execute(
+                    "SELECT record_id, vec FROM vectors WHERE source='atom' AND model=?",
+                    (_vec_model(),)).fetchall()
+                vmap = {str(r[0]): _np.frombuffer(r[1], dtype="<f4") for r in vrows}
+                ids = [it["rid"] for it in items if it["rid"] in vmap]
+                if len(ids) > 1:
+                    mat = _np.stack([vmap[i] for i in ids])
+                    mat = mat / (_np.linalg.norm(mat, axis=1, keepdims=True) + 1e-12)
+                    cos = mat @ mat.T
+                    byid = {it["rid"]: it for it in items}
+                    for a in range(len(ids)):
+                        for b in range(a + 1, len(ids)):
+                            ia, ib = byid[ids[a]], byid[ids[b]]
+                            if ia["kind"] != ib["kind"]:
+                                continue
+                            c = float(cos[a][b])
+                            jac = _jaccard(_bigrams(ia["norm"]), _bigrams(ib["norm"]))
+                            if c >= cos_threshold:
+                                keeper, dup = _pick_keeper(ia, ib)
+                                dup_pairs.append((keeper["rid"], dup["rid"], "C", c))
+                                stats["pairs_c"] += 1
+                            elif c >= 0.80 and jac < 0.60 and len(stats["conflicts"]) < 10:
+                                stats["conflicts"].append(
+                                    {"a": ia["rid"], "b": ib["rid"],
+                                     "cos": round(c, 4), "jaccard": round(jac, 3),
+                                     "a_text": ia["text"][:60], "b_text": ib["text"][:60]})
+            except Exception:
+                pass
+
+        if apply and dup_pairs:
+            now = _now()
+            done = set()
+            merged = 0
+            for keeper_id, dup_id, _via, _score in dup_pairs:
+                if merged >= max(1, int(max_merge)) or not dup_id or dup_id in done:
+                    continue
+                done.add(dup_id)
+                k = conn.execute("SELECT importance, access_count FROM atoms "
+                                 "WHERE record_id=? AND state='active'", (keeper_id,)).fetchone()
+                d = conn.execute("SELECT importance, access_count FROM atoms "
+                                 "WHERE record_id=? AND state='active'", (dup_id,)).fetchone()
+                if not k or not d:
+                    continue
+                conn.execute(
+                    "UPDATE atoms SET importance=max(importance, ?), "
+                    "access_count=access_count+?, updated=? WHERE record_id=?",
+                    (float(d[0] or 0.0), int(d[1] or 0), now, keeper_id))
+                conn.execute("UPDATE atoms SET state='tombstone', superseded_by=?, updated=? "
+                             "WHERE record_id=?", (keeper_id, now, dup_id))
+                conn.execute("DELETE FROM atoms_fts WHERE record_id=?", (dup_id,))
+                conn.execute("DELETE FROM vectors WHERE source='atom' AND record_id=?",
+                             (dup_id,))
+                merged += 1
+            conn.commit()
+            stats["merged"] = merged
+        return stats
+    except Exception:
+        return stats
+    finally:
+        conn.close()
+
+
+def _pick_keeper(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """保留哪一条：importance 高者优先；同分取更长（信息多）；再同则更新更晚的。"""
+    if a["imp"] != b["imp"]:
+        return (a, b) if a["imp"] >= b["imp"] else (b, a)
+    if len(a["text"]) != len(b["text"]):
+        return (a, b) if len(a["text"]) >= len(b["text"]) else (b, a)
+    return (a, b) if str(a["upd"]) >= str(b["upd"]) else (b, a)
+
+
 def remember(text: str, kind: str = "fact", importance: float = 0.8,
              brain_cfg: Optional[Dict[str, Any]] = None,
              origin: str = "", source_task: str = "remember") -> str:
@@ -3445,6 +4125,17 @@ def remember(text: str, kind: str = "fact", importance: float = 0.8,
     conn = open_brain()
     try:
         now = _now()
+        # A 档去重（常开，零向量依赖）：同一句话被再说一遍 → 复用旧条，不再新建。
+        # 只做「归一化后完全相同」这一档，代价是一次全表扫描（现库 74 条 active），
+        # 语义级重复交给后台 dedupe_atoms（B/C），主写路径不承担语义判断。
+        dup = find_duplicate_atom(conn, text, kind)
+        if dup:
+            conn.execute("UPDATE atoms SET importance=max(importance, ?), "
+                         "access_count=access_count+1, last_access=?, updated=? "
+                         "WHERE record_id=? AND state='active'",
+                         (importance, now, now, dup))
+            conn.commit()
+            return dup
         rid = _new_id()
         _insert_atom(conn, rid, {"text": text, "kind": kind, "importance": importance},
                      origin, source_task, now)

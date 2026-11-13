@@ -254,7 +254,7 @@ class TaskSpec:
     # **不落会话历史**：历史只记 objective 文本投影，否则 base64 会撑爆 jsonl、
     # 且每轮重建上下文都要重传。由通道层下载/限尺寸，派发层原样透传到本轮 user 消息。
     attachments: List[Dict[str, Any]] = field(default_factory=list)
-    # run 级观测主键的后半段（plan personal-agent-memory §8.3 F-1：run_id = f"{task_id}:{run_key}"）。
+    # run 级观测主键的后半段（F-1：run_id = f"{task_id}:{run_key}"）。
     # dispatch / chat_runtime 生成 run_key 时随 TaskSpec 透传；空 = 观测行 run_id 退化
     # 为 task_id 前缀（不影响功能，只影响两源关联的精度）。
     run_key: str = ""

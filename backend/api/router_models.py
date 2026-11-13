@@ -52,6 +52,53 @@ async def list_models(
     return mgr.list_models(models_dir)
 
 
+# ── 服务型模型（资源层）：向量 sidecar / 语音引擎 / GGUF 的统一视图 ─────────
+# 注意：这四条必须声明在 ``/models/{name}/...`` 之前，否则 ``services`` 会被当成模型名。
+
+@router.get("/models/services")
+async def list_services() -> List[Dict[str, Any]]:
+    """本机服务清单与实时状态（开关在 model_hub.yaml，与 core 用不用正交）。"""
+    from model_hub.services import ServiceManager
+
+    m = ServiceManager()
+    return [m.status(n) for n in m.names()]
+
+
+@router.post("/models/services/{name}/start")
+async def start_service(name: str) -> Dict[str, Any]:
+    """按清单拉起（端口已占用 = 已有实例，不抢端口）。"""
+    from model_hub.services import ServiceManager
+
+    r = ServiceManager().start(name)
+    if r.get("result") == "unknown":
+        raise HTTPException(404, f"未知服务: {name}")
+    return r
+
+
+@router.post("/models/services/{name}/stop")
+async def stop_service(name: str) -> Dict[str, Any]:
+    from model_hub.services import ServiceManager
+
+    return ServiceManager().stop(name)
+
+
+@router.put("/models/services/{name}")
+async def update_service(name: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """改资源层开关（enabled / autostart），不动 core 的业务开关。"""
+    from model_hub import settings
+    from model_hub.services import ServiceManager
+
+    doc = settings.load()
+    svc = (doc.get("services") or {}).get(name)
+    if not isinstance(svc, dict):
+        raise HTTPException(404, f"未知服务: {name}")
+    for k in ("enabled", "autostart"):
+        if k in body:
+            svc[k] = bool(body[k])
+    settings.save(doc)
+    return ServiceManager(doc).status(name)
+
+
 @router.post("/models/{name}/start")
 async def start_model(
     name: str,

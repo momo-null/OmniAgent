@@ -1,4 +1,4 @@
-"""记忆效果验证（plan personal-agent-memory §8.4）：L1 离线回放 + §8.4.3 指标计算。
+"""记忆效果验证：L1 离线回放 + 指标计算。
 
 三层验证中的**可自动化层**：
 - L1 离线回放：标注集（构造值，只落 ``.codebuddy/tmp``，不入仓库）逐条跑当前
@@ -283,8 +283,7 @@ def silent_cost(mb):
 
 def main() -> int:
     from omni_core import memory_brain as mb
-    report: dict = {"generated": mb._now(),
-                    "plan": "doc/plans/personal-agent-memory-2026-11-05.md §8.4"}
+    report: dict = {"generated": mb._now()}
     a_items = (_load(BASELINE_REPLAY) or {}).get("items") or []
     b_items = l1_replay_b(mb)
     report["l1"] = l1_metrics(b_items, a_items, mb)

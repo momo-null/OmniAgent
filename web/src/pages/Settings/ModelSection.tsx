@@ -23,6 +23,7 @@ import { LabelWithTip, StatusLine } from "../../components/SettingsKit";
 import { modelApi, llmApi, systemApi, settingsApi } from "../../api/client";
 import type { ModelInfo, GpuInfo, LaunchParams, ModelValidationResult } from "../../types";
 import ModelProviders from "./ModelProviders";
+import VectorEngineCard from "./VectorEngineCard";
 import VoiceEngineCard from "./VoiceEngineCard";
 
 // ── 透传参数（extra_args）与投影路径的「UI ↔ 侧注」映射 ──────────────────────
@@ -245,10 +246,16 @@ export default function ModelSection() {
     <Box>
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError("")}>{error}</Alert>}
 
-      {/* 在线模型目录（models.json）与本地模型同页：上=在线提供方，下=本地 llama.cpp 模型 */}
+      {/* 在线模型目录（models.json）：与本机服务分开，放最上面 */}
       <ModelProviders />
 
-      {/* 本地模型：一张卡片收编 GPU 监控 + 模型目录扫描 + 操作行（原三漂浮层合并） */}
+      {/* 语音引擎与本地模型同页：同样是「本机跑、可切在线」的一类引擎 */}
+      <VoiceEngineCard />
+
+      {/* 向量服务：与语音同形态，端点配置 + 服务启动两层开关 */}
+      <VectorEngineCard />
+
+      {/* 本地模型（llama.cpp）：紧挨模型列表，配置与列表同组阅读 */}
       <Paper variant="outlined" sx={{ mb: 2, p: 2 }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center">
           <Typography variant="subtitle2">本地模型（llama.cpp）</Typography>
@@ -274,9 +281,6 @@ export default function ModelSection() {
         </Stack>
         <StatusLine saved={saveMsg} />
       </Paper>
-
-      {/* 语音引擎与本地模型同页：同样是「本机跑、可切在线」的一类引擎 */}
-      <VoiceEngineCard />
 
       <Box sx={{ display: "flex", gap: 2, alignItems: "flex-start" }}>
         <Paper variant="outlined" sx={{ width: 300, flexShrink: 0, maxHeight: "70vh", overflow: "auto" }}>

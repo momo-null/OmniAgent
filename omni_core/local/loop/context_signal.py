@@ -1,4 +1,4 @@
-"""``context_signal`` —— run 级结构化场合信号（plan personal-agent-memory §4.1，M1）。
+"""``context_signal`` —— run 级结构化场合信号（M1）。
 
 Working 层一等输入：run 起始**单点构造一次**、run 内只读，序列化为
 ``<current-context>``（≤ ``context.context_chars`` 缺省 200 字符）。

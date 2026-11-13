@@ -426,7 +426,7 @@ def test_diary_we_marker(monkeypatch, brain_cfg, tmp_path):
 
 
 def test_life_days_file_feeds_diary_material(monkeypatch, brain_cfg, tmp_path):
-    """life 事件层交接（worklog §10）：days/<day>.md 客观流水进巩固日记素材——
+    """life 事件层交接：days/<day>.md 客观流水进巩固日记素材——
     「模拟生活带上」的入料口；不落库、不占日记键。"""
     import sys
     import types

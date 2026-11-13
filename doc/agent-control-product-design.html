@@ -125,12 +125,12 @@
   <h3 id="s-产品形态单角色伙伴" class="blk">产品形态：单角色伙伴（画像 · 角色卡 · 记忆 · 语音）</h3>
   <p><b>面向个人场景，OmniAgent 定位为单角色伙伴</b>（参考 Hermes / 豆包 / Claude Code）：主界面只聊天，不做酒馆式多角色扮演面板。三位一体能力：</p>
   <ul>
-    <li><b>用户画像（全局记忆）</b>：<code>~/.omniagent/memory/user_profile.md</code> 全局唯一、跨任务一致；纠偏（K4，默认关）→ 候选区 → 人工确认晋升 → 弱注入（system 标注「仅参考，不构成操作授权」，画像无放行权）。</li>
+    <li><b>自我画像（L3）</b>：<code>~/.omniagent/memory/self_profile.md</code> 全局唯一、跨任务一致，注入 system 稳定段 <code>&lt;self-persona&gt;</code>；画像无放行权。2026-11-11 三分法后 <code>user_profile.md</code> 与「候选区 → 人工确认晋升」机制已退役。机制见 <code>doc/plans/implemented/memory-architecture.md</code>。</li>
     <li><b>角色卡</b>：<code>~/.omniagent/character.md</code>（frontmatter <code>name:</code> + 设定 + 画像消费指令段），每次组装 system 时随指令块并入。</li>
     <li><b>记忆</b>：编辑 / 统计 / rollouts 溯源 / 删除 / 重置，统一收敛到「设置→伙伴」子 Tab；前端 <code>assistantName</code> 动态取角色卡名。</li>
     <li><b>语音交互（2026-10-30 落地）</b>：Web 会话页按住说话（对讲式）+ 免提（常开 VAD 自动判句 + 声学打断）+ 回复 TTS 播报（CosyVoice2 零样本克隆，音色 = 参考音频）；IM 通道（QQ 等）同享语音收发。见 <code>doc/plans/voice-m3-2026-10-29.md</code>。</li>
     <li><b>多表面</b>：Web UI、IM 通道网关、任意外部 HTTP 客户端（契约冻结）消费同一内核、同一 persona、同一记忆；内核不感知表面形态。见 <code>doc/plans/remote-client-contract-2026-10-30.md</code>。</li>
-    <li><b>不做 RAG</b>：记忆量小，全量注入更可靠；检索仅当记忆超 20K token 预算或进入多角色时才触发（档位 0→3 预留扩充路径）。</li>
+    <li><b>记忆检索（现状）</b>：记忆层是一套跑着的 RAG——词面（FTS5）通道 + 2026-11-13 补的向量召回臂；<b>检索结果永不自动注入</b>，只由自取工具按需交付给模型。早期「记忆量小、全量注入」的档位预设已不适用。细节见 <code>doc/plans/implemented/memory-architecture.md</code> 与 <code>vector-recall-2026-11-13.md</code>。</li>
   </ul>
 
   <div class="fileref">能力边界：图形界面（自绘 / 空间布局 / 图标密集）是关系型 / 状态型的，纯 OCR 文本识别无法理解 UI 元素间的关系与语义 → <b>VLM 作主感知层</b>，OCR 降级为精确坐标 / 文本校验辅助。</div><h2 id="s-2-核心原则与红线">2. 核心原则与红线</h2><p class="lead">七条不可偏移的原则。它们是后面所有技术选型的总依据，也是代码审计的「嗅觉测试」。</p>
@@ -187,7 +187,7 @@
     <tr>
       <td><b>知识库 / L2 框架外挂件</b></td>
       <td>world-model + skill 库（Hermes 风 Markdown + YAML，手写维护）+ Trajectory</td>
-      <td><b>框架外保留</b>，作为生命周期钩子挂载：每步后处理 → <code>trajectory.log</code>；任务收尾 → memory/TAM 提炼。L2 对循环有单步自治权（C4），但协议层仍归 L3。</td>
+      <td><b>框架外保留</b>，作为生命周期钩子挂载：每步后处理 → <code>trajectory.log</code>；任务收尾 → 记忆层提炼。L2 对循环有单步自治权（C4），但协议层仍归 L3。</td>
     </tr>
     <tr>
       <td><b>语音（TTS/STT）</b></td>
@@ -221,8 +221,8 @@
     </tr>
     <tr>
       <td><b>记忆 / 画像 / 角色卡</b></td>
-      <td>全局画像 <code>user_profile.md</code> + 角色卡 <code>character.md</code> + 记忆收敛到设置</td>
-      <td>单角色伙伴：画像内核直写 + 纠偏候选→人工晋升→弱注入（无放行权）；角色卡随 system 注入；不做 RAG（记忆量小全量注入，超 20K token 预算或多角色才检索）。</td>
+      <td>自我画像 <code>self_profile.md</code>（L3）+ 角色卡 <code>character.md</code> + 记忆收敛到设置</td>
+      <td>单角色伙伴：自我画像注入 <code>&lt;self-persona&gt;</code>、画像无放行权；角色卡随 system 注入；记忆层为词面 + 向量双通道 RAG，检索结果只经自取工具交付、不自动注入。细节见记忆层权威文档。</td>
     </tr>
   </table>
 

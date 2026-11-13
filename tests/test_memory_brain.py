@@ -73,7 +73,7 @@ def test_blank_flush_still_counts(brain):
 
 
 def test_search_persona_dead_dim_removed_and_reinforce(brain):
-    """P2（plan personal-agent-memory §4.3）：persona 死维度清理——写入冻结（恒空）、
+    """P2：persona 死维度清理——写入冻结（恒空）、
     过滤路径移除（单库单人格，INV-1）；召回即强化语义不变。"""
     rid = memory_brain.remember("糖糖的新闻简报来自四个来源", kind="fact",
                                 importance=0.8)

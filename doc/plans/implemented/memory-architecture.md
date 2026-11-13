@@ -2,7 +2,7 @@
 
 > 本文是**记忆层**的唯一事实源:分层机制(L0→L3)、写链总纲(事件 → 助手的取舍 → 记忆)、
 > 注入面、不变量、意图门、配置与观测、验证纪律。2026-11-11 按现行实现整体重构一次
-> (此前按约定冻结、过程记录在 worklog);之后回到冻结纪律,增量走 worklog。
+> (此前按约定冻结、过程记录只在本地留档);之后回到冻结纪律,增量同样只在本地留档。
 > 代码落点:`omni_core/memory_brain.py`(L0 缓冲 + L0 逐字索引 + 观察进料道 + L1 单库 +
 > L3 画像 + 巩固周期 + 观察升格 + 语境链 + 叙事索引)、`omni_core/local/task_store.py`(消息落库处同步写 L0 表)、
 > `omni_core/local/scene_executor.py`(L2 机制与触发薄壳)、`omni_core/local/localtime.py`(统一本地日折算)、
@@ -14,7 +14,7 @@
 > `local/loop/instructions.py` + `sdk_bridge.py` + `brain/sdk_loop.py`(注入与意图门)、
 > `backend/api/routers/helpers.py`(私聊上下文窗口)。
 > 真机回归:`python scripts/verify_memory_recall.py`、`python scripts/verify_scene_live.py`、
-> `python scripts/verify_memory_effect.py`(效果验证,plan personal-agent-memory §8.4)。
+> `python scripts/verify_memory_effect.py`(效果验证)。
 >
 > **2026-10-28 架构清理**：L1 已收敛为单库 `~/.omniagent/memory/brain.db`；旧双库
 > 与旧 L1 代码整段删除,仓库内不存在双方案分支或兼容开关;需要追溯论证过程查 git 历史。
@@ -25,12 +25,12 @@
 
 | 维度 | 内容 |
 |---|---|
-| 内容 | 事实 atoms(L1) + 场景块(L2) + 用户画像(L3) + 逐字会话索引(L0) + **观察原文(L0,分道)** + **叙事资产(日记/月记/关系卡,可检索)** + **圈层语境(circle_note)** |
-| 存储 | `~/.omniagent/memory/brain.db`(L1 atoms + L0 `l0_messages`/`l0_fts` + `narrative_index`/`narrative_fts` + `circle_note`/`context_buffer`,同库) + `projects/<pid>/s_*.jsonl`(L0 文件真相) + `projects/<pid>/memory/scene_blocks/` + `scene_index.json`(L2) + `~/.omniagent/memory/user_profile.md`(L3) + `~/.omniagent/memory/relations/`(关系卡正文) |
+| 内容 | 事实 atoms(L1) + 场景块(L2) + 自我画像(L3) + 逐字会话索引(L0) + **观察原文(L0,分道)** + **叙事资产(日记/月记/关系卡,可检索)** + **圈层语境(circle_note)** |
+| 存储 | `~/.omniagent/memory/brain.db`(L1 atoms + L0 `l0_messages`/`l0_fts` + `narrative_index`/`narrative_fts` + `circle_note`/`context_buffer`,同库) + `projects/<pid>/s_*.jsonl`(L0 文件真相) + `projects/<pid>/memory/scene_blocks/` + `scene_index.json`(L2) + `~/.omniagent/memory/self_profile.md`(L3) + `~/.omniagent/memory/relations/`(关系卡正文) |
 | 生产者 | **助手的取舍**(显式记 `memory_remember` / 记一笔 `memory_observe`)/ 场景整理 agent / 巩固周期(去重·抽象·**观察升格**·画像重写·日记·月记·语境反思) |
 | 消费者 | 注入(§4 注入面,**只到索引/规则层**,含 `<current-context>` ≤200 字符)+ 模型自取工具(`memory_recall` L1 / `conversation_search` L0 / `observation_search` 见闻 / `read_scene` L2 / `narrative_search`+`narrative_read` 叙事) |
 
-**写链总纲(2026-11-10 定稿,worklog lifelike-presence §10–§12)**:
+**写链总纲(2026-11-10 定稿)**:
 **事件 → 助手的取舍 → 记忆**。
 
 ```
@@ -48,7 +48,7 @@
 - chat 与 task 进料道只差**工程节流**(chat 高频,`enqueue_throttled` 合并入队),
   无记忆语义分支;`allow_atoms` 开关已整删(2026-11-10,不留别名,见 §10)。
 
-**术语约定(防混淆,plan personal-agent-memory §8)**:**日记 / 月记 / 关系卡 = Narrative
+**术语约定(防混淆)**:**日记 / 月记 / 关系卡 = Narrative
 自传体叙事**,是记忆内容、模型可检索、是拟人载体;**观测记录 / 日志
 (`memory_recall-YYYY-MM.jsonl`)= 机器埋点**,是量尺,不进注入面、不给 agent 查询工具、
 只由离线脚本与本机 Debug 监控面板读来算指标 / 展示。两者不互串、不互称。
@@ -182,9 +182,15 @@ source_external`——`kind` 区分通道消息与任务输入;`record_id` 由 (
   **正文长度 ≤1800 字(2026-11-10 起,原 900)**——日记不进注入面,无预算约束,
   素材里有 [生活]/[见闻] 全天段(§2.7)。summary 取正文首个句末标点结尾的句子(≤60 字)。
 
-### 2.4 L3 用户画像
+### 2.4 L3 自我画像(2026-11-11 三分法)
 
-- **存储**:`~/.omniagent/memory/user_profile.md`(全局唯一一份)。
+- **三分法(2026-11-11 用户拍板)**:`user_profile.md` / `<user-persona>` / 旧 L3 语义整体退役。
+  - 她(主体):`character.md` 静态底色 + **`self_profile.md`** 演化自我,注入 `<self-persona>`;
+  - 人(关系对象,含主人):`relations/<uid>.md`(主人卡带【稳定背景】区),L0 直驱 + narrative_search;
+  - 世界(事实):L1/L0 atoms,recall 按需。
+  - `_PROFILE_SYSTEM` 只吃关于她自己的事实,剔除对话者(→关系卡)/主人环境(→主人卡)/策略规则/
+    归属不明条目(宁可漏记不可错记);主人卡正文上限 1400、普通卡 600,LLM 丢背景时代码补写回。
+- **存储**:`~/.omniagent/memory/self_profile.md`(全局唯一一份)。
 - **蒸馏**(`maintain_profile`,巩固周期第 7 步):触发 = 上次水位后新增 active atoms ≥
   `knowledge.profile.trigger_every_n`(20)**或** L2 带外信号强制;LLM 增量重写
   (assistant 的应对策略/拒绝规则/边界设定一律不入画像);上一版自动备份 `.bak`;
@@ -245,7 +251,7 @@ agent(大脑)──通过──→ memory_remember / memory_observe / recall / u
 记忆的叙事主体是「**助手自己经历过**」——执行任务、扮演社交、模拟生活都是助手的经历,
 同一套 L0→L3 机制承载,不造平行管道;各线靠来源标注区分(origin / peer / speaker)。
 
-- **双层职责(2026-11-10 用户定稿,worklog §10)**:
+- **双层职责(2026-11-10 用户定稿)**:
   - **life = 物理世界层**:课表、上课、刷 B站/小红书——一天实际发生的事,助手是参与者;
     有意义没意义都记,不筛选。产物(days/<日期>.md、knowledge/<日期>.jsonl)只给人看,
     **不进记忆、不占任何记忆键**;
@@ -322,8 +328,8 @@ agent(大脑)──通过──→ memory_remember / memory_observe / recall / u
 - **落点**:`~/.omniagent/character.md`(单角色一张,人工单写,无独立接口)。
 - **注入**:`_merge_character` 随 system prompt(run 开始读一次);用户当轮明确指令优先。
 - 与记忆路由**解耦**:角色卡不硬过滤记忆。
-- **职责边界(worklog §8.4)**:只留助手是谁、从哪学、不演、红线;**不加性格结论、行为剧本、
-  口头禅模板**——说话方式从经历里长出来(worklog §8.3),加了就是把助手写死。
+- **职责边界**:只留助手是谁、从哪学、不演、红线;**不加性格结论、行为剧本、
+  口头禅模板**——说话方式从经历里长出来,加了就是把助手写死。
 
 ## 4. 注入面全景
 
@@ -331,7 +337,7 @@ agent(大脑)──通过──→ memory_remember / memory_observe / recall / u
 |---|---|---|---|---|
 | 1 | `<memory-usage-rules>` 《记忆使用规则》(必查场景 + 七读工具合计 ≤3 次/run、narrative_* ≤2 次 + 「叙事不得转述到对外消息」) | system prompt 稳定段 | run 开始读一次、run 内锁定 | `runtime.knowledge.memory.enabled` |
 | 2 | `<scene-navigation>` L2 主题块索引(文件名 + 热度/日期 + summary ≤120 字) + `read_scene` 指引 | system prompt 稳定段 | 同上 | `runtime.knowledge.memory.enabled` |
-| 3 | `<user-persona>` 用户画像全文 | system prompt 稳定段 | 同上 | `runtime.knowledge.profile.enabled` |
+| 3 | `<self-persona>` 自我画像全文 | system prompt 稳定段 | 同上 | `runtime.knowledge.profile.enabled` |
 | 3.5 | `<current-context>` 场合信号(场合键/进料道/对象/话题词面/语气,≤200 字符) | system prompt 稳定段 | run 开始构造一次 | 随记忆 gate |
 | 4 | `read_scene(scene_name)` 读单块全文 | 工具调用结果 | 模型按需 | 恒可用(纯读) |
 | 5 | L1 自取 `memory_recall`(k ≤5) | 工具调用结果 | 模型按需(读配额) | `memory.enabled` |
@@ -341,6 +347,11 @@ agent(大脑)──通过──→ memory_remember / memory_observe / recall / u
 
 > 第 7 行是 L0 的**消费侧**(`dispatch.py` IM 条数窗 / `helpers.py` 私聊轮窗,窗口外折叠
 > 成一行提示)。群上下文块注入已删(M1,F-4:通道只给结构不给文本)。
+
+> **读侧候选包(2026-11-11,不进注入面)**:run 起始按本轮最后一条用户原话生成一份高置信候选
+> (L1 / 叙事 / L0 三通道,阈值见 §8);**条数只落观测,不进 system/items**。模型需要时用
+> `memory_recall(query="")` 一次取走(独立 1 次/run,不占七工具 ≤3 次深挖配额),取不到返回空。
+> `read_bundle.enabled=false` 即停生成;观测拆分见 §9。
 > **run 起始无 `<relevant-memories>`**:检索结果永不自动注入(§5 不变量 4);
 > `memory_observe` 是写动作,不在注入面——它把见闻送进观察层,消费仍走检索工具。
 > **窗口外的历史不是死区**:逐字原文 `conversation_search` 现查,摘要走 `memory_recall`。
@@ -438,6 +449,9 @@ skill 不与记忆混写,全部内容见 `doc/plans/implemented/skill-architectu
 | `circle_note.min_msgs` / `interval_s` | 12 / 600 | reflection 触发阈值 |
 | `circle_note.max_per_cycle` | 5 | 每巩固周期全局 reflection 上限(N-13) |
 | `runtime.long_task.finish_intent_check` | True | 收尾意图门(作用域 task/auto,§6) |
+| `runtime.knowledge.memory.read_bundle.enabled` / `total_cap` / `item_chars` | true / 2 / 60 | 读侧候选包:总开关、每轮最多几条、每条字符上限(只落观测,不进注入) |
+| `runtime.knowledge.memory.read_bundle.l1_min_score` / `narrative_min_score` / `l0_limit` | 0.60 / 0.65 / 0 | 三通道过线阈值;L0 缺省 0(候选包不收逐字,需要时模型自己 conversation_search) |
+| `runtime.knowledge.memory.read_quota.total` / `narrative` | 3 / 2 | 七读工具深挖配额(narrative_* 单独上限);候选包取用不占此额度 |
 
 > L0 逐字索引无独立开关——跟 `memory.enabled` 走;`source_external` 是结构信号不是配置。
 > P7 删除的键(衰减/遗忘族)与 `ltm.persona` 键已无读取方,配置文件残留不再被读取。
@@ -451,6 +465,9 @@ skill 不与记忆混写,全部内容见 `doc/plans/implemented/skill-architectu
   「该查而没查」的 run。`context_key` 真实值只落本机;导出报告一律哈希或构造值。
   **谁读**:`scripts/verify_memory_effect.py` 离线读 + Debug 监控面板(只读聚合);
   **不给 agent 查观测记录的工具**——观测是量尺不是记忆。
+- **读侧候选包观测(2026-11-11)**:每 run 新增 `evidence / bundle_taken / quota_blocked / any_fetch`;
+  Debug 监控把「零自取」拆成「本来无候选 / 该取未取 / 已取」。实测校准:宽松档(0.55/0.50/cap3/L0=1)
+  在 71 个历史 run 上 68 轮有候选且多为噪声,收紧到上表值后 21/71 有候选;`有效事实原子` 口径修正为只看 active。
 - **收尾事件(memory_flush)**:严格 L1 后收尾不再有提炼字段(`extracted/kept` 等已退役)
   ——`stored` 恒 0,有意义的是跳过原因(`l2_skipped_no_work / l2_skipped_no_llm /
   l2_skipped_no_new_atoms / empty_extraction`)与 L2 统计。
@@ -490,7 +507,7 @@ skill 不与记忆混写,全部内容见 `doc/plans/implemented/skill-architectu
 
 ### 11.1 一句话说清"注入"是什么
 
-内核在**任务开始那一刻**拼三段进 system(使用规则 + L2 索引 + L3 画像)。
+内核在**任务开始那一刻**拼三段进 system(使用规则 + L2 索引 + L3 自我画像)。
 模型"看到"这些文本 ≈ 知道**自己有什么记忆、去哪儿取**——但**内容不自动给它**:
 L1 摘要与 L0 原文一律由模型按需自取(§5 不变量 4)。**只注入一次**。
 
@@ -508,7 +525,7 @@ L1 摘要与 L0 原文一律由模型按需自取(§5 不变量 4)。**只注入
   (`source_kind=observation`,`source_external` 盖章);`conversation_search` 查 chat 行、
   `observation_search` 查观察行。
 - **L2 场景块**(注入只放索引条目,正文只经 read_scene)。
-- **L3 用户画像**(全局单份)。
+- **L3 自我画像**(全局单份)。
 
 ### 11.3 第 1 步:组装 system prompt(稳定段)
 
@@ -528,9 +545,9 @@ L1 摘要与 L0 原文一律由模型按需自取(§5 不变量 4)。**只注入
   adb 在本机不在 PATH，需用 platform-tools 下的完整路径调用。
 </scene-navigation>
 
-<user-persona>
-用户偏好命令行操作；习惯先确认方案再执行。
-</user-persona>
+<self-persona>
+说话偏短句、不用 emoji；被问过往会先翻记录再回答。
+</self-persona>
 
 <current-context>
 context=group:123
@@ -543,6 +560,7 @@ topics=白米饭、剑网3
 ### 11.4 第 2 步:模型自取与记一笔(工具调用,不是注入)
 
 ```
+模型: memory_recall(query="")                 → 取本轮候选包(1 次/run,不占深挖配额;未生成返回空)
 模型: memory_recall(query="adb 路径")        → search_brain 融合排序返回条目
 模型: conversation_search(keyword="周报")     → 查 l0_fts 返回原话(外部来源锁定当前会话)
 模型: observation_search(keyword="JSK")       → 查观察层见闻(只作追溯,不冒充客观事实)
@@ -567,7 +585,7 @@ reflection 更新 `circle_note`)、关系卡 L0 直驱、L2 维护(取游标后�
 ### 11.6 注入顺序速记
 
 - **system prompt** = base system + AGENTS.md + character.md + `<memory-usage-rules>` +
-  `<scene-navigation>` + `<user-persona>` + `<current-context>`
+  `<scene-navigation>` + `<self-persona>` + `<current-context>`
 - **起始 items** = 历史(P3 窗口) → 技能目录 → 任务输入——**没有 `<relevant-memories>`**
 - **内容层** = 模型按需自取(读 ≤3 次/run);写动作(memory_observe/remember)当场发生
 - 子任务(is_sub)零记忆注入

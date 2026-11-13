@@ -58,6 +58,41 @@ def test_append_message_writes_through_to_l0(brain):
     assert rows[0]["kind"] == "chat"
 
 
+def test_search_l0_by_speaker_filters_and_allows_empty_keyword(brain):
+    """按人查：只返回该对象说过的话；keyword 为空也能列出该对象的发言。"""
+    ProjectStore.append_message("d-p2", "s_napcat_bbb", "user",
+                                "「小明」(10001): 我周末想去爬山",
+                                context_key="group:10001", speaker="小明(10001)")
+    ProjectStore.append_message("d-p2", "s_napcat_bbb", "user",
+                                "「小红」(10002): 我想去看电影",
+                                context_key="group:10001", speaker="小红(10002)")
+    rows = memory_brain.search_l0("", speaker="小明", context_key="group:10001")
+    assert [r["who"] for r in rows] == ["小明(10001)"]
+    assert "爬山" in rows[0]["text"]
+    assert memory_brain.search_l0("", speaker="10001", context_key="group:10001")
+    assert memory_brain.search_l0("", speaker="小明(10001)", context_key="group:10001")
+    # 不传 speaker 时行为不变：按词面各查到对应的人
+    assert len(memory_brain.search_l0("爬山", context_key="group:10001")) == 1
+    assert len(memory_brain.search_l0("电影", context_key="group:10001")) == 1
+
+
+def test_conversation_search_peer_returns_only_that_person(brain):
+    from omni_core.tools import memory_tool as mt
+
+    ProjectStore.append_message("d-p2", "s_napcat_ccc", "user",
+                                "「小明」(10001): 我们约好周一发盘前分析",
+                                context_key="group:10001", speaker="小明(10001)")
+    ProjectStore.append_message("d-p2", "s_napcat_ccc", "user",
+                                "「小红」(10002): 我也想看盘前分析",
+                                context_key="group:10001", speaker="小红(10002)")
+    r = mt.conversation_search(peer="小明", scope="all")
+    assert r["ok"] is True and r["count"] == 1
+    assert "小明" in r["results"][0]
+    r2 = mt.conversation_search(keyword="盘前分析", peer="小红", scope="all")
+    assert r2["count"] == 1 and "小红" in r2["results"][0]
+    assert mt.conversation_search()["ok"] is False
+
+
 def test_write_through_is_fail_soft(brain, monkeypatch):
     """索引坏了不得阻断会话落盘：search 端异常返回空，append_message 照常写 jsonl。"""
     monkeypatch.setattr(memory_brain, "index_l0_message",
@@ -128,6 +163,56 @@ def test_conversation_search_scopes_to_current(_ch_ctx, brain):
     assert allr["ok"] and allr["count"] == 2 and mt.take_recall_stats()["calls"] == 2
 
 
+def test_conversation_search_defaults_to_all_for_internal(_ch_ctx, brain):
+    """黑名单式范围：内部来源缺省全量，新增场合/新人不必再配 scope。"""
+    from omni_core.tools import memory_tool as mt
+    _ch_ctx.set_boundary(context_key="private:777")
+    _ch_ctx.build_run(context_key="private:777")
+    memory_brain.index_l0_message("s_a1", "user", "群聊的约定甲", context_key="group:888")
+    memory_brain.index_l0_message("s_a2", "user", "私聊的约定乙", context_key="private:777")
+    mt.reset_recall_stats()
+    r = mt.conversation_search(keyword="约定")
+    assert r["ok"] and r["scope"] == "all" and r["count"] == 2
+    assert mt.take_recall_stats()["calls"] == 1
+
+
+def test_conversation_search_empty_result_does_not_claim_absence(_ch_ctx, brain):
+    """空结果只能说「本轮没检索到」，不能说「没有」——后者等于对外断言事实不存在。"""
+    from omni_core.tools import memory_tool as mt
+    _ch_ctx.set_boundary(context_key="group:321")
+    _ch_ctx.build_run(context_key="group:321")
+    r = mt.conversation_search(keyword="不存在的词", peer="某个人")
+    assert r["ok"] and r["count"] == 0
+    assert "没有" not in r["note"]
+    assert "没找到" in r["note"] and "不等于没说过" in r["note"]
+
+
+def test_conversation_search_external_private_may_cross_context(_ch_ctx, brain):
+    """私聊不收窄：主人私聊里问群聊的事应当查得到（external 不等于必须锁会话）。"""
+    from omni_core.tools import memory_tool as mt
+    memory_brain.index_l0_message("s_p1", "user", "群里的约定甲", context_key="group:900")
+    memory_brain.index_l0_message("s_p2", "user", "私聊的约定乙", context_key="private:901")
+    _ch_ctx.set_boundary(context_key="private:901", source_external=True)
+    _ch_ctx.build_run(context_key="private:901")
+    r = mt.conversation_search(keyword="约定")
+    assert r["ok"] and r["scope"] == "all" and r["count"] == 2
+    # 私聊里显式 scope=current 是空操作，不会把群聊记录切掉
+    cur = mt.conversation_search(keyword="约定", scope="current")
+    assert cur["ok"] and cur["scope"] == "all" and cur["count"] == 2
+
+
+def test_conversation_search_master_is_never_scoped(_ch_ctx, brain):
+    """来源是主人时不做范围限制：群里问「他今天说了什么」也该一次查全。"""
+    from omni_core.tools import memory_tool as mt
+    memory_brain.index_l0_message("s_m1", "user", "甲群的约定", context_key="group:111")
+    memory_brain.index_l0_message("s_m2", "user", "乙群的约定", context_key="group:222")
+    _ch_ctx.set_boundary(context_key="group:111", source_external=True,
+                         peer="姐姐(master)")
+    _ch_ctx.build_run(context_key="group:111")
+    r = mt.conversation_search(keyword="约定")
+    assert r["ok"] and r["scope"] == "all" and r["count"] == 2
+
+
 def test_conversation_search_external_cannot_escape_current(_ch_ctx, monkeypatch, brain):
     """外部来源（他人可发消息）即便点名 scope=all，也只能查当前会话；定不到当前会话就拒。"""
     from omni_core.tools import memory_tool as mt
@@ -142,7 +227,7 @@ def test_conversation_search_external_cannot_escape_current(_ch_ctx, monkeypatch
     _ch_ctx.build_run()
     mt.set_l0_task_context("")
     denied = mt.conversation_search(keyword="秘密约定", scope="all")
-    assert denied["ok"] is False and "scope=all" in denied["error"]
+    assert denied["ok"] is False and "不允许跨会话检索" in denied["error"]
 
 
 def test_conversation_search_rejects_empty_keyword(_ch_ctx, brain):

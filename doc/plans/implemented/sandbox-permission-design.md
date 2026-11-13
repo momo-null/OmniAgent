@@ -119,7 +119,7 @@ security:
 ### 5.1 三个动作面
 
 1. **绝对拒绝区**（不可配置；standard / read_only / full_access 一律拒绝）：
-   - `~/.omniagent/**` **读写全拒**（含列目录 / 检索 / 建目录）——权限载体（config.yaml、plugins/*.yaml、task.json 的 full_access）、记忆（memory/、user_profile.md）、审计（audit/）都在这里。读也拒是降注入窃取面（原则 2 已承认这非硬边界）。
+   - `~/.omniagent/**` **读写全拒**（含列目录 / 检索 / 建目录）——权限载体（config.yaml、plugins/*.yaml、task.json 的 full_access）、记忆（memory/）、审计（audit/）都在这里。读也拒是降注入窃取面（原则 2 已承认这非硬边界）。
      **唯一例外**：当前任务的 `tasks/<task_id>/tmp/**`——agent 的合法工作区（写脚本 / 截图 / 产物），隐式允许根。
    - **全盘写拒绝**（不问地点）：`config.yaml` / `config*.yaml` / `mcp.json`（权限载体 wherever they sit）；`AGENTS.md`（F4.1 纪律文件；该检查从 filesystem 插件收编进 policy，插件内重复判断删除——反兼容，无用户）。
    - 可选增强：`security.deny_read_roots`（额外凭证目录 glob，默认空，如 `.ssh/**`）。

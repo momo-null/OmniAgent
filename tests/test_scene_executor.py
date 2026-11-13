@@ -293,7 +293,7 @@ def test_feed_is_l1_atom_delta_and_cursor_advances(iso, monkeypatch):
 
 
 def test_feed_is_single_pool_no_origin_grouping(iso, monkeypatch):
-    """一池增量、不分组（INV-9，plan personal-agent-memory P2 废除 origin 过滤）。
+    """一池增量、不分组（INV-9，废除 origin 过滤）。
 
     ``origin`` 降级为纯溯源值，不再作 L2 进料过滤条件：任何项目的进料都取
     同一份一池增量。``origin=''``（手记 ``remember``）与各域原子同批可见——

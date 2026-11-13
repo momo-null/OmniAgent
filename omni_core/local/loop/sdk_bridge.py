@@ -329,7 +329,7 @@ class SdkBridgeMixin:
         _instr_snapshot = self._load_instructions_snapshot(spec)
         system_prompt = self._merge_instructions(system_prompt, _instr_snapshot)
         system_prompt = self._merge_character(system_prompt)
-        # 记忆**稳定段**（<memory-usage-rules> + <scene-navigation> 导航 + <user-persona> 画像）
+        # 记忆**稳定段**（<memory-usage-rules> + <scene-navigation> 导航 + <self-persona> 自我画像）
         # 并入 system prompt，run 开始读一次锁定（维护只在任务收尾 flush 触发，run 内不变）；
         # scene 全文由模型按需调 read_scene 读取（渐进披露），**不进任何每步请求**。
         # 位置在指纹计算之前——O5+ 不变式「Model-visible ⟺ logged」要求指纹含此块。
@@ -738,7 +738,7 @@ class SdkBridgeMixin:
         # （零查标记由此对出；lead-in 已下线，"注入了什么"看 memory_injected 轨迹）。
         # §8.3：主键 run_id / 进料道 / 是否外部 / 注入字符 / 发话与 LLM 调用一并落行。
         if _mt is not None:
-            _sent_n, _ck = 0, ""
+            _sent_n, _ck, _peer = 0, "", ""
             try:
                 from omni_core.local.loop import context_signal as _cs
                 _b = _cs.boundary()
@@ -746,6 +746,7 @@ class SdkBridgeMixin:
                 _sent_n = int(_fn() or 0) if callable(_fn) else 0
                 _ck = str((_cs.current() or {}).get("context_key")
                           or _b.get("context_key") or "")
+                _peer = str(_b.get("peer") or "")
             except Exception:
                 pass
             _mt.log_recall_run(
@@ -753,6 +754,7 @@ class SdkBridgeMixin:
                 context_key=_ck,
                 source_kind=_peek_source_kind(),
                 source_external=_peek_source_external(),
+                peer=_peer,
                 injected_context=bool(_mem_block),
                 context_chars=len(_mem_block) if _mem_block else 0,
                 sent=_sent_n > 0,

@@ -96,7 +96,7 @@
     <li class="l2"><a href="#s-02-内核-MCP-工具调用解耦图">02 内核 + MCP 工具调用解耦图</a></li>
     <li class="l2"><a href="#s-03-单次任务-ReAct-闭环框架原生-钩子">03 单次任务 ReAct 闭环（框架原生 + 钩子）</a></li>
     <li class="l2"><a href="#s-04-Vision-SoM-通道图MCP-化">04 Vision SoM 通道图（MCP 化）</a></li>
-    <li class="l2"><a href="#s-05-记忆与知识层TAM移植架构">05 记忆与知识层（TAM 移植架构）</a></li>
+    <li class="l2"><a href="#s-05-记忆与知识层TAM移植架构">05 记忆与知识层（单库 brain.db）</a></li>
     <li class="l3"><a href="#s-51-全局库与scope路由">5.1 全局库与 scope 路由</a></li>
     <li class="l3"><a href="#s-52-技能蒸馏生产者">5.2 技能蒸馏生产者</a></li>
     <li class="l3"><a href="#s-53-有效性边界与诚实声明">5.3 有效性边界与诚实声明</a></li>
@@ -396,8 +396,8 @@
 
 <!-- ============ N5 ============ -->
 <section id="n5">
-  <h2 id="s-05-记忆与知识层TAM移植架构"><span class="num">05</span> 记忆与知识层（TAM 移植架构）</h2>
-  <p class="lead">记忆与知识层源自腾讯 TAM（Agent Memory）分层记忆模型，把任务经验沉淀为可消费记忆并注入回上下文。<b>2026-10-28 起收敛为 brain.db 单库</b>（TAM 双库退役，FTS5 simple 分词）。权威设计索引见 <code>doc/plans/implemented/memory-architecture.md</code>；本节为架构图集与落地事实。</p>
+  <h2 id="s-05-记忆与知识层TAM移植架构"><span class="num">05</span> 记忆与知识层（单库 brain.db）</h2>
+  <p class="lead">记忆与知识层早期源自腾讯 TAM（Agent Memory）的分层记忆模型，<b>2026-10-28 起收敛为 brain.db 单库</b>（TAM 双库退役，FTS5 simple 分词）。此后演进为 L0→L3 单库 + 叙事资产（日记 / 月记 / 关系卡）+ 词面与向量双通道检索（向量臂 2026-11-13 立项，见 <code>doc/plans/implemented/vector-recall-2026-11-13.md</code>）。<b>下方 N5a / N5b 图集为 2026-11-02 口径</b>，机制细节一律以 <code>doc/plans/implemented/memory-architecture.md</code> 当前版本为准。</p>
 
   <div class="diagram">
     <svg viewBox="0 0 700 662" xmlns="http://www.w3.org/2000/svg" font-family="sans-serif">
@@ -459,8 +459,8 @@
 
       <!-- 维护 L3 -->
       <rect x="60" y="556" width="360" height="66" rx="9" fill="#fff7e6" stroke="#f59e0b" stroke-width="2"/>
-      <text x="240" y="580" font-size="13" font-weight="700" fill="#b45309" text-anchor="middle">L3 画像维护 _maybe_maintain_profile</text>
-      <text x="240" y="598" font-size="11" fill="#64748b" text-anchor="middle">累计 20 atoms 激活 → user_profile.md</text>
+      <text x="240" y="580" font-size="13" font-weight="700" fill="#b45309" text-anchor="middle">L3 自我画像维护 _maybe_maintain_profile</text>
+      <text x="240" y="598" font-size="11" fill="#64748b" text-anchor="middle">累计 20 atoms 激活 → self_profile.md</text>
       <text x="240" y="614" font-size="11" fill="#64748b" text-anchor="middle">人工编辑与自动维护共存</text>
 
       <text x="60" y="648" font-size="10.5" fill="#94a3b8">flush 尾部并行触发 L2 / L3 维护（白卷也跑 L2）；提炼 / 判重 LLM 失败一律 fallback store，异常不打断主流程。</text>
@@ -512,7 +512,7 @@
   <b>维护（flush 尾部并行，白卷也跑 L2）</b>
   <ul class="prin">
     <li><b>L2 场景块</b>：<code>scene_executor.py</code> 维护<b>多文件主题块</b>（<code>scene_blocks/</code> + <code>scene_index.json</code>）；<b>不走注入</b>——agent 通过工具按需拉取主题块全文。</li>
-    <li><b>L3 画像</b>：设计就绪（<code>user_profile.md</code>，候选→晋升→弱注入），实现待立项。</li>
+    <li><b>L3 自我画像</b>：已落地（<code>self_profile.md</code>，注入 <code>&lt;self-persona&gt;</code>）；候选区人工晋升机制已退役。机制见记忆层权威文档。</li>
   </ul>
 
   <b>读链（search_brain，只经工具暴露）</b>
@@ -538,7 +538,7 @@
   </ul>
 
   <h3 id="s-53-有效性边界与诚实声明" class="blk">5.3 有效性边界与诚实声明</h3>
-  <div class="note"><b>四层记忆形态（现行，2026-11-02）</b>：L0 逐字会话索引（brain.db 的 <code>l0_messages</code> + <code>l0_fts</code>，<code>conversation_search</code> 自取）、L1 原子记忆（brain.db 单库，<b>检索结果永不自动注入</b>，只经 <code>memory_recall</code> 工具自取）、L2 场景块（<code>scene_executor.py</code> 多文件主题块，system 常驻<b>索引条目</b>＝文件名＋热度/日期＋摘要，全文工具按需拉取）、L3 用户画像（已实现：<code>user_profile.md</code> 全文常驻 system）。一致性由注入面纪律保证（system＝使用规则 + L2 索引 + L3 画像，不含任何检索结果），见 <code>doc/plans/implemented/memory-architecture.md</code> §4/§5。</div>
+  <div class="note"><b>四层记忆形态（L0→L3，2026-11-02 口径）</b>：L0 逐字会话索引（brain.db 的 <code>l0_messages</code> + <code>l0_fts</code>，<code>conversation_search</code> 自取）、L1 原子记忆（brain.db 单库，<b>检索结果永不自动注入</b>，只经 <code>memory_recall</code> 工具自取）、L2 场景块（<code>scene_executor.py</code> 多文件主题块，system 常驻<b>索引条目</b>＝文件名＋热度/日期＋摘要，全文工具按需拉取）、L3 自我画像（已实现：<code>self_profile.md</code> 注入 <code>&lt;self-persona&gt;</code>）。一致性由注入面纪律保证（system＝使用规则 + L2 索引 + L3 自我画像，不含任何检索结果）；此后新增的叙事资产与向量召回臂见 <code>doc/plans/implemented/memory-architecture.md</code> / <code>vector-recall-2026-11-13.md</code>。</div>
   <div class="redline"><b>诚实边界</b>：对外只宣称「链路已实现并真机验证」；<b>不宣称「记忆注入已证明有效」</b>，除非后续 A/B 跑出结论。内核零场景硬编码；能力默认关、需显式开启。</div>
 
   <h3 id="s-54-调试与可见性" class="blk">5.4 调试与可见性</h3>
@@ -799,7 +799,9 @@
   skills/                         # 通用 skill（跨 project 共享，含蒸馏产出 maybe_distill_skill）
   memory/                         # L1 原子记忆：brain.db 单库（TAM 双库已退役，2026-10-28）
     brain.db                      #   atoms + atoms_fts（FTS5 simple 分词；project 仅为 origin 标签）
-    user_profile.md               #   L3 用户画像（设计就绪，实现待立项）
+    self_profile.md               #   L3 自我画像（已落地，注入 &lt;self-persona&gt;）
+    diary/                        #   日记 / 月记（按日全局）
+    relations/                    #   关系卡正文
   projects/&lt;path-slug&gt;/           # project = 工作目录逻辑分组（id = 路径 slug）；其 memory/scene_blocks/ 存 L2 场景块
   tasks/&lt;task_id&gt;/                # task 一等实体，独立平铺，含自身全部资产
     task.json                     #   元信息（objective / state / project_id? / runs）
@@ -814,7 +816,7 @@
     <tr><th>目录</th><th>层级</th><th>内容 / 用途</th></tr>
     <tr><td><code>config.yaml</code></td><td>全局</td><td>真 API key（去仓库）、模型端点、<code>local_model.auto_start</code>、三通道（<code>brain</code> / <code>runtime.executor</code> / <code>runtime.vision</code>，各自独立 enable + base_url/model，由 Web 设置面板「通道」Tab 写入 <code>~/.omniagent/config.yaml</code>）。框架态下三通道仍作为 model provider 接入 SDK。</td></tr>
     <tr><td><code>skills/</code></td><td>全局</td><td>通用 skill 存全局（跨 project 共享）；task 私有 skill 存 <code>tasks/&lt;task_id&gt;/skills/</code>。recall 合并、task 优先。蒸馏生产者提炼的<b>通用</b> skill（带 <code>scope: global</code>）落全局，实现「技能升级跨项目复利」。</td></tr>
-    <tr><td><code>memory/</code></td><td>全局</td><td>L0 逐字索引 + L1 原子记忆同库 <code>brain.db</code>（SQLite + FTS5 simple 分词；project 仅为 origin 标签；<code>l0_messages</code>/<code>l0_fts</code> 为会话逐字检索副本）+ L3 画像 <code>user_profile.md</code>（已实现，全文常驻 system）+ <code>memory_recall.jsonl</code> 自取观测。常驻注入只有三段：使用规则 + L2 索引 + L3 画像；<b>检索结果永不自动注入</b>——L1 走 <code>memory_recall</code>（k≤5、floor=0.30）、L0 走 <code>conversation_search</code>、L2 全文走 <code>read_scene</code>。L2 场景块在 <code>projects/&lt;path-slug&gt;/memory/scene_blocks/</code>。权威见 <code>doc/plans/implemented/memory-architecture.md</code>。</td></tr>
+    <tr><td><code>memory/</code></td><td>全局</td><td>L0 逐字索引 + L1 原子记忆同库 <code>brain.db</code>（SQLite + FTS5 simple 分词；project 仅为 origin 标签；<code>l0_messages</code>/<code>l0_fts</code> 为会话逐字检索副本）+ L3 自我画像 <code>self_profile.md</code>（已实现，注入 <code>&lt;self-persona&gt;</code>）+ <code>memory_recall.jsonl</code> 自取观测。常驻注入只有三段：使用规则 + L2 索引 + L3 画像；<b>检索结果永不自动注入</b>——L1 走 <code>memory_recall</code>（k≤5、floor=0.30）、L0 走 <code>conversation_search</code>、L2 全文走 <code>read_scene</code>。L2 场景块在 <code>projects/&lt;path-slug&gt;/memory/scene_blocks/</code>。检索为词面 + 向量双通道（向量臂见 <code>doc/plans/implemented/vector-recall-2026-11-13.md</code>）；权威见 <code>doc/plans/implemented/memory-architecture.md</code>。</td></tr>
     <tr><td><code>projects/&lt;path-slug&gt;/</code></td><td>全局</td><td>project = 工作目录的 slug 分组，承载会话历史 jsonl 与 L2 场景块 <code>memory/scene_blocks/</code>（+ scene_index.json）；task 自身资产仍落 <code>tasks/&lt;task_id&gt;/</code>。</td></tr>
     <tr><td><code>tasks/&lt;task_id&gt;/</code></td><td>全局</td><td>task 一等实体：自身含全部资产（trajectory / world_model / collected / skills）+ task.json 元信息。可关联一个 <code>project_id</code>（仅作 cwd 元数据，不影响落点）。</td></tr>
   </table>

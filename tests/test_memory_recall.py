@@ -407,7 +407,7 @@ def test_recall_stats_accumulate_and_observability_line(brain):
     assert recs[1]["zero_query"] is True          # 「该查而未查」由此对出
 
 
-# ---- M2（plan personal-agent-memory §6.2）：场合/共同背景加权，peer 接通 ----
+# ---- M2：场合/共同背景加权，peer 接通 ----
 
 def _mk_atom(conn, rid, text, *, peer="", context_key="", now=None):
     memory_brain._insert_atom(conn, rid, {"text": text, "kind": "fact",

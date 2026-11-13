@@ -1,4 +1,4 @@
-"""M3 测试锁（plan personal-agent-memory §8.5 M3 行 / N-13）：
+"""M3 测试锁（N-13）：
 
 - circle_note 不产生 atoms、不读叙事正文（INV-5 / INV-10）；
 - 每场合每巩固周期 reflection ≤1 次；全局单轮 ≤5 次（N-13）；

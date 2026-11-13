@@ -251,3 +251,36 @@ def test_search_brain_cos_floor_drops_unrelated(brain, monkeypatch):
     by_id = {h["record_id"] for h in hits}
     assert rid_b not in by_id, "cos=0.707 < floor 0.80 应被丢弃"
     assert rid_a in by_id, "cos=1.0 的 A 不受影响"
+
+# ---- 6. 变体开关（B：cos→rel 标定；C：通道配额）----
+
+def test_vec_rel_default_is_identity(monkeypatch):
+    """缺省 rel_mode=cos：向量行 rel 就是 cos（B 方案默认关，行为与实测基线一致）。"""
+    monkeypatch.setattr(mb, "_vec_rel_mode", lambda: "cos")
+    assert mb._vec_rel(0.6) == 0.6
+    assert mb._vec_rel(1.4) == 1.0          # 上界钳位
+    assert mb._vec_rel(-0.2) == 0.0         # 下界钳位
+
+
+def test_vec_rel_calib_maps_to_bm25_scale(monkeypatch):
+    """B 方案：rel = 0.296*cos + 0.665（2026-11-14 用 39 个 FTS/向量配对点拟合）。"""
+    monkeypatch.setattr(mb, "_vec_rel_mode", lambda: "calib")
+    assert mb._vec_rel(0.58) == pytest.approx(0.296 * 0.58 + 0.665, abs=1e-6)
+    assert mb._vec_rel(1.5) == pytest.approx(0.961, abs=1e-6)   # cos 入参先钳到 1.0
+    assert mb._vec_rel(0.55) < mb._vec_rel(0.65)   # 单调
+
+
+def test_vec_quota_gate():
+    """C 方案三道门：短词/精确 token/低 cos 一律不触发配额。"""
+    nl = "怎么判断两件是不是同一批做出来的"        # 自然语言长句
+    assert mb._vec_quota_gate(nl, 0.62) is True
+    assert mb._vec_quota_gate(nl, 0.585) is False  # 语义强度不够 → 宁可空着
+    assert mb._vec_quota_gate("素鸡", 0.99) is False        # 关键词查询
+    assert mb._vec_quota_gate("roji 的袜子怎么挑", 0.99) is False   # ASCII 精确 token
+    assert mb._vec_quota_gate("KY3-铁皮钟-1126 多少钱", 0.99) is False
+
+
+def test_vec_quota_default_off(monkeypatch):
+    """quota 缺省 0：不开配额时候选集合与顺序不变（回归锁）。"""
+    monkeypatch.setattr(mb, "_vec_quota", lambda: 0)
+    assert mb._vec_quota() == 0

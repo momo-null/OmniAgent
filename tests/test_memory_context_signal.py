@@ -1,4 +1,4 @@
-"""M1 测试锁（plan personal-agent-memory §8.5 M1 行 / N-12）：
+"""M1 测试锁（N-12）：
 
 - ``context_signal`` 单点构造、run 内只读、``<current-context>`` ≤200 字符、每 run 一次；
 - ``recent_topics`` 不触发额外 LLM；``circle_note.topics`` 优先、L0 词面兜底；

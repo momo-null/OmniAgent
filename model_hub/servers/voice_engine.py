@@ -25,10 +25,10 @@
     tts_model: gpt-sovits
     voice: ""              # 空 = 用服务端 tts_voice 配置
 
-启动（desktop 自动拉起；手动/服务器部署同一条命令）：
-    python -m plugins.voice.engine_service          # 端口读 voice_service.yaml 的 service_port
+启动（由后端 ServiceManager 统一拉起；手动同一条命令）：
+    python -m model_hub.servers.voice_engine   # 端口读 voice_service.yaml 的 service_port
     # 需要给局域网别的机器用时显式放开，并带 token（默认只听回环）
-    python -m plugins.voice.engine_service --host 0.0.0.0 --token <secret>
+    python -m model_hub.servers.voice_engine --host 0.0.0.0 --token <secret>
 """
 from __future__ import annotations
 

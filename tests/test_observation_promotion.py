@@ -104,7 +104,7 @@ def test_promote_merges_into_existing_atom(brain, monkeypatch):
 
 
 def test_promote_skips_externally_reachable_observations(brain, monkeypatch):
-    """投毒锁（worklog §9.6）：外部可达来源记的见闻只留叙事层，永不升格。
+    """投毒锁：外部可达来源记的见闻只留叙事层，永不升格。
 
     判据是边界层盖章的结构信号，不是场合键取值或前缀。
     """

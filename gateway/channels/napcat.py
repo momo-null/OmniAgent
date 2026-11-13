@@ -1601,7 +1601,7 @@ class NapcatAdapter:
             _gname = self.group_name(group_id)
             title = group_title(_gname, group_id)
             _where = f"群「{_gname}」({group_id})" if _gname else f"群 {group_id}"
-            # M1（plan personal-agent-memory F-4）：通道只给**结构**不给文本——
+            # M1（F-4）：通道只给**结构**不给文本——
             # 「群里刚才在聊什么」不再硬注入（原 _group_context_block 已删）；
             # 话题词面走 <current-context>.recent_topics，更早/更多由模型自调
             # msg_group_history（同一数据源）。

@@ -1,7 +1,7 @@
 # 向量召回臂（vector-recall）设计方案（脱敏版）
 
-> **实施规格的完整版（含真库语料案例与个人标记）在 `doc/worklog/vector-recall-2026-11-13.md`，
-> 本地不入仓；本文是可提交的脱敏版**——真实问句/期望记忆/自建标记一律以通用案例替代，
+> **实施规格的完整版（含真库语料案例与个人标记）只保留在本地工作记录、不入仓；
+> 本文是可提交的脱敏版**——真实问句/期望记忆/自建标记一律以通用案例替代，
 > 架构与决策两者一致。分支 `feat/vector-recall`（自 main@`d61496c` 切出），分支纪律：
 > 每步可验证、A/B 报告达标才合回 main。
 > 关联：memory-architecture.md §2.2「检索升级路径」——触发条件「实测同义漏召回」
@@ -9,7 +9,7 @@
 
 ## 1. 背景与实测依据
 
-### 1.1 同义漏召回实测（2026-11-13，真库转述问句，细节见 worklog）
+### 1.1 同义漏召回实测（2026-11-13，真库转述问句）
 
 三个转述问句（措辞与存储记忆不相交）：一个完全未命中、一个正确记忆被泛域原子
 挤到 top2、一个 top1 跑偏；对照的词面直击问句全部命中。结论：**词法单通道的
@@ -127,7 +127,13 @@ importance/recency 两项会把任何向量专属行抬过既有 floor（cos=0 �
 | `runtime.knowledge.memory.vector.enabled` | False | 总开关（缺省关=行为与今日完全一致） |
 | `runtime.knowledge.memory.vector.model` | bge-m3 | 模型名；低配可切，换模型按 §5 过渡 |
 | `runtime.knowledge.memory.vector.device` | auto | auto / gpu / cpu |
-| `runtime.knowledge.memory.vector.cos_floor` | 0.52 | 向量候选语义下限（校准见 §3；关掉=「每问必答」灌水回归） |
+| `runtime.knowledge.memory.vector.cos_floor` | 0.58 | atom 向量候选语义下限（S6 实测上调，见 §13；关掉=「每问必答」灌水回归） |
+| `runtime.knowledge.memory.vector.cos_floor_l0` | 0.52 | L0 通道下限（与 atom 分开：L0 有驱逐护栏、且承载原话转述，见 §13） |
+| `runtime.knowledge.memory.vector.cos_floor_narr` | 0.52 | 叙事层下限（summary 是短文本、目标 cos 仅 0.499–0.686，见 §14.3） |
+| `runtime.knowledge.memory.dedupe.enabled` | true | 入库去重 B/C 档（后台）开关；A 档（写路径精确重复）恒开 |
+| `runtime.knowledge.memory.vector.rel_mode` | cos | 向量行相关性刻度；`calib` 走 §13.5 的标定（实测后缺省仍 cos） |
+| `runtime.knowledge.memory.vector.cos_rel_a` / `cos_rel_b` | 0.296 / 0.665 | calib 的拟合系数（可配） |
+| `runtime.knowledge.memory.vector.quota` | 0 | 向量通道保底名额（0=不保底） |
 
 设置页改动**不在本分支**（另一条未拍板的线，不搭车）；本分支全部用 config 键 +
 脚本开关驱动，核心链路零依赖设置页。
@@ -163,3 +169,129 @@ importance/recency 两项会把任何向量专属行抬过既有 floor（cos=0 �
 
 cross-encoder 重排（phase 2）；云 embedding API（红线）；向量做过滤条件或分数
 语义化（INV-3）；narrative/scene 向量化（二期）；隐性触发（独立项）。
+
+## 13. S6 实测修订（2026-11-13，真库副本 A/B）
+
+> 起因：S5 只量 atom 命中率，未覆盖 L0 融合与同域硬负，实测发现三处负收益。
+
+1. **L0 驱逐语义修正**。原 `search_l0` 末尾 `out.sort(by when); out[-n:]` 没有相关性
+   参与：向量行一并入，最新 n 条窗口就把「更早但更相关」的词面命中行整段挤掉
+   （实测 cos 0.735/0.721 的两条正确原话被 cos 0.55 的新行顶掉）。现规则：
+   ① `keyword` 为空（只按对象查）不走向量；② 有空槽按 cos 补空槽；
+   ③ 窗口已满时只替换「cos < floor 且不含查询字面串」的词面行，单次 ≤
+   `_L0_VEC_REPLACE`(=2)，且要求进来者 cos 高出 0.05；④ 输出仍时间正序、仍 n 条。
+   实测：满窗口两个场景的 target 从「不可见」变为 rank 1/2，原线保留 3 条。
+2. **speaker 条件下推**。原向量候选不带 `sp_sql`，且 keyword 为空时仍 `encode("")`，
+   只按对象查会混入他人/无归属发言并挤掉对象本人原话。现 `_vec_l0_candidates`
+   接收 `sp_sql/sp_params` 与词面通道同条件；keyword 为空整体不走向量。
+3. **floor 分层**。atom 0.58 / L0 0.52（新键 `cos_floor_l0`）。理由：0.52 只挡离域
+   负样本，同域硬负 4/4 漏过；抬到 0.58 后同域硬负 4→1、新增行 37→18、语义命中
+   19/21（0.52 亦 19/21），且既有 36 条 fixture 命中不变；L0 承载原话转述（cos 普遍
+   偏低，实测正确行 0.546），抬到 0.58 会直接丢行。
+4. **候选帽对齐**。atom 向量候选 `2k=10` → `max(3k,15)`，与 FTS 候选上限一致
+   （2k 会截断 cos 名次 11–13 的正确答案）。
+
+修订后验收（46 场景，真库副本，k=5）：语义命中 FTS-only 14/21 → 融合 19/21；
+FTS 行 final 0 处变化；精确 token 6/6 不变；离域负样本 0 新增；同域硬负 1 条
+（cos 0.5803 的泛域短原子）；L0 scope/speaker 越界 0；延迟 +~230ms/查询（CPU
+sidecar，与在线进程并发时）。
+
+5. **变体开关（2026-11-14 实测后定为缺省关）**。两个候选方案都以配置键落地，缺省
+   行为与上面完全一致：
+   - `vector.rel_mode=calib`：把 cos 标定到 bm25 的 rel 量纲（系数用 39 个"目标卡片
+     两路同时命中"的配对点拟合：rel = 0.296*cos + 0.665，r=0.40）。实测净收益 0
+     （46 条总命中一条换一条），代价是新增行 +10、FTS 行掉出 +10 → 不启用。
+   - `vector.quota=N`：语义通道保底席位（三道门：有效词 ≥4 / 无 ASCII 精确 token /
+     最强 cos ≥0.62；受害者限"不含完整 query 串"的 FTS 行）。实测命中提升 0 →
+     不启用。
+   - 结论：剩余 miss 与同域硬负共用 0.58 附近的分数区间，纯分数/阈值/配额方案只能
+     互换、无法双赢；要同时解决须引入内容感知判定（cross-encoder），属 phase 2。
+
+**已知未解**（留 phase 2）：① top-k 被 FTS 弱匹配高分行占满时，语义正确行仍进不去
+（k 与 bm25 分数映射是根因，不是向量）；② 泛域短原子（与全库平均 cos 0.55 级别）
+仍可能在同域硬负上过线，hub 度无区分度（0.379–0.555），不能做 hub 过滤；
+③ L0 满窗口仍受「最新 n 条」约束，替换只打语义无关行。
+
+## 14. 叙事层 doc 级向量 + 索引自愈 + 入库去重（2026-11-14）
+
+### 14.1 为什么补这一层
+
+此前链路只有 atom / L0 两路向量；叙事层（`_NARR_KINDS = diary/month/relation`，含
+`scene_executor` 产出的场景块）只有 bm25 + LIKE。场景块是**长文本、措辞漂移最大**
+的地方，恰是语义检索收益最大的地方——字面通道在这里最吃力。
+
+### 14.2 接法（复用既有纪律）
+
+- 向量建在 `narrative_index` 的 `search_text`（summary + topics + atmosphere，≤400
+  字），**不建正文**（INV-12：索引只存指针，正文走 `read_narrative`）。
+- `vectors.source='narrative'`，`record_id = kind|doc_id`——同一 `doc_id` 可在不同
+  kind 下重复（diary/month 都用文件名），单用 doc_id 会让两层向量互相覆盖。
+- 回填并入 `_vector_catch_up` 第 3 块（每轮 ≤8 条，不抢 atom/L0 预算）。叙事是
+  **覆盖更新型小表**，用全表 `src_hash` 比对而不是行号水位线（水位线对覆盖无效）。
+- 检索 `_vec_narr_candidates` **JOIN 源表**，kind / 日期区间照旧 WHERE 下推；
+  `search_narrative` 里按 key **升级 rel（取 max）**，绝不下调词面命中的 rel。
+- **踩过的坑**：`search_narrative` 会「全量装载」每一行作为近因浏览候选（rel=0），
+  向量块若按 key 跳过就永远撞 `seen`、整条通道形同虚设。必须改成升级 rel。
+
+### 14.3 floor 单独校准 = 0.52（不是 atom 的 0.58）
+
+真库副本实测（38 条叙事、14 场景 / 5 负样本、k=5）：
+
+| floor | 硬改写命中 | 总命中 | 负样本噪声 |
+|---|---|---|---|
+| 0.58 | 8/11 | 11/14 | 11 |
+| 0.55 | 8/11 | 11/14 | 11 |
+| **0.52** | **9/11** | **12/14** | **11** |
+| 0.50 | 9/11 | 12/14 | 12 |
+
+叙事向量看的是 400 字摘要，目标条目 cos 只有 0.499–0.686（低于 atom 卡片的 0.58+）。
+0.58 会漏掉「改写幅度大」的正确条目；0.52 多救 1 条且零新增噪声，0.50 开始漏噪声。
+与 L0 同值（0.52）也是同一个理由：短/口语化文本的 cos 分布本来就低一档。
+
+### 14.4 删除即清理 + 两处自愈（都不进会话主路径）
+
+- `delete_narrative_index` 连带删该条向量（`source='narrative' AND record_id=?`）。
+- **读时修**：`read_narrative` 读到空正文（文件被手动删走）→ 顺手撤索引 + 向量。
+  单行 DELETE，~1ms，命中才触发；下次检索不再反复命中「指针指向空文件」。
+- **后台扫**：巩固线程内 `_reconcile_narrative_index(20)` + `_prune_orphan_vectors(50)`，
+  限量、幂等、失败静默，不进会话主路径。
+- 检索侧本来就靠 JOIN 源表挡住脏行（不会命中）；清理只解决「无声膨胀」——
+  atom 通道此前就有 9 条 tombstone 孤儿向量。
+- **永不删文件**；正文是否存在判不了时按「还在」处理（对账只做保守删除）。
+
+### 14.5 入库去重 A/B/C + 冲突提示
+
+| 档 | 判据 | 位置 | 依赖 |
+|---|---|---|---|
+| A | 归一化（去空白/标点、ASCII 小写）后**完全相同** | 写路径 `remember`（恒开） | 无 |
+| B | 同 kind 字符 bigram **Jaccard ≥ 0.85** | 巩固后台（`dedupe.enabled`，缺省开） | 无 |
+| C | 同 kind **cos ≥ 0.95** | 巩固后台叠加 | 向量就绪 |
+
+- 合并语义：keeper 取 importance 高者（同分取更长），吸收 dup 的 access_count、
+  importance 取 max；dup → `tombstone` + `superseded_by`，并删其 fts/vector 行（可逆、可溯）。
+- 冲突提示：`cos ∈ [0.80, 0.95)` 且 `Jaccard < 0.60` → **只报告不合并**（"同一件事两种
+  说法"需要人/模型判断，自动合并会吃掉一条的真实信息），落 `memory_dedupe-*.jsonl`。
+- 保守性实测：差一个词会连带挪动 3 个 bigram——「十点以后」vs「十点之后」Jaccard
+  0.73 → 缺省 0.85 **不合并**；「…写代码」vs「…写代码了」0.93 → 合并。
+
+### 14.6 验收（真库副本；语料快照 38 叙事 / 109 active atoms / 970 L0 / 向量 38+83+968）
+
+- 叙事 14 场景（11 条硬改写 0–1 个字面词 + 3 条字面命中）+ 5 负样本，k=5，
+  `require_match=True`：OFF 9/14（硬 6/11）→ ON(0.52) 12/14（硬 9/11）；
+  负样本召回条数不变（11→11，即**向量零新增噪声**）。
+- 延迟：OFF 14.5ms → ON 240ms（其中 query 嵌入 ~200ms，CPU sidecar）。
+- **46 场景 atom/L0 臂重跑**：语义命中 14/21 → 19/21、FTS 行分值变化 0、
+  L0 scope 越界 0、speaker 越界 0、负样本增量为 0 —— 与 §13 结论逐项一致。
+- 单测：`tests/test_narrative_vector.py` 12 条（回填幂等 / kind+日期下推 / 删除清向量 /
+  读时修 / 后台扫 / 三通道孤儿 / A·B·C / 冲突提示），与既有记忆测试 5 个文件合计全绿。
+
+### 14.7 已知边界
+
+1. **doc 级只覆盖 summary（400 字）**：能答「哪一天/哪一块相关」，答不了「该文档某个
+   细节」。细节级需要 chunk 级索引（设定库类长文档，phase 2）。
+2. 硬样本仍漏 2 条（cos 0.499 未达 floor）：摘要信息密度不足时语义也救不回——
+   属「摘要质量」问题，不是索引问题。
+3. 冲突对**不自动合并**（语义近 + 字面差必须人工/模型确认）。
+4. 自动合并在巩固里跑，可逆（tombstone 保留原文）；首次在真实库启用前建议先看一轮
+   `memory_dedupe-*.jsonl`。
+5. 世界观/设定库的 `world` kind 与 chunk 级索引**本批不做**（用户已明确留到后续设计）。

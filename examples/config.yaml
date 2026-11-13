@@ -170,7 +170,7 @@ security:
 # ── knowledge：记忆轴的参数（gate 在上面 runtime.knowledge 里，这里只有参数）──
 # 谁来读：记忆链路（提炼 / 场景块 / 日记 / 画像 / 关系卡）。缺省值见代码。
 knowledge:
-  profile:                      # L3 用户画像（user_profile.md）
+  profile:                      # L3 自我画像（self_profile.md）
     enabled: true               # 注入开关
     auto_maintain: true         # 新 atoms 攒够就让 LLM 增量重写画像
     trigger_every_n: 20

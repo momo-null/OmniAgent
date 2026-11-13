@@ -4,7 +4,7 @@
 提交 `05fd684`（wave promotion）/ `2f179e6`（thread economy + QQ channel boundaries）/ `df67a6b` / `798671d`。
 本文是群聊判定层在仓库内的**唯一设计源**：只讲**要不要说话**（T0/T1/T2），不讲**她记得什么**——
 记忆侧见 `doc/plans/implemented/memory-architecture.md` §2.1/§2.7/§2.8，召回诊断与移植偏差见同稿 §13（2026-11-06 吸收自 2 号方案）。
-**开放项与待办**在本地 worklog 追踪（`doc/worklog/group-presence-tracking.md`，不进仓库）：
+**开放项与待办**（观察项 OBS、出站自然度缺口等）在本地工作记录里追踪，不进仓库：
 观察项 OBS、出站自然度缺口等。
 逐轮试点实测、校准与事故的完整原文为本地留档（不进仓库），本文只保留定稿后的现行机制。
 
@@ -87,7 +87,7 @@ T0 冷却（同人同文 90s）／出站同文去重（同 chat 300s，失败不
 （outcome 带 `thread`：named/continue/start），用于权重重拟合、talk_value 校准、否决率告警。
 
 观察项（波次侧引用行余留 / 显式发送静默丢失 / 权重重拟合）带触发条件统一在
-`doc/worklog/group-presence-tracking.md`（本地 worklog，不进仓库）§B 维护，本文不复列。
+本地工作记录 §B 维护（不进仓库），本文不复列。
 
 ## 5. 配置（`channels.<name>.yaml`）
 

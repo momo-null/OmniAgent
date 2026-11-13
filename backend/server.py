@@ -97,6 +97,25 @@ async def lifespan(app: FastAPI):
         logger.info("全局数据根: %s", runtime_paths.global_omni())
     except Exception as e:  # 建目录失败不应阻断启动
         logger.warning("启动预建全局目录失败（已忽略）: %s", e)
+    # 本地服务统一拉起（model_hub 清单：向量 sidecar / 语音引擎等）。
+    # 后台线程：模型加载要几秒到几十秒，不阻塞后端就绪；幂等，端口已占用即视为在跑。
+    try:
+        import threading
+
+        from model_hub.services import ServiceManager
+
+        def _boot_services() -> None:
+            try:
+                started = ServiceManager().ensure_started()
+                if started:
+                    logger.info("本地服务拉起: %s", started)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("本地服务拉起失败（已忽略）: %s", e)
+
+        threading.Thread(target=_boot_services, name="model-hub-services",
+                         daemon=True).start()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("model_hub 服务模块不可用（已忽略）: %s", e)
     # 栈看门狗：独立守护线程定期写「RSS + 全线程栈」到 ~/.omniagent/logs/stackwatch*.log。
     # 用于事后取证——进程被拖垮（HTTP 全挂）时诊断端点也访问不了，只能靠落盘快照。
     # 关闭：OMNI_STACK_WATCH=0

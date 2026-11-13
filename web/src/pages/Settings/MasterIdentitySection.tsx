@@ -6,7 +6,7 @@ import { identityApi } from "../../api/client";
 
 // 主人身份（认领）：Web 控制台恒为主人（零配置）；通道侧（QQ/飞书/…）的标识
 // 在这里「认领」——点「这是我」即把该说话人并入主人卡（回填历史 + 收编旧卡 +
-// 宽窗重建）。解除认领同界面。设计见 doc/worklog/profile-three-way-split-2026-11-11.md。
+// 宽窗重建）。解除认领同界面。设计见 doc/plans/implemented/memory-architecture.md §2.4。
 export default function MasterIdentitySection() {
   const [uids, setUids] = useState<string[]>([]);
   const [cardExists, setCardExists] = useState(false);

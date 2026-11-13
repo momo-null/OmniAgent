@@ -273,8 +273,39 @@ def _plugin_dirs(cfg: Dict[str, Any]) -> List[Path]:
     return out
 
 
+def _service_enabled(name: str) -> Optional[bool]:
+    """服务型能力的开关统一在 ``~/.omniagent/model_hub.yaml``（资源层）。
+
+    语音/向量这类「插件 + 常驻服务」的双重身份，开关只该有一处：放在 model_hub
+    清单里，插件加载与进程拉起读同一份，避免「引擎起了但工具没注册」这种撕裂。
+    文件不存在 / 该服务没写 enabled → 返回 None，调用方回退到 plugin.yaml / manifest。
+    """
+    try:
+        import yaml
+
+        from omni_core.local.runtime_paths import global_omni
+
+        p = Path(str(global_omni())) / "model_hub.yaml"
+        if not p.is_file():
+            return None
+        doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+        svc = ((doc.get("services") or {}).get(name) or {})
+        if isinstance(svc, dict) and "enabled" in svc:
+            return bool(svc.get("enabled"))
+    except Exception:
+        return None
+    return None
+
+
 def _enabled(name: str, plugin_cfg: Dict[str, Any], manifest: Dict[str, Any]) -> bool:
-    """有效启用状态：plugin.yaml 的 enabled 优先，缺省取 manifest.enabled，缺省 True。"""
+    """有效启用状态：model_hub 服务开关 > plugin.yaml > manifest > True。
+
+    优先级这样排是因为：模型/服务的「起不起」属于资源层，应该在 model_hub 一处配置；
+    plugin.yaml 的 enabled 是插件自有开关的兜底（未纳入服务清单的普通插件照旧用它）。
+    """
+    svc = _service_enabled(name)
+    if svc is not None:
+        return svc
     if "enabled" in plugin_cfg:
         return bool(plugin_cfg.get("enabled"))
     if "enabled" in manifest:

@@ -73,7 +73,7 @@ def get_source_external() -> bool:
         return _SOURCE_EXTERNAL
 
 
-# ── 本轮进料道（plan personal-agent-memory F-4：channel 只给结构） ──────────────
+# ── 本轮进料道（F-4：channel 只给结构） ──────────────
 # ``chat``=通道消息 / ``task``=cron·手动派发 / ``observation``=主动观察 run。
 # context_signal 据此决定本轮原料走哪条进料道与观测行的 source_kind；
 # Web 直连 run 由 chat_runtime 设 "chat"。

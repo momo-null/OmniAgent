@@ -1,4 +1,4 @@
-"""NP-1 测试锁（plan personal-agent-memory §8.5 NP-1 行 / §13.6）：
+"""NP-1 测试锁：
 
 - N-1  >7 天前的日记可由 narrative_search 命中（R6）；
 - N-2  同 query 两个 context_key 排序有差异、两条都可召回（INV-3，core 面已在

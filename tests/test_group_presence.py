@@ -788,7 +788,7 @@ def test_chat_routes_exact_beats_channel(monkeypatch):
 
 
 def test_peer_note_no_longer_injected_into_group_prompt(adapter, monkeypatch, tmp_path):
-    """关系卡改「可检索资产」（plan personal-agent-memory NP-2/D-2）：通道自动注入
+    """关系卡改「可检索资产」（NP-2/D-2）：通道自动注入
     已物理删除——场合自述不再出现印象卡正文；「记得这个人」改由 narrative_search
     /narrative_read 按需自取（工具层出口约束见 test_narrative_tool）。"""
     from omni_core.local import runtime_paths as rp

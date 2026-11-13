@@ -94,7 +94,7 @@ def test_stable_block_scene_nav_and_profile_in_system(monkeypatch):
     assert "windows-环境事实.md" in block
     # P6（2026-11-02）：对齐原仓库 Path + 热度 + Summary 三行索引；M-1 零摘要已废
     assert "SCENE-SUM" in block and "热度 3" in block
-    # NP-2（plan personal-agent-memory §13.3.2，INV-11 / N-3）：稳定段取消日记/月记
+    # NP-2（INV-11 / N-3）：稳定段取消日记/月记
     # 固定配额——固定日记条目不进导航（叙事经 narrative_search 按需检索）
     assert "DIARY-SUM" not in block and "diary-2026-10-31" not in block
     assert "read_scene" in block, "导航必须指引按需读取（渐进披露）"

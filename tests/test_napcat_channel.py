@@ -248,7 +248,7 @@ def test_group_title_falls_back_to_group_id(adapter, monkeypatch):
 # === 群上下文（被 @ 时自动带最近几条群消息） ===
 
 def test_group_at_no_verbatim_context_injection(adapter, monkeypatch):
-    """F-4（plan personal-agent-memory M1）：通道只给结构不给文本——被 @ 的场合自述
+    """F-4（M1）：通道只给结构不给文本——被 @ 的场合自述
     不再注入「群里刚才的消息」原文块（原 _group_context_block 已删）；话题词面走
     <current-context>.recent_topics，更多历史由模型自调 msg_group_history。"""
     monkeypatch.setattr(adapter, "group_name", lambda gid: "")

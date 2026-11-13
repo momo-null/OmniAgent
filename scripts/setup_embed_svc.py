@@ -1,6 +1,6 @@
 """搭建嵌入 sidecar 独立环境（一次性；主 .venv 零改动）。
 
-1. 在 model_hub/embed-svc/venv 建独立虚拟环境；
+1. 在 models/embed-svc/venv 建独立虚拟环境；
 2. 装 **CPU 版** torch（不碰主 .venv 的 cu128）+ sentence-transformers；
 3. 下载 BAAI/bge-m3 快照 → model_path.txt 记录路径（支持 HF_ENDPOINT 镜像重跑）。
 
@@ -14,9 +14,9 @@ import sys
 import venv
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SVC_HOME = os.path.join(os.path.dirname(REPO), "model_hub", "embed-svc")
+SVC_HOME = os.path.join(os.path.dirname(REPO), "models", "embed-svc")
 if not os.path.isdir(os.path.dirname(SVC_HOME)):
-    SVC_HOME = os.path.join(os.path.expanduser("~"), ".omniagent", "model_hub", "embed-svc")
+    SVC_HOME = os.path.join(os.path.expanduser("~"), ".omniagent", "models", "embed-svc")
 VENV_DIR = os.path.join(SVC_HOME, "venv")
 MODEL_NAME = "BAAI/bge-m3"
 MODEL_PATH_TXT = os.path.join(SVC_HOME, "model_path.txt")

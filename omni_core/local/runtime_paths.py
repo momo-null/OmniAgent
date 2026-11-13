@@ -248,6 +248,15 @@ def channel_routes_file() -> Path:
 
 
 # ---- 目录确保（幂等） ------------------------------------------------------
+def models_root() -> Path:
+    """本地模型与服务环境根 ``models/``。
+
+    子目录各自独立：GGUF 大模型、语音模型、嵌入 sidecar（含其 venv 与模型）。
+    路径只由这里给，禁止在业务代码里拼盘符或仓库相对路径。
+    """
+    return _GLOBAL / "models"
+
+
 def ensure_global_dirs() -> None:
     """服务启动时建好全局层所有子目录。幂等。"""
     for d in (
@@ -257,6 +266,7 @@ def ensure_global_dirs() -> None:
         plugins_root(),
         environments_root(),
         channels_root(),
+        models_root(),
     ):
         d.mkdir(parents=True, exist_ok=True)
 
