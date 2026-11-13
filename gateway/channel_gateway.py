@@ -94,6 +94,28 @@ def build_adapter(name: str):
         return None
 
 
+def channel_client(name: str):
+    """按通道名构造**只读客户端**（不 connect、不受 enabled 门限）。
+
+    插件只读工具与控制面 API 只依赖本宿主能力，不 import 具体通道实现：通道实现
+    搬家时只改这里的模块解析，调用方零改动。与 ``build_adapter`` 的区别是后者管
+    发送路径（fail-closed，未启用返回 None），本函数管读取路径——``enabled`` 只
+    决定网关要不要自动拉起长连接，不该让只读工具在手动联调时也不可用。
+
+    通道模块需提供 ``client(cfg)``；未知/损坏/构造失败一律返回 None（调用方报错）。
+    """
+    if not name or not name.isidentifier():
+        return None
+    try:
+        from importlib import import_module
+
+        mod = import_module(f".channels.{name}", __package__)
+        factory = getattr(mod, "client", None)
+        return factory(channel_config(name)) if callable(factory) else None
+    except Exception:
+        return None
+
+
 def start_channels() -> int:
     """拉起 ``channels/`` 下所有已启用通道；返回成功数。"""
     _register_factories()

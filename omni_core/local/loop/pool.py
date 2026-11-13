@@ -82,6 +82,11 @@ def mcp_servers(mcp_cfg: Dict[str, Any]) -> List[Any]:
     ``session`` 非空的 server 直接复用（2~3ms），只对死掉的 server 重连——
     因此"断连自愈"语义不变，只是把 1s 的重复握手省掉。
 
+    **只池化 ``mode=eager`` 的 server**（mcp-lazy-activation）：lazy 的连接由模型调
+    ``mcp_activate`` 时按需建立，不能在这里预热——否则"开了就连"的老毛病原地复活。
+    lazy 的 server **对象**由 ``mcp_meta.build_lazy_bundle`` 按 run 构造（不连接），
+    不参与本池。
+
     ``enabled=false`` 或配置为空 → 返回 ``[]``（调用方零特判）。
     """
     global _mcp_key, _mcp_servers
@@ -96,8 +101,13 @@ def mcp_servers(mcp_cfg: Dict[str, Any]) -> List[Any]:
             old, _mcp_key = _mcp_servers, key
         _cleanup_servers(old)          # 配置变了：旧连接主动断开，不泄漏子进程
         from omni_core.tools import build_mcp_servers
+        from omni_core.tools.mcp_servers import split_configs
 
-        built = build_mcp_servers((mcp_cfg or {}).get("servers"))
+        # 只把 mode=eager 的配置交给池：lazy 的连接必须由 mcp_activate 按需建立。
+        # 过滤放在调用**之前**（而不是给 builder 传关键字参数），保持 pool→builder
+        # 的既有契约不变——测试与替身都按 (servers, log=...) 打桩。
+        _eager_cfgs, _ = split_configs((mcp_cfg or {}).get("servers"), validate=False)
+        built = build_mcp_servers(_eager_cfgs)
         with _lock:
             _mcp_servers = list(built)
             _stats["mcp_build"] += 1

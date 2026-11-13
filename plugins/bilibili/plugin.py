@@ -27,16 +27,15 @@ _ADAPTER = None  # 懒构造单例（随通道配置）
 
 
 def _adapter():
-    """按 bilibili 通道配置构造适配器（只用作读客户端，不 connect）。"""
+    """取通道只读客户端：只依赖宿主能力，不 import 具体通道实现。"""
     global _ADAPTER
     if _ADAPTER is None:
-        try:
-            from gateway.channel_gateway import channel_config
-            from gateway.channels.bilibili import BilibiliAdapter
+        from gateway.channel_gateway import channel_client
 
-            _ADAPTER = BilibiliAdapter(channel_config("bilibili"))
-        except Exception as e:  # 通道不存在/未启用 → 明确报错不猜
-            raise RuntimeError(f"bilibili 通道不可用（先配置并启用 channels/bilibili.yaml）: {e}")
+        client = channel_client("bilibili")
+        if client is None:
+            raise RuntimeError("bilibili 通道不可用（先配置 channels/bilibili.yaml）")
+        _ADAPTER = client
     return _ADAPTER
 
 

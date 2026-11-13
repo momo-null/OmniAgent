@@ -462,11 +462,16 @@ class _CompactionModel(Model):
         prune_head: int = 0,
         prune_tail: int = 0,
         context_note: str = "",
+        extra_note: str = "",
     ):
         self._inner = inner
         # 2026-11-11：逐 run 的处境说明已从 system 移到起始 items。压缩会切掉
         # 起始 items，故在压缩产物上重新贴一次（同一 run 内文本不变）。
         self._context_note = str(context_note or "")
+        # 第二段 note：MCP 服务目录（L0）。同样会被压缩/硬滑窗切掉，需要一起重贴；
+        # 顺序固定（处境说明在前、能力目录在后），保证前后两次请求前缀逐字节一致。
+        self._extra_note = str(extra_note or "")
+        self._notes = [n for n in (self._context_note, self._extra_note) if n]
         self._threshold = int(threshold_tokens or 0)
         self._retain_ratio = float(retain_ratio or 0.0) or 0.5
         self._summarize = summarize
@@ -563,12 +568,16 @@ class _CompactionModel(Model):
             return None
 
         def _with_note(out):
-            if not self._context_note or out is None:
+            # 两段 note（处境说明 + MCP 目录）：按固定顺序贴回，各自的"已贴过"检查
+            # 只看产物前几条——贴过的不会再贴一次（重复 priming 会抬高退化概率）。
+            if not self._notes or out is None:
                 return out
-            head = out[0] if out and isinstance(out[0], dict) else None
-            if head and head.get("content") == self._context_note:
-                return out                              # 已贴过，不重复
-            return [{"role": "user", "content": self._context_note}] + list(out)
+            head = {str(m.get("content")) for m in out[:len(self._notes) + 1]
+                    if isinstance(m, dict)}
+            missing = [n for n in self._notes if n and n not in head]
+            if not missing:
+                return out
+            return [{"role": "user", "content": n} for n in missing] + list(out)
 
         # Prune-First：先砍超长工具输出再判阈值（只改本次请求副本，不落 SDK items）
         if self._prune_threshold > 0:
@@ -1221,18 +1230,22 @@ def build_meta_tools(
     allow_dispatch: bool = False,
     todo_store: Any = None,
     available_slots: Optional[List[str]] = None,
+    mcp_session: Any = None,
 ) -> List[FunctionTool]:
     """构造内核元工具（L2 门控）：task_done / verify / escalate / record（+ dispatch / todo_write）。
 
     它们与能力插件**平级**地出现在 Agent 的工具清单里，由 LLM 直接调用；
     但实现属于 L2（收尾门控 / 升级判定 / 世界模型写入），不是能力。
 
-    Args:
+    Args：
         state: 本次运行的状态（工具写入、runner 读取）。
         gate: 提供 `verify(condition)` / `note(text)` 的 L2 门控对象。
         allow_dispatch: 是否暴露 `dispatch`（仅主 agent 有派发权；子 agent 没有）。
         todo_store: 可选待办存储对象（含 `load()` / `save(data)`），仅主 agent 暴露
             `todo_write` 时注入；为 None 则不暴露该工具（子 agent 永不暴露）。
+        mcp_session: 可选 ``McpSession``（有 lazy MCP 时才传）。传了就追加
+            ``mcp_catalog`` / ``mcp_activate`` / ``mcp_call`` 三个元工具——
+            **这是模型唯一能看到 MCP 的入口**，server 的工具 schema 在激活前不出现。
     """
     tools: List[FunctionTool] = [
         _mk_task_done(state, gate, on_state),
@@ -1244,6 +1257,14 @@ def build_meta_tools(
         tools.append(_mk_dispatch(state, gate, available_slots))
         if todo_store is not None:
             tools.append(_mk_todo_write(todo_store))
+    if mcp_session is not None:
+        # 延迟 import：mcp 未启用时这条链路连模块都不加载（零成本）
+        try:
+            from omni_core.tools.mcp_meta import build_mcp_tools
+
+            tools.extend(build_mcp_tools(mcp_session))
+        except Exception:  # noqa: BLE001 —— MCP 是增强项，元工具装不上也不能拖垮主体
+            pass
     return tools
 
 
@@ -1535,6 +1556,13 @@ def _assemble_agent_stack(
     allow_dispatch: bool,
     todo_store: Any,
     available_slots: Optional[List[str]] = None,
+    # lazy MCP（mcp-lazy-activation）：lazy 配置 + 已构造的 server 对象 + 共享激活槽。
+    # 三者都缺省 None → 行为与改造前完全一致（eager 全量注入）。
+    mcp_lazy_cfgs: Optional[List[dict]] = None,
+    mcp_lazy_servers: Optional[Dict[str, Any]] = None,
+    mcp_slots: Optional[Dict[str, Any]] = None,
+    # MCP 目录（L0）：会被压缩/硬滑窗切掉，需在压缩产物上重贴（与 context_note 同款）
+    mcp_catalog: str = "",
     # 能力门（运行级）：False = 纯对话运行，不装配任何工具（详见装配处注释）
     tools_enabled: bool = True,
     # 受限白名单：tools_enabled=False 时仍允许暴露的少数工具（如「显式发送」）
@@ -1621,6 +1649,7 @@ def _assemble_agent_stack(
             prune_head=prune_head,
             prune_tail=prune_tail,
             context_note=context_note,
+            extra_note=mcp_catalog,
         )
     # T4.7：输出截断检测——包在最外层，拿到最终响应的 usage 用量
     if max_output_tokens > 0:
@@ -1635,10 +1664,22 @@ def _assemble_agent_stack(
     # 全部不暴露，模型请求里连 tools 字段都没有：工具调用在物理层不可达，
     # 不是"调用后被拒"（后者仍会给模型可乘之机，也会白烧轮次）。
     # 纯文本收尾由下方 plain_finish_judge 路径正常收口（task_mode=oneshot）。
+    _mcp_session: Any = None
     if tools_enabled:
         _mcp_connected = _ensure_mcp_connected(list(mcp_servers or []))
+        # lazy MCP（mcp-lazy-activation）：server 对象已由 ToolLoop 构造（**未连接**），
+        # 这里只建 per-run 会话。刻意不 connect、不进 agent.mcp_servers——模型调
+        # mcp_activate 才连 + 探活 + append，下一块由 SDK 的 get_mcp_tools 自动纳入。
+        if mcp_lazy_cfgs:
+            try:
+                from omni_core.tools.mcp_meta import McpSession
+
+                _mcp_session = McpSession(mcp_lazy_cfgs, mcp_lazy_servers, mcp_slots)
+            except Exception:  # noqa: BLE001 —— MCP 是增强项，装不上也不能拖垮主体
+                _mcp_session = None
         _agent_tools: List[FunctionTool] = list(tools) + build_meta_tools(
-            state, gate, on_state, allow_dispatch, todo_store, available_slots)
+            state, gate, on_state, allow_dispatch, todo_store, available_slots,
+            mcp_session=_mcp_session)
         _stop_behavior: Any = StopAtTools(stop_at_tool_names=stop_tools)
     elif tool_allowlist:
         # 受限能力（如消息通道的「显式发送」）：只暴露白名单里的工具，
@@ -1673,6 +1714,14 @@ def _assemble_agent_stack(
     if _stop_behavior is not None:
         _agent_kwargs["tool_use_behavior"] = _stop_behavior
     agent = Agent(**_agent_kwargs)
+    if _mcp_session is not None:
+        # 回填引用：mcp_activate 成功时往 agent.mcp_servers 里 append（下一块生效）。
+        # 同时挂到 state 上供收尾/观测使用（SubtaskState 是普通 dataclass，可动态挂属性）。
+        _mcp_session.bind(agent)
+        try:
+            state.mcp_session = _mcp_session
+        except Exception:
+            pass
     return state, agent, model, use_compaction, _repeat_guard
 
 
@@ -1719,6 +1768,14 @@ def run_subtask_sdk(
     allow_dispatch: bool = False,
     todo_store: Any = None,
     available_slots: Optional[List[str]] = None,
+    # lazy MCP：mcp.json 里 mode=lazy 的配置 + ToolLoop 已构造的 server 对象 + 共享激活槽。
+    # 全为 None/空 = 无 lazy server，行为与改造前完全一致。
+    mcp_lazy_cfgs: Optional[List[dict]] = None,
+    mcp_lazy_servers: Optional[Dict[str, Any]] = None,
+    mcp_slots: Optional[Dict[str, Any]] = None,
+    # MCP 服务目录（L0）：一条 user 消息，紧随 skill_catalog 之后、user_input 之前。
+    # 只列"存在什么/干什么/上次状态"，不承诺可用；可用性由 mcp_activate 当场裁定。
+    mcp_catalog: str = "",
     skill_catalog: Optional[str] = None,
     # 2026-11-11：逐 run 处境说明（已从 system 移到起始 user 输入）。压缩/硬滑窗
     # 会切掉起始 items，压缩模型据此在请求副本上重新贴一次；"" = 子任务零注入。
@@ -1765,6 +1822,10 @@ def run_subtask_sdk(
         allow_dispatch=allow_dispatch,
         todo_store=todo_store,
         available_slots=available_slots,
+        mcp_lazy_cfgs=mcp_lazy_cfgs,
+        mcp_lazy_servers=mcp_lazy_servers,
+        mcp_slots=mcp_slots,
+        mcp_catalog=mcp_catalog,
         tools_enabled=tools_enabled,
         tool_allowlist=tool_allowlist,
         budget_hint_ratio=budget_hint_ratio,
@@ -1830,6 +1891,10 @@ def run_subtask_sdk(
     #  模型经 memory_recall / conversation_search 自取，见 implemented/memory-architecture.md §13.1。）
     if skill_catalog:
         items.append({"role": "user", "content": skill_catalog})
+    # MCP 目录（L0）：同样一条 user 消息，紧跟技能目录之后。只注入一次，块间由
+    # to_input_list() 继承；不得每块重贴（重复 priming 会抬高退化概率，见上方注释）。
+    if mcp_catalog:
+        items.append({"role": "user", "content": mcp_catalog})
     # content 可为 str 或内容块数组（多模态输入：文本 + 图片，见 sdk_bridge.build_user_content）
     items.append({"role": "user", "content": user_input})
 

@@ -14,10 +14,12 @@ router = APIRouter(prefix="/bilibili", tags=["runtime"])
 
 
 def _adapter():
-    from gateway.channel_gateway import channel_config
-    from gateway.channels.bilibili import BilibiliAdapter
+    from gateway.channel_gateway import channel_client
 
-    return BilibiliAdapter(channel_config("bilibili"))
+    client = channel_client("bilibili")
+    if client is None:
+        raise RuntimeError("bilibili 通道不可用（先配置 channels/bilibili.yaml）")
+    return client
 
 
 @router.get("/outbox")

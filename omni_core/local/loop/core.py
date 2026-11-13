@@ -172,6 +172,22 @@ class ToolLoop(
         # （实测 connect 从 ~950ms 降到 2.8ms），断连由 sdk_loop 的探活自愈。
         _mcp_cfg = config.load_mcp_config()
         self.mcp_servers = loop_pool.mcp_servers(_mcp_cfg) if self.tools_enabled else []
+        # lazy MCP（mcp-lazy-activation）：只构造对象、不连接；本 run 内跨子任务共享
+        # server 对象与激活槽，避免每个子任务重复建对象/重连。
+        self.mcp_raw_cfg = _mcp_cfg if self.tools_enabled else {}
+        if self.tools_enabled:
+            from omni_core.tools.mcp_meta import build_lazy_bundle
+
+            self.mcp_lazy_cfgs, self.mcp_lazy_servers, self.mcp_slots = build_lazy_bundle(
+                (_mcp_cfg or {}).get("servers"), self._log)
+        else:
+            self.mcp_lazy_cfgs, self.mcp_lazy_servers, self.mcp_slots = (None, None, None)
+        # 双轨收口（可选，默认关）：lazy server 接管某 unit 的工具集时，该 unit 的
+        # 插件工具不再进本轮清单，避免同一能力两份 schema。判定收口在 mcp_meta，
+        # 装配侧只消费结果；缺省空集 = 现有行为零变化。
+        from omni_core.tools.mcp_meta import replaced_units
+
+        self.mcp_replaced_units = replaced_units(self.mcp_lazy_cfgs)
         # 插件装载：扫 plugin_dirs，按各插件 enabled 决定注册与否；单包失败只降级。
         from omni_core.tools.loader import PluginContext, load_plugins
         self.plugin_report = load_plugins(
@@ -326,6 +342,13 @@ class ToolLoop(
         但 ``tool_allowlist`` 列出的工具仍会暴露（如「显式发送」的 msg_send_text）。
         """
         all_tools = list(loop_pool.sdk_tools(self.registry))
+        # 双轨收口：被 lazy MCP 接管的 unit（如某个只读通道 unit）不再暴露插件版只读工具，
+        # 否则同一能力会出现两份 schema（一份常驻、一份按需）。默认集合为空。
+        _replaced = getattr(self, "mcp_replaced_units", None) or set()
+        if _replaced:
+            _keep = {p.name for p in self.registry.plugins
+                     if str(getattr(p, "unit", "") or "") not in _replaced}
+            all_tools = [t for t in all_tools if getattr(t, "name", "") in _keep]
         if getattr(self, "tools_enabled", True):
             return all_tools
         allow = getattr(self, "tool_allowlist", None) or set()

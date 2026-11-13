@@ -11,7 +11,7 @@
 # 安全定位：B站评论区任何人可触达 → allow_tools 缺省 false（纯对话+发送工具）；
 #   平台写操作只经本适配器（配额/黑名单/风控暂停在通道侧机械执行，不靠提示词）。
 # 凭证（三选一，优先级从高到低）：
-#   1. TV 扫码登录（推荐）：双击 scripts/bilibili_login.bat，或
+#   1. TV 扫码登录（推荐）：双击 gateway/channels/bilibili_login.bat，或
 #      python -m gateway.channels.bilibili --login
 #      终端出二维码 → 哔哩哔哩 App 扫码确认 → 凭证自动存 state_dir 凭证文件；
 #   2. 环境变量：BILI_SESSDATA / BILI_JCT / DEDEUSERID

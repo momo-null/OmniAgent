@@ -195,3 +195,49 @@ def test_approve_and_discard_item(adapter, monkeypatch):
     assert adapter.outbox()[1]["status"] == "discarded"
     assert adapter.approve_item(2)["ok"] is False
     assert adapter.approve_item(99)["ok"] is False
+
+
+# === MCP 客户端归并：通道不再自造 JSON-RPC ===
+
+def test_mcp_call_goes_through_mcp_state(adapter, monkeypatch):
+    """写路径统一走 mcp_state.call_tool，配置取 mcp.json 的同名 server。"""
+    from omni_core.tools import mcp_state
+
+    seen = {}
+
+    def fake_call_tool(cfg, tool, arguments=None, timeout_s=15.0):
+        seen.update({"cfg": cfg, "tool": tool, "args": arguments})
+        return {"ok": True, "data": {"comment_id": "c1"}}
+
+    monkeypatch.setattr(mcp_state, "call_tool", fake_call_tool)
+    adapter.mode = "live"
+    ret = adapter.send_text("comment:feed1:x1", "hi")
+    assert ret["ok"] is True and ret.get("comment_id") == "c1"
+    assert seen["tool"] == mod._XHS_TOOLS["comment"]
+    assert seen["args"]["feed_id"] == "feed1"
+    assert seen["cfg"].get("name") == "xiaohongshu"
+
+
+def test_mcp_cfg_falls_back_to_channel_url(adapter, monkeypatch):
+    """mcp.json 没有同名条目时，用通道自身的 mcp_url 合成配置。"""
+    import config as _config
+
+    monkeypatch.setattr(_config, "load_mcp_config", lambda: {"servers": []})
+    cfg = adapter._mcp_cfg()
+    assert cfg["name"] == "xiaohongshu" and cfg["url"] == adapter.mcp_url
+
+
+def test_login_status_text_logged(state_dir, monkeypatch):
+    """纯文本「✅ 已登录」→ True（真实服务的返回形态）。"""
+    a = XhsAdapter({"enabled": True, "mode": "dry_run", "state_dir": str(state_dir)})
+    monkeypatch.setattr(a, "_mcp_call",
+                        lambda t, a2=None: {"ok": True, "data": "✅ 已登录\n用户名: 某人"})
+    assert a._login_status(force=True) is True
+
+
+def test_login_status_text_not_logged(state_dir, monkeypatch):
+    """纯文本「❌ 未登录」→ False（不能因为"非空字符串为真"误判成已登录）。"""
+    a = XhsAdapter({"enabled": True, "mode": "dry_run", "state_dir": str(state_dir)})
+    monkeypatch.setattr(a, "_mcp_call",
+                        lambda t, a2=None: {"ok": True, "data": "❌ 未登录，请先扫码"})
+    assert a._login_status(force=True) is False

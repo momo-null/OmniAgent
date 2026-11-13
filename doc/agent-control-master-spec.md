@@ -7,7 +7,7 @@
 > M3 落地**：对讲式 + 免提（Web 按住说话）、TTS = CosyVoice2 零样本克隆
 > （`plugins/voice` + `plugins/voice/cosyvoice2_rt/`，Kokoro 已移除）、QQ 通道语音与群
 > 上下文；④ **通道网关**（QQ / 飞书 / 企业微信连接器 + 外部来源加固）与**远程客户端契约**
-> （`doc/plans/remote-client-contract-2026-10-30.md`，内网鉴权 PC-0，`memory/sync` 待实现）；
+> （`doc/plans/implemented/remote-client-contract-2026-10-30.md`，内网鉴权 PC-0，`memory/sync` 待实现）；
 > ⑤ 实验资产清理：EasyOCR / yolo / qwen 底模与 minesweeper 合并产物已删除，OCR = RapidOCR。
 > 历史段落保留原始表述作为决策留档。
 >
@@ -44,7 +44,7 @@
 | 记忆 L1 单库化（brain.db） | ✅ 已落地 | TAM 双库退役；`~/.omniagent/memory/brain.db`（SQLite + FTS5 simple 分词）+ L2 场景块 + L3 画像 + 巩固周期；权威见 `doc/plans/implemented/memory-architecture.md` |
 | 语音 M3（对讲式 + 免提） | ✅ 已落地+听感验收 | Web 按住说话 / 免提 VAD / 回复播报 / 声学打断；TTS = CosyVoice2 零样本克隆（`plugins/voice` + `cosyvoice2_rt/`，Kokoro 已移除）；QQ 通道语音与群聊上下文；见 `doc/plans/voice-m3-2026-10-29.md` |
 | 通道网关 | ✅ 已落地 | QQ / 飞书 / 企业微信连接器（`gateway/channels/`）+ 群聊上下文注入 + 外部来源加固（发送工具锁死来源会话） |
-| 远程客户端契约 | ✅ 契约冻结 | 内网鉴权（PC-0，非回环 Bearer）+ 5 端点通用契约（`memory/sync` 待实现）；见 `doc/plans/remote-client-contract-2026-10-30.md` |
+| 远程客户端契约 | ✅ 契约冻结 | 内网鉴权（PC-0，非回环 Bearer）+ 5 端点通用契约（`memory/sync` 待实现）；见 `doc/plans/implemented/remote-client-contract-2026-10-30.md` |
 
 ---
 
@@ -206,7 +206,7 @@
 - **三通道解耦（2026-08-02）**：Settings → 通道 Tab，planner(brain) / executor / vision 三通道各自独立开关 + base_url/model/api_key 配置，替换原「运行模式三态」下拉。`mode`（dual/online_only/local_only）退化为快捷预设（选 online_only 自动关 executor+vision）。内核 `tool_loop.py` 真实消费（详见 §14.3 与 `agent-control-arch-2026-07-26.html` §12.4）。
 - **语音（M3，2026-10-29/30 落地）**：Web 会话页按住说话（对讲式）+ 免提（常开 VAD 自动判句 + 声学打断 + 回复自动朗读）+ 回复旁 🔊 播报；TTS = CosyVoice2 零样本克隆（音色 = `voices/<名字>.wav` 参考音频），STT = SenseVoice；`plugins/voice` 懒加载插件 + `/api/audio/transcribe|tts` 薄壳端点。见 `doc/plans/voice-m3-2026-10-29.md`。
 - **通道网关（2026-10-28 起落地）**：`gateway/channels/`（QQ=NapCat / 飞书 / 企业微信连接器）+ 群聊上下文注入 + 外部来源加固（外部可达通道跑任务时发送工具锁死来源会话、MCP 不连接）+ QQ 语音消息（入站转写保留媒介标记、出站 `msg_send_voice` 工具）。
-- **远程客户端契约（2026-10-30）**：任意外部 HTTP 客户端经内网/远程使用运行时——非回环 Bearer 鉴权（PC-0）+ 5 端点冻结契约（`memory/sync` 待实现）+ SSE `sub` 旁路多播。见 `doc/plans/remote-client-contract-2026-10-30.md`。
+- **远程客户端契约（2026-10-30）**：任意外部 HTTP 客户端经内网/远程使用运行时——非回环 Bearer 鉴权（PC-0）+ 5 端点冻结契约（`memory/sync` 待实现）+ SSE `sub` 旁路多播。见 `doc/plans/implemented/remote-client-contract-2026-10-30.md`。
 - **桌面壳（v1.0.1+）**：Electron 同壳 spawn 后端与网关、Web UI 过期自动重建、右侧 artifacts dock（files/browser/git/terminal/debug 分页）。
 
 ---

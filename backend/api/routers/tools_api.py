@@ -30,7 +30,8 @@ async def list_tools():
 
         from omni_core.tools.base import TOOL_REGISTRY
         from omni_core.tools.loader import PluginContext, list_plugins, load_plugins
-        from omni_core.tools.mcp_servers import build_mcp_servers
+        from omni_core.tools.mcp_servers import build_mcp_servers, server_name, split_configs
+        from omni_core.tools import mcp_state
         from omni_core.async_bridge import run_async
 
         cfg = app_config.load_config() or {}
@@ -53,17 +54,25 @@ async def list_tools():
 
         mcp_cfg = config.load_mcp_config()
 
-        # MCP 工具发现（只读枚举）：实际连接已启用 server 并 list_tools，
+        # MCP 工具发现（只读枚举）：**只对 mode=eager 的 server 真连接 + list_tools**，
         # 与运行时 _ensure_mcp_connected 同机制；单个 server 连不上 / 探活失败只跳过，
         # 不拖垮整个枚举。工具名带 SDK 前缀 mcp_<server>__<tool>（与 agent 实际可见名一致）。
+        #
+        # lazy server **绝不在这里连接**（mcp-lazy-activation）：否则"打开设置页"就等于
+        # "开了就连"，懒加载白做。它们只读 mcp_state 缓存（状态 + 上次 list_tools 的名字），
+        # 参数 schema 不下发——激活后由 SDK 自己注入。
+        _all_cfgs = list(mcp_cfg.get("servers") or [])
+        _eager_cfgs, _lazy_cfgs = split_configs(_all_cfgs)
         try:
-            _mcp_servers = build_mcp_servers(mcp_cfg.get("servers"), log=lambda m: None)
+            _mcp_servers = build_mcp_servers(_eager_cfgs, log=lambda m: None)
             for _srv in _mcp_servers:
                 _nm = str(getattr(_srv, "name", "?") or "?")
                 try:
                     if getattr(_srv, "session", None) is None:
                         run_async(_srv.connect(), timeout=15)
-                    _raw = run_async(_srv.list_tools(), timeout=15) or []
+                    # 走统一入口：配了 callable tool_filter 的 server 在上下文外裸调
+                    # list_tools() 会被 SDK 拒（agents/mcp/server.py:1019）
+                    _raw = mcp_state.list_tools(_srv, timeout_s=15)
                     for _rt in _raw:
                         _rn = str(getattr(_rt, "name", "") or "")
                         if not _rn:
@@ -87,21 +96,51 @@ async def list_tools():
                         pass
         except Exception:
             pass
+        try:
+            _states = mcp_state.load_all()
+            for _lc in _lazy_cfgs:
+                _nm = server_name(_lc)
+                _st = _states.get(_nm)
+                for _rn in (list(_st.tools) if _st else []):
+                    tools.append({
+                        "name": f"mcp_{_nm}__{_rn}",
+                        "description": "",
+                        "source": "mcp",
+                        "unit": _nm,
+                        "server": _nm,
+                        "parameters": {},
+                        "lazy": True,
+                        "state": (_st.state if _st else mcp_state.UNKNOWN),
+                        "ready": bool(_st.ready) if _st else False,
+                    })
+        except Exception:
+            pass
 
         tools.sort(key=lambda t: (t["source"], t["name"]))
 
         servers = []
+        _all_states = mcp_state.load_all()
         for s in mcp_cfg.get("servers") or []:
             if not isinstance(s, dict):
                 continue
+            _sn = str(s.get("name") or "")
+            _ss = _all_states.get(_sn)
             servers.append({
-                "name": s.get("name", ""),
+                "name": _sn,
                 "enabled": bool(s.get("enabled", True)),
                 "command": s.get("command", ""),
                 "args": list(s.get("args") or []),
                 "url": s.get("url", ""),
                 # env 只回传键名，不回传值（防密钥泄露）
                 "env_keys": sorted((s.get("env") or {}).keys()),
+                # lazy 语义（mcp-lazy-activation）：前端据此显示"按需激活"与上次观测状态，
+                # 不要拿 state 当"已连接"（它是缓存观测，可能过时）。
+                "mode": str(s.get("mode") or "lazy"),
+                "desc": str(s.get("desc") or ""),
+                "state": (_ss.state if _ss else mcp_state.UNKNOWN),
+                "ready": bool(_ss.ready) if _ss else False,
+                "state_reason": (_ss.reason if _ss else ""),
+                "state_age_sec": (int(_ss.fresh_sec) if _ss and _ss.ts else -1),
             })
 
         return JSONResponse({

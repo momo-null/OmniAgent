@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OmniAgent 记忆架构 · 全景</title>
+<style>
+  :root{
+    --bg:#f8fafc; --panel:#ffffff; --ink:#0f172a; --sub:#475569; --line:#e2e8f0;
+    --l0:#2563eb; --l1:#7c3aed; --l2:#059669; --l3:#d97706;
+    --obs:#0d9488; --nar:#db2777; --vec:#0891b2; --cir:#65a30d; --warn:#dc2626;
+    --code:#f1f5f9;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.75 "PingFang SC","Microsoft YaHei","Segoe UI",system-ui,sans-serif;}
+  a{color:var(--l0);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .layout{display:flex;max-width:1280px;margin:0 auto;gap:28px;padding:0 20px}
+  nav{width:210px;flex:none;position:sticky;top:0;align-self:flex-start;
+    max-height:100vh;overflow-y:auto;padding:28px 0 40px;font-size:13px}
+  nav .brand{font-weight:700;font-size:15px;margin-bottom:14px;letter-spacing:.5px}
+  nav a{display:block;color:var(--sub);padding:4px 10px;border-left:2px solid transparent}
+  nav a:hover{color:var(--ink);text-decoration:none;background:#eef2f7}
+  nav a.sec{font-weight:600;color:var(--ink);margin-top:10px}
+  main{flex:1;min-width:0;padding:28px 0 120px}
+  h1{font-size:26px;margin:8px 0 4px}
+  h2{font-size:20px;margin:56px 0 6px;padding-top:18px;border-top:1px solid var(--line)}
+  h2 .tag{font-size:12px;font-weight:400;color:var(--sub);margin-left:8px}
+  h3{font-size:16px;margin:26px 0 4px}
+  p{margin:8px 0}
+  .sub{color:var(--sub)}
+  .meta{color:var(--sub);font-size:13px}
+  code{background:var(--code);border:1px solid var(--line);border-radius:4px;
+    padding:1px 5px;font:12.5px/1.5 Consolas,Menlo,monospace}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 18px;
+    overflow-x:auto;font:12.5px/1.7 Consolas,Menlo,monospace}
+  pre code{background:none;border:none;color:inherit;padding:0}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13.5px;background:var(--panel)}
+  th,td{border:1px solid var(--line);padding:7px 11px;text-align:left;vertical-align:top}
+  th{background:#f1f5f9;font-weight:600;white-space:nowrap}
+  .figure{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:18px 14px 10px;margin:16px 0}
+  .figure figcaption{color:var(--sub);font-size:12.5px;padding:6px 8px 4px;text-align:center}
+  svg{display:block;width:100%;height:auto}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+  .card h4{margin:2px 0 6px;font-size:13.5px}
+  .card p{margin:4px 0;font-size:13px;color:var(--sub)}
+  .pill{display:inline-block;border-radius:99px;padding:1px 10px;font-size:12px;font-weight:600;
+    color:#fff;margin-right:6px}
+  .p-l0{background:var(--l0)} .p-l1{background:var(--l1)} .p-l2{background:var(--l2)}
+  .p-l3{background:var(--l3)} .p-obs{background:var(--obs)} .p-nar{background:var(--nar)}
+  .p-vec{background:var(--vec)} .p-cir{background:var(--cir)} .p-warn{background:var(--warn)}
+  .invariant{border-left:3px solid var(--l1);background:var(--panel);border-radius:0 10px 10px 0;
+    padding:8px 14px;margin:8px 0;font-size:13.5px}
+  .invariant b{color:var(--l1)}
+  .note{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:10px 14px;
+    font-size:13.5px;margin:10px 0}
+  .note b{color:#92400e}
+  ul{margin:6px 0;padding-left:22px}
+  li{margin:3px 0}
+  /* SVG 通用样式 */
+  .svgbox text{font-family:inherit}
+  .nd{fill:#fff;stroke-width:1.4;rx:10}
+  .nd-t{font-size:13px;font-weight:600;fill:var(--ink)}
+  .nd-s{font-size:11px;fill:var(--sub)}
+  .eg{stroke:#94a3b8;stroke-width:1.4;fill:none}
+  .eg-t{font-size:11px;fill:var(--sub)}
+  .lane{fill:#f8fafc;stroke:#e2e8f0;stroke-dasharray:4 4}
+  .lane-t{font-size:12px;font-weight:700;fill:var(--sub);letter-spacing:1px}
+  .chip{font-size:11px;font-weight:600}
+  /* SVG 展示属性不支持 var()——属性选择器桥接（浏览器忽略无效属性、应用本规则） */
+  svg [fill="var(--ink)"]{fill:var(--ink)}   svg [stroke="var(--ink)"]{stroke:var(--ink)}
+  svg [fill="var(--sub)"]{fill:var(--sub)}   svg [stroke="var(--sub)"]{stroke:var(--sub)}
+  svg [fill="var(--l0)"]{fill:var(--l0)}     svg [stroke="var(--l0)"]{stroke:var(--l0)}
+  svg [fill="var(--l1)"]{fill:var(--l1)}     svg [stroke="var(--l1)"]{stroke:var(--l1)}
+  svg [fill="var(--l2)"]{fill:var(--l2)}     svg [stroke="var(--l2)"]{stroke:var(--l2)}
+  svg [fill="var(--l3)"]{fill:var(--l3)}     svg [stroke="var(--l3)"]{stroke:var(--l3)}
+  svg [fill="var(--obs)"]{fill:var(--obs)}   svg [stroke="var(--obs)"]{stroke:var(--obs)}
+  svg [fill="var(--nar)"]{fill:var(--nar)}   svg [stroke="var(--nar)"]{stroke:var(--nar)}
+  svg [fill="var(--vec)"]{fill:var(--vec)}   svg [stroke="var(--vec)"]{stroke:var(--vec)}
+  svg [fill="var(--cir)"]{fill:var(--cir)}   svg [stroke="var(--cir)"]{stroke:var(--cir)}
+  svg [fill="var(--warn)"]{fill:var(--warn)} svg [stroke="var(--warn)"]{stroke:var(--warn)}
+  @media (max-width:960px){
+    .layout{flex-direction:column}
+    nav{position:static;width:auto;max-height:none;padding-bottom:0}
+    .grid2,.grid3{grid-template-columns:1fr}
+  }
+  @media print{nav{display:none}.figure{break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav>
+  <div class="brand">记忆架构 · 全景</div>
+  <a href="#overview" class="sec">总览</a>
+  <a href="#writepath">写链总纲</a>
+  <a href="#l0" class="sec">L0 会话与观察</a>
+  <a href="#l1" class="sec">L1 原子记忆</a>
+  <a href="#promotion">观察升格 7.5</a>
+  <a href="#recall" class="sec">召回与向量臂</a>
+  <a href="#l2" class="sec">L2 场景块</a>
+  <a href="#l3" class="sec">L3 自我画像</a>
+  <a href="#consolidation" class="sec">巩固周期</a>
+  <a href="#diary">日记系统</a>
+  <a href="#relations">关系卡</a>
+  <a href="#circle">语境链</a>
+  <a href="#inject" class="sec">注入面全景</a>
+  <a href="#redline" class="sec">写入通道红线</a>
+  <a href="#invariants" class="sec">不变量 14 条</a>
+  <a href="#observe" class="sec">观测与验收</a>
+</nav>
+<main>
+<h1>OmniAgent 记忆架构</h1>
+<p class="meta">2026-11-13 · 与 <code>doc/plans/implemented/memory-architecture.md</code> 及分支
+<code>feat/vector-recall</code> 现行实现同步 · 写链总纲：<b>事件 → 助手的取舍 → 记忆</b></p>
+
+<h2 id="overview">总览<span class="tag">一张图看全部</span></h2>
+<p>记忆系统分四层（L0→L3）加三条侧翼资产。所有写入只能经<b>内核</b>发生；助手的行为权
+通过工具代理；世界事件一律先落 L0，成为「她的记忆」必须经过一次她的动作或巩固期的内化。</p>
+
+<figure class="figure">
+<svg viewBox="0 0 980 620" class="svgbox" role="img" aria-label="记忆架构总览图">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#64748b"/>
+    </marker>
+  </defs>
+  <!-- 世界层 -->
+  <rect x="20" y="16" width="940" height="86" rx="12" fill="#f1f5f9" stroke="#cbd5e1" stroke-dasharray="5 4"/>
+  <text x="36" y="40" class="lane-t">世界层（事件源 · 只增不改 · 不经取舍不成为记忆）</text>
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="60" y="54" width="150" height="34" rx="8" fill="#fff" stroke="#94a3b8"/><text x="135" y="75">life 事件流 days/knowledge</text>
+    <rect x="240" y="54" width="150" height="34" rx="8" fill="#fff" stroke="#94a3b8"/><text x="315" y="75">群聊 / 私聊原文</text>
+    <rect x="420" y="54" width="150" height="34" rx="8" fill="#fff" stroke="#94a3b8"/><text x="495" y="75">任务产出 / 工具结果</text>
+    <rect x="600" y="54" width="170" height="34" rx="8" fill="#fff" stroke="#94a3b8"/><text x="685" y="75">主人的话（Web / QQ）</text>
+  </g>
+  <path class="eg" d="M495 102 L495 128" marker-end="url(#ar)"/>
+  <text x="505" y="120" class="eg-t">落 L0（写入口，零提炼）</text>
+
+  <!-- L0 -->
+  <rect x="20" y="132" width="940" height="96" rx="12" fill="#eff6ff" stroke="#bfdbfe"/>
+  <rect x="20" y="132" width="6" height="96" rx="3" fill="var(--l0)"/>
+  <text x="40" y="156" class="lane-t" fill="#1d4ed8">L0 · 逐字层</text>
+  <g font-size="12.5" text-anchor="middle">
+    <rect x="60" y="172" width="180" height="40" rx="8" fill="#fff" stroke="var(--l0)"/><text x="150" y="189">s_*.jsonl 会话文件真相</text><text x="150" y="204" font-size="11" fill="var(--sub)">TaskStore 维护</text>
+    <rect x="270" y="172" width="200" height="40" rx="8" fill="#fff" stroke="var(--l0)"/><text x="370" y="189">l0_messages + l0_fts 检索副本</text><text x="370" y="204" font-size="11" fill="var(--sub)">source_kind: chat | observation | task</text>
+    <rect x="500" y="172" width="200" height="40" rx="8" fill="#fff" stroke="var(--obs)"/><text x="600" y="189">观察行 capture_observation()</text><text x="600" y="204" font-size="11" fill="var(--sub)">provenance 必填 · source_external 投毒锁</text>
+  </g>
+  <path class="eg" d="M600 212 L600 244" marker-end="url(#ar)"/>
+  <text x="610" y="234" class="eg-t">① 她记一笔 memory_observe(text, source)</text>
+  <path class="eg" d="M160 212 L160 340" marker-end="url(#ar)"/>
+  <text x="90" y="300" class="eg-t">巩固期读素材</text>
+  <path class="eg" d="M370 212 L370 244" marker-end="url(#ar)"/>
+  <text x="380" y="234" class="eg-t">② 她显式记 memory_remember（跳过巩固直进 L1）</text>
+
+  <!-- 内在层框 -->
+  <rect x="20" y="248" width="940" height="330" rx="12" fill="#faf5ff" stroke="#e9d5ff" stroke-dasharray="5 4"/>
+  <text x="36" y="272" class="lane-t" fill="#6b21a8">内在层（经过她的取舍，才是「她的」记忆）</text>
+
+  <!-- 观察层 -->
+  <rect x="500" y="248" width="240" height="56" rx="10" fill="#f0fdfa" stroke="var(--obs)"/>
+  <text x="620" y="270" text-anchor="middle" font-size="13" font-weight="600" fill="var(--obs)">观察层（L0 分道）</text>
+  <text x="620" y="288" text-anchor="middle" font-size="11.5" fill="var(--sub)">observation_search 可查 · 巩固期可升格</text>
+  <path class="eg" d="M620 304 L620 336" marker-end="url(#ar)"/>
+  <text x="630" y="326" class="eg-t">7.5 升格（source_external=0）</text>
+
+  <!-- L1 -->
+  <rect x="330" y="340" width="580" height="102" rx="12" fill="#f5f3ff" stroke="var(--l1)"/>
+  <rect x="330" y="340" width="6" height="102" rx="3" fill="var(--l1)"/>
+  <text x="350" y="364" class="lane-t" fill="#5b21b6">L1 · 原子事实（brain.db · atoms 44 条）</text>
+  <g font-size="12" text-anchor="middle">
+    <rect x="360" y="380" width="160" height="46" rx="8" fill="#fff" stroke="var(--l1)"/>
+    <text x="440" y="398">memory_remember 显式记</text><text x="440" y="413" font-size="11" fill="var(--sub)">importance 0.8 直写</text>
+    <rect x="540" y="380" width="170" height="46" rx="8" fill="#fff" stroke="var(--l1)"/>
+    <text x="625" y="398">观察升格（巩固 7.5）</text><text x="625" y="413" font-size="11" fill="var(--sub)">四态 · cos_floor 0.52（向量）</text>
+    <rect x="730" y="380" width="160" height="46" rx="8" fill="#fff" stroke="var(--l1)"/>
+    <text x="810" y="398">episode≥3 → rule 抽象</text><text x="810" y="413" font-size="11" fill="var(--sub)">peer 分组</text>
+  </g>
+  <path class="eg" d="M620 442 L620 470" marker-end="url(#ar)"/>
+  <text x="630" y="462" class="eg-t">L1 增量 = L2 进料（一池不分组）</text>
+
+  <!-- L2 -->
+  <rect x="330" y="474" width="380" height="52" rx="10" fill="#f0fdf4" stroke="var(--l2)"/>
+  <rect x="330" y="474" width="6" height="52" rx="3" fill="var(--l2)"/>
+  <text x="350" y="496" class="lane-t" fill="#065f46">L2 · 场景块（scene_blocks，max 15 三级预警）</text>
+  <text x="350" y="514" font-size="11.5" fill="var(--sub)">维护 agent：UPDATE &gt; MERGE &gt; CREATE · 墙钟 300s · 游标五不推进</text>
+
+  <!-- L3 -->
+  <rect x="740" y="474" width="170" height="52" rx="10" fill="#fffbeb" stroke="var(--l3)"/>
+  <rect x="740" y="474" width="6" height="52" rx="3" fill="var(--l3)"/>
+  <text x="758" y="496" class="lane-t" fill="#92400e">L3 · 自我画像</text>
+  <text x="758" y="514" font-size="11.5" fill="var(--sub)">self_profile &lt;self-persona&gt;</text>
+
+  <!-- 叙事资产（侧翼） -->
+  <rect x="40" y="340" width="260" height="186" rx="12" fill="#fdf2f8" stroke="var(--nar)"/>
+  <text x="56" y="364" class="lane-t" fill="#9d174d">叙事资产（可检索 · 正文不进注入面）</text>
+  <g font-size="12">
+    <rect x="56" y="378" width="228" height="34" rx="8" fill="#fff" stroke="var(--nar)"/>
+    <text x="68" y="394">日记 diary-&lt;日期&gt;.md（D+1 · ≤1800 字）</text>
+    <text x="68" y="408" font-size="11" fill="var(--sub)">素材 v4：气泡+见闻+生活+回看</text>
+    <rect x="56" y="420" width="228" height="34" rx="8" fill="#fff" stroke="var(--nar)"/>
+    <text x="68" y="436">关系卡 relations/&lt;uid&gt;.md（L0 直驱）</text>
+    <text x="68" y="450" font-size="11" fill="var(--sub)">主人卡合成 key · 称呼由卡内 name 决定</text>
+    <rect x="56" y="462" width="228" height="30" rx="8" fill="#fff" stroke="var(--nar)"/>
+    <text x="68" y="481">月记 diary-month-*.md（≥3 篇才压）</text>
+  </g>
+  <path class="eg" d="M168 526 L168 552 L490 552" marker-end="url(#ar)"/>
+  <text x="200" y="546" class="eg-t">narrative_search / narrative_read 按需自取</text>
+
+  <!-- 语境链 -->
+  <rect x="40" y="560" width="870" height="0" fill="none"/>
+  <rect x="490" y="560" width="470" height="0" fill="none"/>
+</svg>
+<figcaption>总览：世界→L0→（取舍）→观察/L1→L2/L3；叙事资产由巩固期与 L0 直驱生成；消费走注入面与自取工具。</figcaption>
+</figure>
+
+<h2 id="writepath">写链总纲<span class="tag">2026-11-10 定稿</span></h2>
+<p>工具视角曾把每处判断真空都用代码补一个门。她活过来之后，原则变成一句话：
+<b>对有判断力的人，门应该变成她知道的常识，而不是她看不见的钳夹。</b></p>
+
+<figure class="figure">
+<svg viewBox="0 0 980 300" class="svgbox" role="img" aria-label="写链总纲三层图">
+  <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="#64748b"/></marker></defs>
+  <g>
+    <rect x="30" y="20" width="920" height="70" rx="12" fill="#f1f5f9" stroke="#cbd5e1"/>
+    <text x="50" y="46" font-size="14" font-weight="700" fill="var(--ink)">世界层</text>
+    <text x="50" y="66" font-size="12" fill="var(--sub)">事件源：life 流水 · 群聊原文 · 任务产出 · 主人的话 —— 只进 L0 / 事件记录，只增不改，核不核验都行</text>
+    <path class="eg" d="M490 90 L490 120" marker-end="url(#ar2)"/>
+    <text x="500" y="112" class="eg-t">↓ 经她的取舍（记一笔 / 显式记 / 巩固内化 / 不记）</text>
+    <rect x="30" y="124" width="920" height="76" rx="12" fill="#faf5ff" stroke="#d8b4fe"/>
+    <text x="50" y="150" font-size="14" font-weight="700" fill="var(--l1)">内在层 —— 人格就活在这一层</text>
+    <text x="50" y="170" font-size="12" fill="var(--sub)">取舍的落点：观察（memory_observe）· 事实（memory_remember）· 日记 · 关系卡 · 原子（巩固内化）</text>
+    <text x="700" y="170" font-size="12" fill="var(--warn)">工程侧不做准入评分：没有白名单、没有可信度打分</text>
+    <path class="eg" d="M490 200 L490 228" marker-end="url(#ar2)"/>
+    <text x="500" y="222" class="eg-t">↓ 被场合唤醒</text>
+    <rect x="30" y="232" width="920" height="54" rx="12" fill="#f0fdf4" stroke="#86efac"/>
+    <text x="50" y="256" font-size="14" font-weight="700" fill="var(--l2)">表达层 —— 她说话 = 内在层被唤醒的部分</text>
+    <text x="50" y="274" font-size="12" fill="var(--sub)">出口按表达形态治理：允许第一人称见闻，禁止冒充客观断言；wrong_context_rate = 0</text>
+  </g>
+</svg>
+<figcaption>写链总纲：世界可以灌进来，但只有经过她的手才变成「她的」。记忆不是现实的副本，是她对现实的选择。</figcaption>
+</figure>
+
+<div class="grid2">
+<div class="card"><h4><span class="pill p-obs">要点</span>收尾零提炼（严格 L1）</h4>
+<p>任务收尾 <code>flush_brain</code> <b>不再自动蒸馏原子</b>——只做语境链、关系卡（L0 直驱）、
+L2 维护、巩固调度。旧「对话直接提炼 L1」会把她执行任务的路径细节当规则收进事实库
+（2026-11-09 实证 9 条全废）。</p></div>
+<div class="card"><h4><span class="pill p-obs">要点</span>allow_atoms 已退场</h4>
+<p>「按来源一刀切」的记忆准入开关整删。防投毒的正确防线 = 事件取舍 + <code>source_external</code>
+结构信号 + 升格门槛。禁止任何「换个枚举名还是一刀切」的伪替代。</p></div>
+</div>
+
+<h2 id="l0">L0 · 会话与观察</h2>
+<p>一切记忆的原料层。会话原文是文件真相（<code>projects/&lt;pid&gt;/s_*.jsonl</code>），
+<code>brain.db</code> 的 <code>l0_messages + l0_fts</code> 是写入即同步的<b>可重建检索副本</b>。</p>
+<table>
+<tr><th style="width:120px">字段/概念</th><th>说明</th></tr>
+<tr><td><code>source_kind</code></td><td><code>chat</code> 通道对话 / <code>observation</code> 主动见闻 / <code>task</code> 任务输入——INV-13 分道，<code>conversation_search</code> 只查 chat，见闻走 <code>observation_search</code></td></tr>
+<tr><td><code>provenance</code></td><td>结构化出处（H-7 <b>缺出处不入库</b>）：platform / surface / source / ref …</td></tr>
+<tr><td><code>source_external</code></td><td>边界层盖章的「外部可达来源」布尔信号——外部记下的见闻<b>永不升格</b>为世界事实（投毒锁）</td></tr>
+<tr><td><code>speaker</code></td><td>「名片(uid)」结构化标注（2026-11-01 起 QQ 先行）——日记与关系卡据此把经历记到正确的人头上</td></tr>
+<tr><td><code>record_id</code></td><td>(会话, 时间, 角色, 文本) 派生哈希——回填与实时写入天然幂等</td></tr>
+</table>
+<p>观察进料道的 agent 写入面是 <code>memory_observe(text, source)</code> 工具
+（agent → 工具 → 内核代理，红线形态；出处必填）。读端 <code>observation_search</code>。
+采集器走 <code>observation_collector</code> 能力，同入口。</p>
+
+<h2 id="l1">L1 · 原子记忆</h2>
+<p><code>brain.db · atoms</code>（active 44 / tombstone 25 @2026-11-13）。project 只是
+<code>origin</code> 溯源标签，不是分区键；persona 冻结恒空；owner 列已 DROP。</p>
+
+<h3>三条生长路径（严格 L1）</h3>
+<figure class="figure">
+<svg viewBox="0 0 980 330" class="svgbox" role="img" aria-label="L1 三条生长路径">
+  <defs><marker id="ar3" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="#7c3aed"/></marker></defs>
+  <g font-size="12.5">
+    <rect x="30" y="30" width="280" height="92" rx="12" fill="#fff" stroke="var(--l1)"/>
+    <text x="50" y="56" font-weight="700">① 显式记（当场）</text>
+    <text x="50" y="76" fill="var(--sub)">memory_remember(text, kind)</text>
+    <text x="50" y="94" fill="var(--sub)">「这个我现在就要记住」importance 0.8</text>
+    <rect x="350" y="30" width="280" height="92" rx="12" fill="#fff" stroke="var(--l1)"/>
+    <text x="370" y="56" font-weight="700">② 观察升格（巩固期 7.5 步）</text>
+    <text x="370" y="76" fill="var(--sub)">她记的见闻 → 结论短句 ≤60 字</text>
+    <text x="370" y="94" fill="var(--sub)">只取 source_external=0 · 幂等=观察 rid</text>
+    <rect x="670" y="30" width="280" height="92" rx="12" fill="#fff" stroke="var(--l1)"/>
+    <text x="690" y="56" font-weight="700">③ episode → rule 抽象</text>
+    <text x="690" y="76" fill="var(--sub)">同 peer / 同主题 ≥3 条具体事件</text>
+    <text x="690" y="94" fill="var(--sub)">提炼 1 条通用 rule</text>
+    <path d="M170 122 L170 180 L430 180" stroke="var(--l1)" stroke-width="1.6" fill="none" marker-end="url(#ar3)"/>
+    <path d="M490 122 L490 180" stroke="var(--l1)" stroke-width="1.6" fill="none" marker-end="url(#ar3)"/>
+    <path d="M810 122 L810 180 L550 180" stroke="var(--l1)" stroke-width="1.6" fill="none" marker-end="url(#ar3)"/>
+    <rect x="300" y="184" width="380" height="66" rx="12" fill="#f5f3ff" stroke="var(--l1)" stroke-width="1.6"/>
+    <text x="490" y="210" text-anchor="middle" font-weight="700" fill="var(--l1)">atoms（事实层）</text>
+    <text x="490" y="230" text-anchor="middle" fill="var(--sub)">四态一致性：novel / duplicate / merge / conflict</text>
+    <text x="490" y="246" text-anchor="middle" fill="var(--sub)">跨适用域不许 merge · 超 200 字拒并 · 绝不静默截断</text>
+  </g>
+</svg>
+<figcaption>严格 L1：只有这三条「她的动作」能生长事实层。收尾对话流自动提炼已整段退役。</figcaption>
+</figure>
+
+<h3>检索排序（融合公式）</h3>
+<pre><code>rel   = bm25_rank_to_score(rank) = (-rank)/(1+(-rank))     # 绝对分，非候选集内归一
+final = 0.55·rel + 0.30·importance + 0.15·exp(-days/180)
+peer 命中 ×1.25（加权不过滤）│ 最近环内 ×0.85（只降权）
+同场合 ×(1+0.25) │ 圈层话题词面 ×(1+0.10)                    # INV-3 加权不过滤
+final &lt; 0.30 → 丢；去冗余 (kind, peer, content[:12])；轮换环 64；top_k = 5</code></pre>
+<p class="sub">向量通道（见 <a href="#recall">召回与向量臂</a>）是并列候选源：向量专属行
+<code>rel = max(0, cos)</code> 进同一公式；FTS 行 rel 一律 bm25 原值，逐值不变。</p>
+
+<h3>atoms 列语义</h3>
+<table>
+<tr><th>列</th><th>语义</th></tr>
+<tr><td><code>kind</code></td><td>fact / preference / rule / episode</td></tr>
+<tr><td><code>importance</code></td><td>长期价值（显式记缺省 0.8，升格由 LLM 打分）；salience 恒等于它（P7 删衰减）</td></tr>
+<tr><td><code>state</code></td><td>active / tombstone（审计链，superseded_by 指向新条）</td></tr>
+<tr><td><code>peer</code></td><td>关系对象「名片(uid)」；检索命中 ×1.25 加权不过滤</td></tr>
+<tr><td><code>context_key</code></td><td>一等场合键——只加权不过滤，<b>禁止写进 SQL WHERE</b>（INV-3）</td></tr>
+<tr><td><code>source_kind</code></td><td>dialogue（含显式记）/ observation（巩固升格）</td></tr>
+<tr><td><code>observed_at / provenance / review_after</code></td><td>出处与时效，只作追溯不判真假（INV-14）</td></tr>
+</table>
+
+<h2 id="promotion">观察升格（巩固 7.5 步）</h2>
+<p><code>promote_observations</code> 是「她记的见闻」内化成「她记得的事实」的唯一通道：</p>
+<ul>
+<li>取<b>未升格</b>且 <code>source_external = 0</code> 的观察行（外部可达来源的见闻永不升格——投毒锁）；</li>
+<li>LLM 逐条提炼成 ≤60 字结论短句（提炼器不是守门人——不做 keep/reject，无每日上限，
+提不出稳定结论给空串跳过）；</li>
+<li>四态一致性裁决后入事实层，写齐 <code>source_kind / observed_at / provenance / context_key</code>；</li>
+<li>幂等键 = 观察 record_id 存 <code>atoms.source_task</code>，重跑不重复；</li>
+<li>在日记步之前跑——升格产物当轮即可被日记素材引用。</li>
+</ul>
+<p class="meta">实测：20 条（11-09 旧观察 + 11-10 memory_observe）→ 20 stored；11-13 再升格 11 条、去重合并吸收 2 条。</p>
+
+<h2 id="recall">召回与向量臂</h2>
+<p>检索是三池并列：L1 原子（<code>search_brain</code>）、L0 原话/见闻
+（<code>search_l0</code>）、叙事（<code>narrative_search</code>）。每条检索链都是
+<b>FTS 词法 + 向量语义</b>双通道，向量只做候选生成——排序机制不语义化。
+举个例子：你问「睡不着」，库里那条叫「失眠」——字面一个字都对不上，FTS 查不到，
+向量臂按 cos 0.709 把它捞回来。下面这张图讲的就是这两条通道怎么并行。</p>
+
+<figure class="figure">
+<svg viewBox="0 0 980 360" class="svgbox" role="img" aria-label="双通道检索融合">
+  <defs><marker id="ar4" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="#0891b2"/></marker></defs>
+  <g font-size="12.5">
+    <rect x="30" y="150" width="170" height="60" rx="10" fill="#fff" stroke="var(--ink)" stroke-width="1.6"/>
+    <text x="115" y="176" text-anchor="middle" font-weight="700">查询 q</text>
+    <text x="115" y="194" text-anchor="middle" fill="var(--sub)">「睡不着」</text>
+
+    <path class="eg" d="M200 170 L260 120" stroke="var(--l0)" marker-end="url(#ar4)"/>
+    <path class="eg" d="M200 190 L260 250" stroke="var(--vec)" marker-end="url(#ar4)"/>
+
+    <rect x="264" y="60" width="290" height="110" rx="12" fill="#eff6ff" stroke="var(--l0)"/>
+    <text x="409" y="84" text-anchor="middle" font-weight="700" fill="var(--l0)">词法通道（FTS simple 分词）</text>
+    <text x="409" y="104" text-anchor="middle">2 字滑窗短语 OR + 2 字 LIKE 兜底</text>
+    <text x="409" y="122" text-anchor="middle">精确词 / BV号 / 自建标记 / 牌子 / 店名</text>
+    <text x="409" y="148" text-anchor="middle" fill="var(--sub)">候选 max(3k, 15) —— 永不退役：精确词唯一通道 + 降级底线</text>
+
+    <rect x="264" y="216" width="290" height="120" rx="12" fill="#ecfeff" stroke="var(--vec)"/>
+    <text x="409" y="240" text-anchor="middle" font-weight="700" fill="var(--vec)">向量通道（bge-m3 · 1024 维）</text>
+    <text x="409" y="258" text-anchor="middle">sidecar 独立 venv · CPU 100-300ms 无感</text>
+    <text x="409" y="276" text-anchor="middle">余弦 top-2k · <tspan font-weight="600">cos_floor 0.52 语义下限</tspan></text>
+    <text x="409" y="294" text-anchor="middle" fill="var(--sub)">缺模型 / OOM → 静默降级 FTS-only · 预算帽 lazy 补欠账</text>
+
+    <path class="eg" d="M554 115 L640 170" stroke="var(--l0)" marker-end="url(#ar4)"/>
+    <path class="eg" d="M554 276 L640 230" stroke="var(--vec)" marker-end="url(#ar4)"/>
+
+    <rect x="644" y="150" width="160" height="110" rx="12" fill="#fff" stroke="var(--ink)" stroke-width="1.4"/>
+    <text x="724" y="174" text-anchor="middle" font-weight="700">候选并集</text>
+    <text x="724" y="194" text-anchor="middle" fill="var(--sub)">RRF 只做合并去重</text>
+    <text x="724" y="212" text-anchor="middle" fill="var(--sub)">FTS 行 rel=bm25 原值</text>
+    <text x="724" y="230" text-anchor="middle" fill="var(--sub)">向量专属行 rel=cos</text>
+    <text x="724" y="250" text-anchor="middle" fill="var(--sub)">按既有公式算 final</text>
+
+    <path class="eg" d="M804 205 L852 205" marker-end="url(#ar4)"/>
+    <g font-size="11.5">
+      <rect x="856" y="140" width="110" height="30" rx="7" fill="#fff" stroke="#94a3b8"/><text x="911" y="159" text-anchor="middle">final floor 0.30</text>
+      <rect x="856" y="176" width="110" height="30" rx="7" fill="#fff" stroke="#94a3b8"/><text x="911" y="195" text-anchor="middle">去冗余 · 轮换环</text>
+      <rect x="856" y="212" width="110" height="30" rx="7" fill="#fff" stroke="#94a3b8"/><text x="911" y="231" text-anchor="middle">场合/peer 加权</text>
+      <rect x="856" y="248" width="110" height="30" rx="7" fill="#fff" stroke="#94a3b8"/><text x="911" y="267" text-anchor="middle">top_k = 5</text>
+    </g>
+    <text x="500" y="348" text-anchor="middle" class="eg-t">实测（36 转述问句）：同义命中率 0.75 → 0.94；「睡不着」→「失眠」端到端召回（cos 0.709）</text>
+  </g>
+</svg>
+<figcaption>双通道检索：词法管精确，向量管转述，RRF 合并后仍走既有机制公式。cos_floor=0.52 由真库校准（正样本最低 0.543 / 负样本最高 0.493）。</figcaption>
+</figure>
+
+<div class="note"><b>为什么必须有 cos_floor：</b>final 公式的 importance/recency 两项会把
+<b>任何</b>向量专属行抬过 0.30 的既有 floor（cos=0 也有 0.30 基础分）——没有语义下限，
+无关查询也会被塞满 k 条（实测满额率 1.0、负样本 20 条凭空召回）。0.52 由真库校准：
+正样本 cos 最低 0.543 / 负样本最高 0.493，居间可分、可配置。</div>
+
+<h3>嵌入服务与设备降级链</h3>
+<figure class="figure">
+<svg viewBox="0 0 980 210" class="svgbox" role="img" aria-label="设备降级链">
+  <defs><marker id="ar5" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="#0891b2"/></marker></defs>
+  <g font-size="12.5">
+    <rect x="30" y="60" width="170" height="60" rx="10" fill="#fff" stroke="var(--vec)"/>
+    <text x="115" y="86" text-anchor="middle" font-weight="700">主进程（网关/后端）</text>
+    <text x="115" y="104" text-anchor="middle" fill="var(--sub)">零新增重依赖 · HTTP 客户端</text>
+    <path class="eg" d="M200 90 L280 90" marker-end="url(#ar5)"/>
+    <rect x="284" y="52" width="250" height="76" rx="10" fill="#ecfeff" stroke="var(--vec)"/>
+    <text x="409" y="78" text-anchor="middle" font-weight="700">sidecar（独立 venv）</text>
+    <text x="409" y="96" text-anchor="middle">scripts/embed_server.py · stdlib HTTP</text>
+    <text x="409" y="114" text-anchor="middle" fill="var(--sub)">sentence-transformers + CPU torch</text>
+    <text x="409" y="132" text-anchor="middle" fill="var(--sub)">主 .venv 一个包都不动（护住 cu128 语音）</text>
+    <path class="eg" d="M534 90 L614 90" marker-end="url(#ar5)"/>
+    <rect x="618" y="40" width="330" height="120" rx="10" fill="#fff" stroke="var(--ink)"/>
+    <text x="783" y="64" text-anchor="middle" font-weight="700">device = auto（缺省）</text>
+    <text x="640" y="88">① CUDA 可用 且 空闲显存 ≥ 2GB → GPU fp16 ≈1.5GB</text>
+    <text x="640" y="108">② 否则 → CPU（fp32 2.3GB RAM · 查询 100-300ms 无感）</text>
+    <text x="640" y="128">③ 运行中 CUDA OOM → 自动落 CPU 并钉住</text>
+    <text x="640" y="148" fill="var(--warn)">④ 任何层不可用 → ready()=False → FTS-only</text>
+  </g>
+</svg>
+<figcaption>设备降级链：auto 探测空闲显存（语音引擎共存优先），OOM 自动落 CPU；最坏只是慢，never 坏。</figcaption>
+</figure>
+<p class="sub">写入零开销（欠账模型）：主写路径不同步嵌；查询前 lazy 补（≤10 条或 ≤2s 预算帽）+
+flush_tail 批嵌（writer worker 线程）+ 回填脚本。换模型自动重嵌（src_hash 失配即欠账）。</p>
+
+<h2 id="l2">L2 · 场景块</h2>
+<p><code>projects/&lt;pid&gt;/memory/scene_blocks/*.md</code>——按主题组织的蒸馏块
+（META + 正文，软 1500 / 硬 4000 字符，读取端不截断）。<code>scene_index.json</code>
+是投影缓存，承载时间节流位与进料游标。</p>
+<ul>
+<li><b>进料 = 游标后的 active 原子增量</b>（一池不分组，INV-9）；严格 L1 下增量来自
+显式记与升格产物——无增量整轮跳过 LLM，这是场景块不无限长的主闸；</li>
+<li>维护 = 带工具的 agent 循环（白名单 scene_read/write/edit，≤32 迭代 / 墙钟 300s），
+UPDATE &gt; MERGE &gt; CREATE，容量三级预警（<code>max_blocks</code> 15）；</li>
+<li>游标复合键 <code>updated|record_id</code>；<b>五种不推进</b>：零增量 / 出错 / 无 LLM /
+空抽取 / agent 零动作——不让「喂了但没人吃」的批次被划过去；</li>
+<li>带外信号 <code>[PERSONA_UPDATE_REQUEST]</code> → 下次巩固强制画像重写。</li>
+</ul>
+
+<h2 id="l3">L3 · 自我画像</h2>
+<p><code>memory/self_profile.md</code>（全局一份）——<code>&lt;self-persona&gt;</code>
+随 system 全局注入。巩固期蒸馏（新增 active 原子 ≥20 或带外信号强制），LLM 增量重写、
+旧版自动备份 .bak；助手的应对策略/拒绝规则一律不入画像。三分法之后：
+<b>她</b>=self_profile，<b>人</b>=关系卡（含主人卡），<b>世界</b>=atoms 召回。</p>
+
+<h2 id="consolidation">巩固周期（consolidation ·「睡觉时整理」）</h2>
+<p><code>flush_brain</code> 收尾调 <code>maybe_consolidate</code>：后台线程、派发闸防重复。
+触发 = flush_count ≥ 20 或距上次 &gt; 1 天。</p>
+
+<figure class="figure">
+<svg viewBox="0 0 980 560" class="svgbox" role="img" aria-label="巩固周期步骤流程">
+  <defs><marker id="ar6" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="#7c3aed"/></marker></defs>
+  <g font-size="12.5">
+    <rect x="330" y="16" width="320" height="46" rx="10" fill="#f5f3ff" stroke="var(--l1)"/>
+    <text x="490" y="36" text-anchor="middle" font-weight="700">触发：flush_count ≥ 20 或 &gt; 1 天</text>
+    <text x="490" y="52" text-anchor="middle" fill="var(--sub)">整库备份 → memory/archive/</text>
+    <path d="M490 62 L490 84" stroke="var(--l1)" stroke-width="1.6" fill="none" marker-end="url(#ar6)"/>
+    <rect x="300" y="88" width="380" height="52" rx="10" fill="#fff" stroke="var(--l1)"/>
+    <text x="490" y="110" text-anchor="middle" font-weight="700">1 · 有界去重 + 矛盾检测（四态）</text>
+    <text x="490" y="126" text-anchor="middle" fill="var(--sub)">候选 = FTS 全文近邻 top5 · 每轮判定上限 20</text>
+    <path d="M490 140 L490 158" stroke="var(--l1)" stroke-width="1.6" fill="none" marker-end="url(#ar6)"/>
+    <rect x="300" y="162" width="380" height="46" rx="10" fill="#fff" stroke="var(--l1)"/>
+    <text x="490" y="182" text-anchor="middle" font-weight="700">2 · episode ≥3 同主题 → 1 条 rule</text>
+    <text x="490" y="198" text-anchor="middle" fill="var(--sub)">peer 分组 · 抽象层级上升是库的生长方式</text>
+    <path d="M490 208 L490 226" stroke="var(--l1)" stroke-width="1.6" fill="none" marker-end="url(#ar6)"/>
+    <rect x="300" y="230" width="380" height="46" rx="10" fill="#fff" stroke="var(--l3)"/>
+    <text x="490" y="250" text-anchor="middle" font-weight="700">7 · 画像重写（L3 self_profile）</text>
+    <text x="490" y="266" text-anchor="middle" fill="var(--sub)">新增原子 ≥20 或带外信号强制 · 失败不动现文件</text>
+    <path d="M490 276 L490 294" stroke="var(--l1)" stroke-width="1.6" fill="none" marker-end="url(#ar6)"/>
+    <rect x="240" y="298" width="500" height="118" rx="10" fill="#ecfeff" stroke="var(--vec)" stroke-width="1.6"/>
+    <text x="490" y="322" text-anchor="middle" font-weight="700" fill="var(--vec)">7.5 · 观察升格 promote_observations（2026-11-10 落地）</text>
+    <text x="490" y="342" text-anchor="middle">未升格且 source_external=0 的观察行 → 结论短句 ≤60 字 → 四态入事实层</text>
+    <text x="490" y="360" text-anchor="middle">幂等键 = 观察 rid 存 source_task · 无每日上限 · 提炼器不是守门人</text>
+    <text x="490" y="382" text-anchor="middle" fill="var(--sub)">实测：20+11 条升格、合并吸收 2 条 · 统计落 obs_promoted/obs_stored/obs_merged…</text>
+    <text x="490" y="402" text-anchor="middle" fill="var(--sub)">在日记步之前——升格产物当轮即可被日记素材引用</text>
+    <path d="M490 416 L490 434" stroke="var(--l1)" stroke-width="1.6" fill="none" marker-end="url(#ar6)"/>
+    <rect x="240" y="438" width="500" height="52" rx="10" fill="#fdf2f8" stroke="var(--nar)"/>
+    <text x="490" y="460" text-anchor="middle" font-weight="700">8 · 日记步（D+1 · 补齐最近 7 天 · 幂等白卷跳过）</text>
+    <text x="490" y="478" text-anchor="middle" fill="var(--sub)">→ 月记（≥3 篇才压）→ 9.5 语境链冷启动（全局 ≤5 次/周期）</text>
+    <text x="490" y="512" text-anchor="middle" fill="var(--sub)">关系卡已移出巩固周期：_flush_tail 按 L0 直驱（≥12 行新 speaker 或 ≥600s）</text>
+  </g>
+</svg>
+<figcaption>巩固周期：库不靠条数增长，靠抽象层级上升（episode → rule → persona）；日记承载叙事层；观察层承载「看过但还没内化」的中间态。</figcaption>
+</figure>
+
+<h2 id="diary">日记系统（叙事层主形态）</h2>
+<p>全局一篇 <code>memory/diary/diary-&lt;日期&gt;.md</code>——巩固期 D+1 写<b>昨日</b>
+（幂等键=日期，补齐最近 7 天），素材跨项目聚合、一次 LLM 生成。正文 ≤1800 字，
+本体不进注入面（INV-11），索引只存 summary+topics+atmosphere（INV-12）。</p>
+
+<figure class="figure">
+<svg viewBox="0 0 980 430" class="svgbox" role="img" aria-label="日记素材组装">
+  <defs><marker id="ar7" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="#db2777"/></marker></defs>
+  <g font-size="12">
+    <rect x="20" y="24" width="270" height="86" rx="10" fill="#eff6ff" stroke="var(--l0)"/>
+    <text x="155" y="46" text-anchor="middle" font-weight="700">会话气泡（尾窗机制）</text>
+    <text x="155" y="64" text-anchor="middle" fill="var(--sub)">全局尾窗 160 行 ∪ 每会话保底 10 行</text>
+    <text x="155" y="80" text-anchor="middle" fill="var(--sub)">ts 排序 · 硬顶 400 行</text>
+    <text x="155" y="98" text-anchor="middle" fill="var(--sub)">跨会话文件合并（丢素材老坑已修）</text>
+    <rect x="20" y="130" width="270" height="66" rx="10" fill="#f0fdfa" stroke="var(--obs)"/>
+    <text x="155" y="152" text-anchor="middle" font-weight="700" fill="var(--obs)">[见闻] 行（2026-11-07）</text>
+    <text x="155" y="170" text-anchor="middle" fill="var(--sub)">当日 source_kind=observation 原文</text>
+    <text x="155" y="186" text-anchor="middle" fill="var(--sub)">与对话经历同一篇 · 第一人称</text>
+    <rect x="20" y="216" width="270" height="80" rx="10" fill="#fdf4ff" stroke="var(--nar)"/>
+    <text x="155" y="238" text-anchor="middle" font-weight="700" fill="var(--nar)">[生活] 段（2026-11-10）</text>
+    <text x="155" y="256" text-anchor="middle" fill="var(--sub)">life days/&lt;日期&gt;.md 客观流水整段并入</text>
+    <text x="155" y="272" text-anchor="middle" fill="var(--sub)">不进尾窗裁剪 · 修「模拟生活没带上」</text>
+    <text x="155" y="288" text-anchor="middle" fill="var(--sub)">life 产物照旧不落库、不占日记键</text>
+    <rect x="20" y="316" width="270" height="56" rx="10" fill="#fefce8" stroke="#ca8a04"/>
+    <text x="155" y="338" text-anchor="middle" font-weight="700">[回看] 行 + 当日完成任务</text>
+    <text x="155" y="356" text-anchor="middle" fill="var(--sub)">review_after 到期 · 任务标题一句话</text>
+    <path d="M290 66 L400 190" stroke="var(--nar)" stroke-width="1.5" fill="none" marker-end="url(#ar7)"/>
+    <path d="M290 160 L400 195" stroke="var(--nar)" stroke-width="1.5" fill="none" marker-end="url(#ar7)"/>
+    <path d="M290 254 L400 205" stroke="var(--nar)" stroke-width="1.5" fill="none" marker-end="url(#ar7)"/>
+    <path d="M290 344 L400 215" stroke="var(--nar)" stroke-width="1.5" fill="none" marker-end="url(#ar7)"/>
+    <rect x="410" y="120" width="250" height="140" rx="12" fill="#fff" stroke="var(--nar)" stroke-width="1.6"/>
+    <text x="535" y="146" text-anchor="middle" font-weight="700" fill="var(--nar)">一次 LLM · 一篇日记</text>
+    <text x="535" y="166" text-anchor="middle">多场合自然分段 · [生活]/[见闻] 同等笔墨</text>
+    <text x="535" y="184" text-anchor="middle">经历质地：1-3 处现场感 + 1-2 处原话</text>
+    <text x="535" y="202" text-anchor="middle">≤1800 字 · 白卷是正确答案</text>
+    <text x="535" y="226" text-anchor="middle" fill="var(--sub)">纯工具型任务一句话带过</text>
+    <text x="535" y="244" text-anchor="middle" fill="var(--sub)">正文不进索引（INV-12）· 不进注入面（INV-11）</text>
+    <path d="M660 190 L730 190" stroke="var(--nar)" stroke-width="1.5" fill="none" marker-end="url(#ar7)"/>
+    <rect x="734" y="128" width="220" height="120" rx="12" fill="#fdf2f8" stroke="var(--nar)"/>
+    <text x="844" y="152" text-anchor="middle" font-weight="700">落库与索引</text>
+    <text x="844" y="172" text-anchor="middle">write_diary_block（内核直写）</text>
+    <text x="844" y="190" text-anchor="middle">META: topics/peers/time/atmosphere/we</text>
+    <text x="844" y="208" text-anchor="middle">narrative_index upsert（幂等）</text>
+    <text x="844" y="228" text-anchor="middle" fill="var(--sub)">narrative_search / read 按需自取</text>
+    <text x="500" y="300" text-anchor="middle" class="eg-t">D+1 语义：巩固何时跑都不缺素材 · 统一本地日折算（localtime）· 日记晚一天可见与「睡觉时整理」自洽</text>
+    <text x="500" y="322" text-anchor="middle" class="eg-t">2026-11-10 定稿双层职责：life=物理世界层（客观流水给人看，不进记忆不占键）· omni=内在层（她记得的昨天，主观取舍）</text>
+    <text x="500" y="344" text-anchor="middle" class="eg-t">实例：一篇主观日记把当天多个场合缝成一条弧线（闲聊片段 + 学习反刍 + 推演），2180 字</text>
+    <text x="500" y="366" text-anchor="middle" class="eg-t">终审通过：拟人质量里程碑（11-11）</text>
+    <text x="500" y="388" text-anchor="middle" class="eg-t">她自己的实验在延续：原子库出现她自建的记忆验证标记（ZQ7-沙漏-1126 / KY3-铁皮钟-1126）</text>
+  </g>
+</svg>
+<figcaption>日记素材组装 v4：四路素材汇入一次生成。11-11 起三段 cron 全自然触发，终审通过。</figcaption>
+</figure>
+
+<h2 id="relations">关系卡（「记得某个人」）</h2>
+<p><code>memory/relations/&lt;uid&gt;.md</code> 全局一份、按人存（同一个人跨群/私聊不裂）。
+主人卡用合成 key <code>master</code>（多号认领：每个号各自一个 uid，卡内合成同一个 key），
+卡名 <code>name: &lt;owner&gt;</code>——<b>名字的唯一宿主是卡</b>（identity 读卡 META，
+无卡/无 name 回退缺省；配置零参与，这是「她能记得」而非「被配置」）。</p>
+<ul>
+<li><b>L0 直驱</b>（2026-11-10）：_flush_tail 按 speaker 行跨场合聚合，新增 ≥12 行或
+距上次 ≥600s 触发；每人 ≥3 条往来才写卡、每轮 ≤5 人；<b>不产原子的轮次同样能更新</b>
+（空 atoms 库不挡路）——印象卡随对话持续生长，与巩固周期解耦；</li>
+<li>结构：META(name/uid/topics/we) + 正文三行「最近交手 / 他对助手的态度 / 助手对他的态度」；
+主人卡多一段【稳定背景】（LLM 丢失时代码补写回，称呼/自我介绍归入此类）；</li>
+<li>检索资产：通道自动注入已物理删除，由 <code>narrative_search(peer=)</code> 按需自取；
+外部来源读卡只给 summary（N-10）；</li>
+<li>规模治理：无上限无 TTL（2026-11-04 裁定暂不动——加淘汰会撞 P7「不做衰减」）。</li>
+</ul>
+
+<h2 id="circle">语境链（circle_note ·「像人在不同圈子里说话」）</h2>
+<p>载体是<b>语境预期</b>（这个场合聊什么、什么分寸、共同话题词面），不是可引用事实：</p>
+<ul>
+<li><code>flush_brain</code> 收尾把消息按场合累积进 <code>context_buffer</code>（话题词面
+2 字滑窗高频，零词表零 LLM；不写他人原话）；</li>
+<li>阈值（12 条或 600s）触发一次 reflection → <code>circle_note</code>
+（summary ≤160 字 / topics 2-6 / tone ≤40 字），重写不追加、失败保留旧版；</li>
+<li>消费：只影响 <code>&lt;current-context&gt;</code> 与检索排序（w_bg ×1.10）；
+永不进 atoms、不进对外发话（INV-5/INV-10）；</li>
+<li>每场合每周期 ≤1 次、全局 ≤5 次；老场合冷启动走巩固 9.5 步。</li>
+</ul>
+
+<h2 id="inject">注入面全景</h2>
+<table>
+<tr><th>#</th><th>内容</th><th>位置</th><th>频率/配额</th></tr>
+<tr><td>1</td><td><code>&lt;memory-usage-rules&gt;</code> 记忆使用规则（必查场景 + 自取不反复硬查 + 叙事不外转）</td><td>system 稳定段</td><td>run 开始一次，run 内锁定</td></tr>
+<tr><td>2</td><td><code>&lt;scene-navigation&gt;</code> L2 主题块索引（文件名+热度+summary ≤120 字）</td><td>system 稳定段</td><td>同上</td></tr>
+<tr><td>3</td><td><code>&lt;self-persona&gt;</code> 自我画像（三分法：self / 人=关系卡 / 世界=atoms）</td><td>system 稳定段</td><td>同上</td></tr>
+<tr><td>3.5</td><td><code>&lt;current-context&gt;</code> 场合信号 ≤200 字（话题/语气，进 user-input placement 保缓存）</td><td>当轮 user 输入前部</td><td>逐 run</td></tr>
+<tr><td>4-6.5</td><td>自取工具：read_scene / memory_recall / conversation_search / observation_search / narrative_search+read</td><td>工具调用结果</td><td>模型按需（读 ≤3 次/run，narrative ≤2，只计数不硬拦）</td></tr>
+<tr><td>7</td><td>L0 对话窗口（IM 12 条 / Web 12 轮 ≤4000 字）</td><td>起始 items</td><td>通道固定</td></tr>
+</table>
+<p class="sub">run 起始无 <code>&lt;relevant-memories&gt;</code>——检索结果永不自动注入（不变量 4）；
+memory_observe 是写动作不占读配额。子任务零记忆注入。</p>
+
+<h2 id="redline">写入通道红线</h2>
+<figure class="figure">
+<svg viewBox="0 0 980 300" class="svgbox" role="img" aria-label="写入通道红线">
+  <defs><marker id="ar8" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="#64748b"/></marker>
+  <marker id="arno" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+    <path d="M0,0 L9,4.5 L0,9 z" fill="#dc2626"/></marker></defs>
+  <g font-size="12.5">
+    <rect x="30" y="24" width="240" height="56" rx="10" fill="#fff" stroke="var(--ink)"/><text x="150" y="48" text-anchor="middle" font-weight="700">agent（大脑）</text><text x="150" y="66" text-anchor="middle" fill="var(--sub)">有行为权 · 无文件权</text>
+    <rect x="30" y="120" width="240" height="56" rx="10" fill="#fff" stroke="var(--ink)"/><text x="150" y="144" text-anchor="middle" font-weight="700">项目脚本（life/daytrace 等）</text><text x="150" y="162" text-anchor="middle" fill="var(--sub)">给人看的产物 · 零内核依赖</text>
+    <rect x="30" y="216" width="240" height="56" rx="10" fill="#fff" stroke="var(--ink)"/><text x="150" y="240" text-anchor="middle" font-weight="700">用户（人工）</text><text x="150" y="258" text-anchor="middle" fill="var(--sub)">profile_api / 调试面板 / 编辑文件</text>
+    <rect x="640" y="60" width="310" height="200" rx="12" fill="#f5f3ff" stroke="var(--l1)" stroke-width="1.6"/>
+    <text x="795" y="88" text-anchor="middle" font-weight="700" fill="var(--l1)">内核（唯一写文件系统的进程）</text>
+    <g font-size="11.5" text-anchor="middle">
+      <rect x="660" y="102" width="270" height="26" rx="7" fill="#fff" stroke="var(--l1)"/><text x="795" y="119">flush_brain 收尾（语境链/关系卡/L2/巩固）</text>
+      <rect x="660" y="134" width="270" height="26" rx="7" fill="#fff" stroke="var(--l1)"/><text x="795" y="151">巩固周期（去重/抽象/升格/日记/月记）</text>
+      <rect x="660" y="166" width="270" height="26" rx="7" fill="#fff" stroke="var(--l1)"/><text x="795" y="183">工具代理：remember/observe/update/forget</text>
+      <rect x="660" y="198" width="270" height="26" rx="7" fill="#fff" stroke="var(--l1)"/><text x="795" y="215">调试面 hard_delete（唯一物理删除）</text>
+    </g>
+    <path class="eg" d="M270 52 L640 100" marker-end="url(#ar8)"/>
+    <text x="430" y="40" class="eg-t">任务执行 → 轨迹落盘 → 收尾/巩固 → 内核直写</text>
+    <path class="eg" d="M270 148 L640 160" marker-end="url(#ar8)"/>
+    <text x="420" y="132" fill="var(--warn)" class="eg-t">✗ 脚本直调内核写入口 = 侵入式旁路（publish_diary 因此整删）</text>
+    <path class="eg" d="M270 148 L640 180" marker-end="url(#arno)" stroke="#dc2626" stroke-dasharray="6 4"/>
+    <path class="eg" d="M270 244 L640 208" marker-end="url(#ar8)"/>
+    <text x="430" y="240" class="eg-t">profile_api / PUT profile / 纠正与遗忘 API</text>
+  </g>
+</svg>
+<figcaption>红线：agent 不能直接碰记忆文件；工具是代理；脚本与内核写入口之间隔一堵墙；人工走 API/面板。</figcaption>
+</figure>
+
+<h2 id="invariants">不变量（防回退红线 · 14 条）</h2>
+<div class="invariant"><b>1 静态内容禁止每步重发</b>——尾部注入包装已删，回流即违规（R4 锁）。</div>
+<div class="invariant"><b>2 L2 全文唯一入口</b>——read_scene_block 只在 scene_executor；注入面只准索引条目。</div>
+<div class="invariant"><b>3 意图门零格式字面量</b>——畸形调用识别全 LLM，内核零厂商格式标记。</div>
+<div class="invariant"><b>4 检索结果永不自动注入</b>——L1/L0/叙事只经工具；例外清单清零。</div>
+<div class="invariant"><b>5 一条记忆在 atoms_fts 恒为一行</b>——_fts_upsert 唯一写通道；读链只取现行文本。</div>
+<div class="invariant"><b>6 合并只在同一适用域</b>——跨域一律 novel；超 200 字拒并；绝不静默截断。</div>
+<div class="invariant"><b>7 单库单人格（INV-1）</b>——L1 与 L3 全局唯一，persona 过滤已移除。</div>
+<div class="invariant"><b>8 场合不是分区键（INV-2）</b>——context_key 只做信号/标注，不建表不拆库。</div>
+<div class="invariant"><b>9 加权不过滤（INV-3）</b>——场合/圈层/peer 三类信号只改排序，不得变成 WHERE。</div>
+<div class="invariant"><b>10 事实与语境分离（INV-5）</b>——circle_note 不参与四态、不进对外发话。</div>
+<div class="invariant"><b>11 事件 → 助手的取舍 → 记忆（INV-6，2026-11-10 重写）</b>——收尾零自动提炼；
+外部可达见闻永不升格；<b>禁止回流任何按来源一刀切的准入开关及其伪替代</b>。</div>
+<div class="invariant"><b>12 叙事正文不进注入面（INV-11）</b>——正文只经 narrative_read 按需读。</div>
+<div class="invariant"><b>13 叙事索引只存指针（INV-12）</b>——search_text 只含 summary+topics+atmosphere。</div>
+<div class="invariant"><b>14 观察与对话分道（INV-13/14）</b>——capture_observation 唯一观察入口；出处必填、只作追溯。</div>
+
+<h2 id="observe">观测与验收</h2>
+<table>
+<tr><th>通道</th><th>内容</th></tr>
+<tr><td>轨迹</td><td><code>memory_injected</code>（placement 恒 system）、<code>finish_intent_check</code>、<code>instructions_injected</code></td></tr>
+<tr><td>自取观测</td><td><code>memory_recall-YYYY-MM.jsonl</code> 每 run 一行（七读工具账本）；zero_query 对出「该查而没查」；只给离线脚本与调试面板，不给 agent 查询工具（量尺不是记忆）</td></tr>
+<tr><td>收尾事件</td><td>memory_flush：严格 L1 后 stored 恒 0，看跳过原因（no_work / no_llm / no_new_atoms）与 L2 统计</td></tr>
+<tr><td>巩固统计</td><td>dedup_checked / merged / merge_rejected / abstracted / <b>obs_promoted·obs_stored·obs_merged·obs_conflict·obs_duplicate</b> / diary_written / profile_rewritten</td></tr>
+<tr><td>索引健康</td><td>COUNT(atoms_fts) == COUNT(atoms)（一行一条）</td></tr>
+<tr><td>真机回归</td><td><code>verify_memory_recall.py [--live]</code> 自锚定转述样本（≥30）+ 负样本单列断言 + 四项分布；
+<code>verify_scene_live.py</code>；<code>verify_memory_effect.py</code></td></tr>
+</table>
+
+<h3>实测基线与向量臂 A/B（2026-11-13）</h3>
+<table>
+<tr><th>指标</th><th>FTS-only 基线</th><th>融合（cos_floor 0.52）</th></tr>
+<tr><td><b>同义命中率（36 转述问句）</b></td><td>27/36 = 0.75</td><td><b>34/36 = 0.94</b></td></tr>
+<tr><td>负样本凭空召回</td><td>0</td><td>0（无 floor 时 20 → floor 后归零）</td></tr>
+<tr><td>0 召回率</td><td>0.028</td><td>0.0</td></tr>
+<tr><td>平均注入字符</td><td>150.8</td><td>205.5（150-250 内）</td></tr>
+<tr><td>同义转述案例（问「睡不着」→ 命中「失眠」那条）</td><td>❌ 词面不相交</td><td>✅ cos 0.709 直接命中</td></tr>
+</table>
+<p class="sub">满额率 0.583 仍超旧线 &lt;25%：语料集中在真实兴趣域，域内查询填满 k 是语义召回的正确行为；
+防灌水职责已由 cos_floor 接管（无关查询 0 召回）。指标解释随向量时代更新——不调阈值凑绿。</p>
+
+<h3>明确不做</h3>
+<p class="sub">云 embedding（红线）· cross-encoder 重排（phase 2）· 向量做过滤条件或分数语义化 ·
+narrative/scene 向量化（二期）· 隐性触发（她没发起检索的问题，独立项）· 按来源一刀切的准入开关（整删且禁止伪替代）·
+salience 衰减与 dormant/archived 状态机（P7 已删）。</p>
+
+<hr>
+<p class="meta">来源：<code>doc/plans/implemented/memory-architecture.md</code>（2026-11-11 重构版）+
+分支 <code>feat/vector-recall</code> 实现与 A/B 实测 + worklog lifelike-presence §9-14 设计定稿。
+数据点：atoms 44 active / l0 745 行 / 向量 789 条 / 巩固 11-12 · 升格 31 条 · 日记 11-09~11-12 四篇自然成篇。</p>
+</main>
+</div>
+</body>
+</html>

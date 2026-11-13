@@ -90,11 +90,17 @@ def _tool_filter_patterns(cfg: dict, log: Optional[Callable[[str], None]] = None
     return _patterns("include"), _patterns("exclude")
 
 
-def _build_tool_filter(include: List[str], exclude: List[str], server_name: str):
+def _build_tool_filter(include: List[str], exclude: List[str], server_name: str,
+                       activation: Optional[Callable[[str], Optional[set]]] = None):
     """构造 SDK 原生动态工具过滤器（ToolFilterCallable）。
 
     用动态过滤器而非静态 allowlist：配置是 **glob**，需对实际工具名做通配匹配，
     而静态过滤器只支持精确名列表。
+
+    懒加载（mcp-lazy-activation）在此叠加第二层：``activation(server_name)`` 返回
+    当前已激活的工具名集合（None = 不限）。因为 SDK 每次 ``list_tools`` 都会重新应用
+    本过滤器，``McpSession.activate`` 只需改这个集合，**下一次 run 的子集注入立即生效**，
+    不需要重连、不需要重建 Agent。
     """
     def _matches(name: str, patterns: List[str]) -> bool:
         return any(fnmatch.fnmatch(name, p) for p in patterns)
@@ -107,36 +113,71 @@ def _build_tool_filter(include: List[str], exclude: List[str], server_name: str)
             return False
         if exclude and (_matches(raw, exclude) or _matches(prefixed, exclude)):
             return False
+        if activation is not None:
+            try:
+                allow = activation(srv)
+            except Exception:
+                allow = None
+            if allow is not None and not (raw in allow or prefixed in allow):
+                return False
         return True
 
     return _filter
 
 
+def server_name(cfg: dict) -> str:
+    """配置里的 server 名（与 ``build_mcp_servers`` 的命名口径保持一致）。"""
+    return str(cfg.get("name") or cfg.get("command") or cfg.get("url") or "mcp")
+
+
+def mode_of(cfg: dict) -> str:
+    """返回 ``lazy``（按需激活）或 ``eager``（启动即连、全量注入）。
+
+    缺省 **eager**，不是 lazy。原因：升级不得静默改变既有配置的语义——现网 mcp.json
+    里的条目大多没写 ``mode``，若缺省 lazy，它们会突然"不连接、不注入"，模型必须显式
+    ``mcp_activate`` 才能用，等于把已配好的能力悄悄关掉。要懒加载必须显式声明。
+    """
+    mode = str((cfg or {}).get("mode") or "eager").strip().lower()
+    return "lazy" if mode in ("lazy", "on_demand", "ondemand") else "eager"
+
+
 def build_mcp_servers(
     servers_cfg: Optional[List[dict]],
     log: Optional[Callable[[str], None]] = None,
+    *,
+    mode_filter: str = "all",
+    activation: Optional[Callable[[str], Optional[set]]] = None,
 ) -> List[MCPServer]:
     """按配置构造 SDK MCPServer（不在此处连接；连接生命周期由 sdk_loop 在运行期负责）。
 
     Args:
         servers_cfg: ``runtime.mcp.servers`` 列表。
         log: 可选日志回调（如 ``ToolLoop._log``）；None 则静默。
+        mode_filter: ``all``（缺省，向后兼容）| ``eager`` | ``lazy``。
+            懒加载改造的调用方按需取子集：启动预热与 Agent 构造只取 eager；
+            lazy 的对象由 ``McpSession`` 持有、激活时才 append 进 ``agent.mcp_servers``。
+        activation: 可选的「当前已激活工具名」查询函数（按 server 名返回 set 或 None）。
+            传了就叠一层动态子集过滤；不传则行为与改造前完全一致。
 
     Returns:
         SDK MCPServer 列表，可直接传给 ``Agent(mcp_servers=[...])``。
     """
     servers: List[MCPServer] = []
+    want = str(mode_filter or "all").strip().lower()
     for cfg in servers_cfg or []:
         if not isinstance(cfg, dict) or not cfg.get("enabled", True):
             continue
         # 既无 command 也无 url = 非法/占位配置，静默跳过
         if not (cfg.get("command") or cfg.get("url")):
             continue
+        if want in ("eager", "lazy") and mode_of(cfg) != want:
+            continue
 
-        name = str(cfg.get("name") or cfg.get("command") or cfg.get("url") or "mcp")
+        name = server_name(cfg)
         # T4.1：按需注入——默认全量放行（无 include/exclude 时不过滤）
         _inc, _exc = _tool_filter_patterns(cfg, log)
-        _filter = _build_tool_filter(_inc, _exc, name) if (_inc or _exc) else None
+        _filter = (_build_tool_filter(_inc, _exc, name, activation)
+                   if (_inc or _exc or activation is not None) else None)
         # T4.2：超时透传（SDK 原生 client_session_timeout_seconds，单位秒）
         _timeout_s = _timeout_seconds(cfg, log)
         try:
@@ -163,3 +204,27 @@ def build_mcp_servers(
             if log:
                 log(f"MCP server {name} 配置无效: {type(e).__name__}: {e}")
     return servers
+
+
+def split_configs(servers_cfg: Optional[List[dict]], *, validate: bool = True) -> tuple:
+    """按 ``mode`` 拆成 ``(eager, lazy)`` 两份配置（原 dict，带 readiness 等）。
+
+    Args:
+        validate: True（缺省）按「是否启用 / 是否配了端点」过滤，与
+            ``build_mcp_servers`` 口径一致；False 只按 ``mode`` 分，合法性交给 builder
+            自己判——连接池那类"先把配置送进 builder 再由它跳过非法项"的调用方要用这个。
+
+    返回原对象而非副本：调用方可能读 ``readiness`` / ``transform`` / ``desc``。
+    """
+    eager: List[dict] = []
+    lazy: List[dict] = []
+    for cfg in servers_cfg or []:
+        if not isinstance(cfg, dict):
+            continue
+        if validate:
+            if not cfg.get("enabled", True):
+                continue
+            if not (cfg.get("command") or cfg.get("url")):
+                continue
+        (lazy if mode_of(cfg) == "lazy" else eager).append(cfg)
+    return eager, lazy

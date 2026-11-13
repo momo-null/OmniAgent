@@ -8,7 +8,7 @@
 > ② **语音**：Web 按住说话 / 免提经 `POST /api/audio/transcribe` 转写后走同一入口，回复经
 > `/api/audio/tts` 播报（见 `doc/plans/voice-m3-2026-10-29.md`）；③ **通道网关与远程客户端**：
 > QQ / 飞书 / 企业微信连接器（`gateway/channels/`）与任意外部 HTTP 客户端
-> （`doc/plans/remote-client-contract-2026-10-30.md`）复用同一 runtime 契约。
+> （`doc/plans/implemented/remote-client-contract-2026-10-30.md`）复用同一 runtime 契约。
 
 ## 代码定位
 

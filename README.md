@@ -246,7 +246,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | [`doc/plans/implemented/group-presence-2026-10-30.md`](doc/plans/implemented/group-presence-2026-10-30.md) | 群自然存在感（T0/T1/T2 分层、闸门顺序、参数与状态划分） |
 | [`doc/plans/implemented/voice-2026-10-31.md`](doc/plans/implemented/voice-2026-10-31.md) | 语音交互与引擎（对讲式 / 免提 / 接口契约冻结） |
 | [`doc/plans/sing-2026-11-02.md`](doc/plans/sing-2026-11-02.md) | 唱歌选型与实施（TTS / SVC / SVS 分野、管线、闸门与实测） |
-| [`doc/plans/remote-client-contract-2026-10-30.md`](doc/plans/remote-client-contract-2026-10-30.md) | 远程客户端契约（含取向与通道解绑的定案段） |
+| [`doc/plans/implemented/remote-client-contract-2026-10-30.md`](doc/plans/implemented/remote-client-contract-2026-10-30.md) | 远程客户端契约（含取向与通道解绑的定案段） |
 | [`spec/coding_standard.md`](spec/coding_standard.md) | 工程规范 |
 
 > 以上设计文档均为中文。许可证见 [LICENSE](LICENSE)。
@@ -495,7 +495,7 @@ The conclusion was **not to swap approaches and not to embed upstream wholesale*
 | [`doc/plans/implemented/group-presence-2026-10-30.md`](doc/plans/implemented/group-presence-2026-10-30.md) | Natural group presence (T0/T1/T2 layering, gate ordering, parameter vs state split) |
 | [`doc/plans/implemented/voice-2026-10-31.md`](doc/plans/implemented/voice-2026-10-31.md) | Voice interaction & engines (walkie-talkie / hands-free / frozen API contract) |
 | [`doc/plans/sing-2026-11-02.md`](doc/plans/sing-2026-11-02.md) | Singing research and implementation (TTS / SVC / SVS split, pipeline, gates, measurements) |
-| [`doc/plans/remote-client-contract-2026-10-30.md`](doc/plans/remote-client-contract-2026-10-30.md) | Remote client contract (incl. orientation / channel decoupling) |
+| [`doc/plans/implemented/remote-client-contract-2026-10-30.md`](doc/plans/implemented/remote-client-contract-2026-10-30.md) | Remote client contract (incl. orientation / channel decoupling) |
 | [`spec/coding_standard.md`](spec/coding_standard.md) | Engineering standard |
 
 > The design documents above are written in Chinese. License: [LICENSE](LICENSE).

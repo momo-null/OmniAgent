@@ -126,7 +126,8 @@ def check_r2_tool_branch(lines: list[str], path: Path, findings: list[str]) -> N
 # 注释与 LLM prompt 同样受约束（模型可见文本也是内核契约）；不豁免能力层目录。
 SCENE_WORD_RE = re.compile(
     r"群聊|私聊|群名片|群里|群友|跨群|分群|名片\(uid\)|「名片」|"
-    r"QQ|飞书|企业微信|抖音|B站|视频站|napcat|feishu|wecom|onebot|"
+    r"QQ|飞书|企业微信|抖音|B站|视频站|小红书|快手|视频号|"
+    r"napcat|feishu|wecom|onebot|xiaohongshu|bilibili|xhs|"
     r"startswith\(['\"]group|startswith\(['\"]private"
 )
 

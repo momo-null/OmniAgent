@@ -45,6 +45,11 @@ web/vite.config.d.ts
 dist-electron/
 desktop/dist-*/
 
+# 真实登录凭据（含 cookie/token，勿提交；仓库只留 .example 模板）
+cookies.json
+# 本机临时产物（崩溃转储 / 观察截图），不入库
+bash.exe.stackdump
+observe_ocr.png
 # 本机配置（含明文 api key，勿提交）
 # 项目根 config.yaml 只保留「Web 无入口」的少量项，需与 examples/config.yaml 同步；
 # 可调项一律由 Web 设置面板写入 ~/.omniagent/config.yaml，不要往项目根堆配置。

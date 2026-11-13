@@ -64,6 +64,26 @@ _XHS_TOOLS = {
     "comment": "post_comment_to_feed",  # {feed_id, xsec_token, content}
 }
 
+#: 登录态探针的机械判定词表。内核只做匹配、不内置任何业务文案，词表必须由调用方
+#: 提供；dict 形态的 ok/success/valid/ready/status/state 由内核通用键处理，这里只管
+#: 纯文本口径。否定词优先于肯定词（"not logged in" 不能因含 "logged in" 判成就绪）。
+_LOGIN_PROBE_CFG: Dict[str, Any] = {
+    "fail_words": ("未登录", "登录已失效", "登录过期", "请先扫码", "需要扫码",
+                   "not logged in", "not logged", "not_login", "unauthorized", "expired"),
+    "ok_words": ("已登录", "登录成功", "登录有效", "logged in", "logged_in"),
+}
+
+
+def _login_probe_cfg(cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """通道 yaml 的 ``readiness`` 段可覆盖词表 / extract / expect；缺省用通道常量。"""
+    out = dict(_LOGIN_PROBE_CFG)
+    extra = (cfg or {}).get("readiness") or {}
+    if isinstance(extra, dict):
+        for key in ("ok_words", "fail_words", "extract", "expect"):
+            if extra.get(key) not in (None, "", []):
+                out[key] = extra[key]
+    return out
+
 
 class XhsReply:
     """绑定会话的回发句柄（实现 ReplyChannel 协议；写路径全部收口到适配器闸）。"""
@@ -88,6 +108,7 @@ class XhsAdapter:
     name = "xiaohongshu"
 
     def __init__(self, cfg: Dict[str, Any]):
+        self._cfg = dict(cfg or {})
         self.mode = str(cfg.get("mode", "dry_run")).strip().lower()
         if self.mode not in ("dry_run", "draft", "live"):
             raise ValueError(f"xiaohongshu 通道 mode 非法: {self.mode}（dry_run|draft|live）")
@@ -108,8 +129,6 @@ class XhsAdapter:
         self.outbox_file = base / "xiaohongshu_outbox.jsonl"
 
         self._state_lock = threading.Lock()
-        self._mcp_session = ""
-        self._rpc_id = 0
         self._login_cache: Tuple[float, bool] = (0.0, False)
         self._stop = threading.Event()
 
@@ -181,97 +200,69 @@ class XhsAdapter:
                 return err
         return None
 
-    # ── MCP 传输（streamable HTTP JSON-RPC；登录态由服务端浏览器承担） ──────
-    def _mcp_rpc(self, method: str, params: Optional[Dict[str, Any]] = None,
-                 notify: bool = False) -> Dict[str, Any]:
-        """一次 JSON-RPC POST；兼容 JSON 与 SSE 两种响应。返回原始响应 dict。"""
-        import requests
+    # ── MCP 传输：统一走 omni_core.tools.mcp_state（全进程只有一份 MCP 客户端） ──
+    def _mcp_cfg(self) -> Dict[str, Any]:
+        """``mcp.json`` 里同名 server 的配置；没有则按通道自身的 mcp_url 合成一条。
 
-        headers = {"Content-Type": "application/json",
-                   "Accept": "application/json, text/event-stream"}
-        if self._mcp_session:
-            headers["Mcp-Session-Id"] = self._mcp_session
-        payload: Dict[str, Any] = {"jsonrpc": "2.0", "method": method}
-        if not notify:
-            self._rpc_id += 1
-            payload["id"] = self._rpc_id
-        if params is not None:
-            payload["params"] = params
+        归并原则：通道不再自己发 JSON-RPC——写路径（发布/评论）与登录探针一律经
+        ``mcp_state.call_tool``，与 MCP 懒加载层共用同一套连接与解析。
+        """
         try:
-            resp = requests.post(self.mcp_url, json=payload, headers=headers,
-                                 timeout=self.timeout_sec)
-        except Exception as e:
-            return {"ok": False, "error": f"MCP 端点不可达（{self.mcp_url}）: {e}"}
-        sid = resp.headers.get("Mcp-Session-Id")
-        if sid:
-            self._mcp_session = sid
-        if resp.status_code >= 400:
-            return {"ok": False, "error": f"MCP HTTP {resp.status_code}: {resp.text[:200]}"}
-        ctype = resp.headers.get("Content-Type", "")
-        raw = resp.text
-        if "text/event-stream" in ctype:
-            for line in raw.splitlines():
-                line = line.strip()
-                if line.startswith("data:"):
-                    blob = line[5:].strip()
-                    if blob and blob != "[DONE]":
-                        try:
-                            return json.loads(blob)
-                        except Exception:
-                            continue
-            return {"ok": False, "error": "SSE 响应里没有可解析的数据帧"}
-        try:
-            return resp.json()
+            import config as _config
+
+            for s in (_config.load_mcp_config() or {}).get("servers") or []:
+                if isinstance(s, dict) and str(s.get("name") or "") == self.name:
+                    return s
         except Exception:
-            return {"ok": False, "error": f"MCP 返回非 JSON ({resp.status_code}): {raw[:200]}"}
-
-    def _mcp_init(self) -> Dict[str, Any]:
-        ret = self._mcp_rpc("initialize", {
-            "protocolVersion": "2025-03-26",
-            "capabilities": {},
-            "clientInfo": {"name": "omniagent-xhs", "version": "1.0.0"},
-        })
-        if ret.get("ok") is False or not ret:
-            return ret
-        self._mcp_rpc("notifications/initialized", notify=True)
-        return ret
+            pass
+        return {"name": self.name, "url": self.mcp_url,
+                "timeout_ms": int(max(1.0, float(self.timeout_sec)) * 1000)}
 
     def _mcp_call(self, tool: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """调用 xiaohongshu-mcp 工具；返回 {"ok", "data"(解析后的文本)/"raw"}。"""
-        if not self._mcp_session:
-            init = self._mcp_init()
-            if init.get("ok") is False or not init:
-                return {"ok": False, "error": init.get("error", "MCP initialize 失败")}
-        resp = self._mcp_rpc("tools/call", {"name": tool, "arguments": arguments or {}})
-        if resp.get("ok") is False:
-            return resp
-        err = resp.get("error")
-        if err:
-            return {"ok": False, "error": f"MCP error: {err.get('message', err)}"}
-        result = resp.get("result") or {}
-        if result.get("isError"):
-            texts = [c.get("text", "") for c in result.get("content") or []]
-            return {"ok": False, "error": " / ".join(t for t in texts if t) or "工具执行失败"}
-        texts = [c.get("text", "") for c in result.get("content") or [] if c.get("type") == "text"]
-        blob = "\n".join(texts).strip()
-        try:
-            return {"ok": True, "data": json.loads(blob)}
-        except Exception:
-            return {"ok": True, "data": blob}
+        """调用平台 MCP 工具；返回 ``{"ok", "data"/"error"}``（与旧的裸 RPC 同形状）。"""
+        from omni_core.tools import mcp_state
+
+        return mcp_state.call_tool(self._mcp_cfg(), tool, dict(arguments or {}),
+                                   timeout_s=max(5.0, float(self.timeout_sec)))
 
     # ── 就绪与登录态 ───────────────────────────────────────────────────────
     def _login_status(self, force: bool = False) -> bool:
         now = time.time()
         if not force and now - self._login_cache[0] < 300:
             return self._login_cache[1]
+        # mcp-lazy-activation：若 mcp.json 已把 xhs 配成 lazy server，登录态观测由
+        # ``mcp_state`` 统一持有（目录注入 / mcp_activate / 设置页共用一份）。这里**只读
+        # 缓存**（TTL 内零网络），绝不在通道 ready() 里再触发一次 20s RPC ——
+        # 调度闸不能变成阻塞点。缓存过期/缺失时回落到统一的 ``mcp_state.call_tool`` 口径。
+        try:
+            import config as _config
+
+            from omni_core.tools import mcp_state
+
+            _mcfg = _config.load_mcp_config() or {}
+            if mcp_state.has_lazy_server(_mcfg, "xiaohongshu"):
+                _readiness = next(
+                    (s.get("readiness") for s in (_mcfg.get("servers") or [])
+                     if isinstance(s, dict) and str(s.get("name") or "") == "xiaohongshu"),
+                    None,
+                ) or {}
+                _ttl = float(_readiness.get("ttl_sec") or 600)
+                _st = mcp_state.load_state("xiaohongshu")
+                if _st is not None and _st.ts and (now - _st.ts) < _ttl:
+                    self._login_cache = (now, bool(_st.ready))
+                    return bool(_st.ready)
+        except Exception:
+            pass
         ret = self._mcp_call(_XHS_TOOLS["login"])
-        logged = bool(ret.get("ok")) and bool(
-            (ret.get("data") or {}).get("logged_in")
-            if isinstance(ret.get("data"), dict) else ret.get("data"))
-        # 容忍非 JSON 文本返回：包含 logged_in/true 字样也算
-        if not logged and isinstance(ret.get("data"), str):
-            low = ret["data"].lower()
-            logged = ("logged_in" in low and "false" not in low) or "true" in low
+        if not ret.get("ok"):
+            logged = False
+        else:
+            from omni_core.tools import mcp_state as _ms
+
+            # 中英文双口径（已登录/未登录/logged_in…）：纯文本返回不能靠"非空即真"。
+            # 词表必须由调用方给（内核只做机械匹配），传空 cfg 会一律判 probe_unknown。
+            logged, _reason = _ms.readiness_ok(ret.get("data"),
+                                               _login_probe_cfg(self._cfg))
         self._login_cache = (now, logged)
         return logged
 
@@ -521,11 +512,14 @@ class XhsAdapter:
         self._stop.set()
 
 
+def client(cfg: Dict[str, Any]) -> "XhsAdapter":
+    """只读客户端：不检查 enabled（它只管网关自动拉起），也不 connect。"""
+    return XhsAdapter(cfg)
+
+
 def build(cfg: Dict[str, Any]) -> Optional["XhsAdapter"]:
     """工厂：enabled 才实例化（与 feishu/napcat 同构）。"""
-    if not cfg.get("enabled", False):
-        return None
-    return XhsAdapter(cfg)
+    return client(cfg) if cfg.get("enabled", False) else None
 
 
 # ── 命令行：联调 ────────────────────────────────────────────────────────────
@@ -549,9 +543,9 @@ def _main() -> int:
         print(json.dumps({"logged_in": logged, "mcp_url": a.mcp_url}, ensure_ascii=False))
         return 0 if logged else 1
     if args.poll_once:
-        ret = a._mcp_init()
-        if ret.get("ok") is False:
-            print(json.dumps(ret, ensure_ascii=False))
+        probe = a._mcp_call(_XHS_TOOLS["login"])
+        if not probe.get("ok"):
+            print(json.dumps(probe, ensure_ascii=False))
             return 1
         st = a._load_state()
         for note in (st.get("notes") or [])[-5:]:

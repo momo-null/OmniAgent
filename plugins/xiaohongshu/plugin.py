@@ -19,22 +19,29 @@ from typing import Any, Dict, List, Optional, Tuple
 from omni_core.tools.base import function_tool
 from utils import get_logger
 
+# 归一逻辑的唯一实现在 plugins/xiaohongshu/normalize.py：MCP 懒加载（mcp.json 的
+# transform 钩子）也要用同一份，避免两份代码漂移。此处只别名导入，不做本地副本。
+from plugins.xiaohongshu.normalize import (
+    extract_comments as _extract_comments,
+    extract_notes as _extract_notes,
+    normalize_note as _normalize_note,
+)
+
 logger = get_logger("plugins.xiaohongshu")
 
 _ADAPTER = None  # 懒构造单例（随通道配置）
 
 
 def _adapter():
-    """按 xiaohongshu 通道配置构造适配器（只用作 MCP 读客户端，不 connect）。"""
+    """取通道只读客户端：只依赖宿主能力，不 import 具体通道实现。"""
     global _ADAPTER
     if _ADAPTER is None:
-        try:
-            from gateway.channel_gateway import channel_config
-            from gateway.channels.xiaohongshu import XhsAdapter
+        from gateway.channel_gateway import channel_client
 
-            _ADAPTER = XhsAdapter(channel_config("xiaohongshu"))
-        except Exception as e:
-            raise RuntimeError(f"xiaohongshu 通道不可用（先配置 channels/xiaohongshu.yaml）: {e}")
+        client = channel_client("xiaohongshu")
+        if client is None:
+            raise RuntimeError("xiaohongshu 通道不可用（先配置 channels/xiaohongshu.yaml）")
+        _ADAPTER = client
     return _ADAPTER
 
 
@@ -46,55 +53,10 @@ def _err(msg: str) -> Dict[str, Any]:
     return {"ok": False, "error": msg}
 
 
-def _normalize_note(raw: Any) -> Dict[str, Any]:
-    """xiaohongshu-mcp 返回结构有出入 → 宽容归一成统一笔记摘要（TODO_XHS_LIVE 对参）。"""
-    if not isinstance(raw, dict):
-        return {"raw": str(raw)[:200]}
-    card = raw.get("noteCard") or raw.get("note") or raw
-    user = card.get("user") or {}
-    interact = card.get("interactInfo") or {}
-    return {
-        "feed_id": raw.get("id") or card.get("noteId") or "",
-        "xsec_token": raw.get("xsecToken") or raw.get("xsec_token") or "",
-        "title": card.get("displayTitle") or card.get("title") or "",
-        "desc": str(card.get("desc") or "")[:120],
-        "nickname": user.get("nickname") or user.get("nickName") or "",
-        "user_id": user.get("userId") or user.get("id") or "",
-        "liked": interact.get("likedCount") or card.get("likes"),
-        "collected": interact.get("collectedCount"),
-        "comments": interact.get("commentCount") or card.get("comments"),
-        "type": card.get("type") or raw.get("type") or "",
-    }
-
-
 def _mcp_data(ret: Dict[str, Any]) -> Tuple[Optional[Any], Optional[str]]:
     if not ret.get("ok"):
         return None, str(ret.get("error", "MCP 调用失败"))
     return ret.get("data"), None
-
-
-def _extract_notes(data: Any) -> List[Any]:
-    """MCP 返回的笔记列表可能在 data 自身 / data.items / data.notes / data.result。"""
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in ("items", "notes", "result", "feeds", "data"):
-            v = data.get(key)
-            if isinstance(v, list):
-                return v
-    return []
-
-
-def _extract_comments(data: Any) -> List[Any]:
-    """评论可能在 list（多数端点）或 {list, cursor, hasMore}（get_feed_detail 实盘形态）。"""
-    if isinstance(data, dict):
-        for key in ("comments", "commentList", "replies"):
-            v = data.get(key)
-            if isinstance(v, list):
-                return v
-            if isinstance(v, dict) and isinstance(v.get("list"), list):
-                return v["list"]
-    return []
 
 
 @function_tool(

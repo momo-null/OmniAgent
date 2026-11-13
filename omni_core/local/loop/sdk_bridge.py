@@ -292,6 +292,18 @@ class SdkBridgeMixin:
             except Exception:
                 skill_catalog = None
                 catalog = None
+        # MCP 服务目录（L0，mcp-lazy-activation）：与技能目录同款——一条 user 消息、
+        # 每 run 一次、chat 模式不注入。只读 mcp.json + mcp_state.json 缓存，**零连接**；
+        # 目录不承诺可用，可用性由 mcp_activate 当场裁定。
+        _mcp_catalog = ""
+        if self.mode != "chat" and getattr(self, "tools_enabled", True):
+            try:
+                from omni_core.tools.mcp_state import format_catalog_message
+
+                _mcp_catalog = format_catalog_message(
+                    getattr(self, "mcp_raw_cfg", None) or {})
+            except Exception:
+                _mcp_catalog = ""
         t_step = [0.0]
         role = "executor" if is_sub else "brain"
         # F4.1b：纪律文件（AGENTS.md）进入 system prompt——run 开始读一次并锁定快照。
@@ -702,6 +714,11 @@ class SdkBridgeMixin:
             history_items=history_items,
             todo_store=todo_store,
             skill_catalog=skill_catalog,
+            # lazy MCP：本 run 的 lazy 配置 / 已构造 server / 共享激活槽（全 None = 无 lazy）
+            mcp_lazy_cfgs=getattr(self, "mcp_lazy_cfgs", None),
+            mcp_lazy_servers=getattr(self, "mcp_lazy_servers", None),
+            mcp_slots=getattr(self, "mcp_slots", None),
+            mcp_catalog=_mcp_catalog,
             context_note=_context_note,
             human_injection=human_injection,
             tool_attachments=attach_channel,

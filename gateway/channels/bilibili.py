@@ -878,11 +878,14 @@ def _env(cfg: Dict[str, Any], key: str) -> str:
     return os.environ.get(str(cfg.get(f"{key}_env", f"BILI_{key.upper()}")), "")
 
 
+def client(cfg: Dict[str, Any]) -> "BilibiliAdapter":
+    """只读客户端：不检查 enabled（它只管网关自动拉起），也不 connect。"""
+    return BilibiliAdapter(cfg)
+
+
 def build(cfg: Dict[str, Any]) -> Optional["BilibiliAdapter"]:
     """工厂：enabled 才实例化（与 feishu/napcat 同构）。"""
-    if not cfg.get("enabled", False):
-        return None
-    return BilibiliAdapter(cfg)
+    return client(cfg) if cfg.get("enabled", False) else None
 
 
 # ── 命令行：联调与土法审批（不依赖网关进程） ────────────────────────────────

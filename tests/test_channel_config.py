@@ -85,3 +85,33 @@ def test_start_channels_enumerates_files(monkeypatch, _isolated_home):
     P.channel_routes_file().write_text('"x:*":\n  project_id: p\n', encoding="utf-8")
     assert gw.start_channels() == 1                     # routes.yaml 不当通道拉起
     assert built == ["connect"]
+
+
+def test_channel_client_ignores_enabled_gate(monkeypatch):
+    """只读客户端不受 enabled 门限：通道未自动拉起时插件工具仍可用。"""
+    from gateway.channels import bilibili, xiaohongshu
+
+    class Dummy:
+        def __init__(self, cfg):
+            self.cfg = cfg
+
+    monkeypatch.setattr(bilibili, "BilibiliAdapter", Dummy)
+    monkeypatch.setattr(xiaohongshu, "XhsAdapter", Dummy)
+    cfg = {"enabled": False}
+    assert bilibili.build(cfg) is None
+    assert xiaohongshu.build(cfg) is None
+    assert isinstance(bilibili.client(cfg), Dummy)
+    assert isinstance(xiaohongshu.client(cfg), Dummy)
+
+
+def test_channel_client_resolves_by_name(monkeypatch):
+    """宿主门面按名解析通道的 client(cfg)；非法名/未知名 fail-closed。"""
+    from gateway import channel_gateway as gw
+    from gateway.channels import bilibili
+
+    assert gw.channel_client("") is None
+    assert gw.channel_client("not/valid") is None
+    assert gw.channel_client("no_such_channel") is None
+    monkeypatch.setattr(gw, "channel_config", lambda name: {"from": name})
+    monkeypatch.setattr(bilibili, "client", lambda cfg: cfg)
+    assert gw.channel_client("bilibili") == {"from": "bilibili"}
