@@ -226,3 +226,28 @@ def test_catch_up_reembeds_when_content_changes(brain, monkeypatch):
     row = conn.execute("SELECT src_hash FROM vectors WHERE source='atom'").fetchone()[0]
     conn.close()
     assert row != old
+
+
+def test_search_brain_cos_floor_drops_unrelated(brain, monkeypatch):
+    """语义 floor：cos 低于阈值的向量行不进结果（防「每问必答」灌水）。
+
+    复现 2026-11-13 A/B 实测的退化：无 floor 时满额率 1.0、负样本 20 条凭空召回
+    （importance/recency 基础分把任何向量行抬过既有 floor）。
+    """
+    rid_a, rid_b, rid_c = _seed_three_atoms(brain)
+    monkeypatch.setattr(mb, "_vec_enabled", lambda: True)
+    monkeypatch.setattr(mb, "_vec_ready", lambda: True)
+    monkeypatch.setattr(mb, "_vec_model", lambda: "test-model")
+    monkeypatch.setattr(mb, "_vec_floor", lambda: 0.80)   # 只留 cos≥0.80 的候选
+    monkeypatch.setattr(mb, "_vec_encode", _stub_query_vec(_vec2(0.0)))
+    hits = mb.search_brain("关东地区的二手市场见闻", k=5, reinforce=False)
+    # A 的种子向量 cos=1.0（过 floor）；B 也是 1.0？B 种子 = _vec2(0.0) → cos=1.0……
+    # 用向量区分：重播 B 为 45°（cos=0.707 < 0.80 → 应被丢）
+    conn = mb.open_brain()
+    _seed_vec(conn, "atom", rid_b, _vec2(np.pi / 4), "东京的中古店圈子文化观察记录")
+    conn.commit()
+    conn.close()
+    hits = mb.search_brain("关东地区的二手市场见闻", k=5, reinforce=False)
+    by_id = {h["record_id"] for h in hits}
+    assert rid_b not in by_id, "cos=0.707 < floor 0.80 应被丢弃"
+    assert rid_a in by_id, "cos=1.0 的 A 不受影响"

@@ -1048,6 +1048,21 @@ def _vec_model() -> str:
         return "bge-m3"
 
 
+def _vec_floor() -> float:
+    """向量候选的语义 floor（余弦下限）。
+
+    为什么需要：final 公式的 importance/recency 两项会把**任何**向量专属行抬过
+    既有 floor（cos=0 也有 0.15+0.15 基础分）——没有语义下限，无关查询也会被
+    塞满 k 条（实测满额率 1.0、负样本 20 条凭空召回）。校准：正样本 cos 最低
+    0.543、负样本最高 0.493（2026-11-13 实测），0.52 居间可分；可配置。
+    """
+    try:
+        import config
+        return float(config.get_config("runtime.knowledge.memory.vector.cos_floor", 0.52))
+    except Exception:
+        return 0.52
+
+
 def _vec_src_hash(text: str) -> str:
     import hashlib
     return hashlib.md5(str(text or "").encode("utf-8")).hexdigest()
@@ -1065,7 +1080,7 @@ def _vec_write(conn: sqlite3.Connection, source: str, rid: str, vec,
 
 def _vec_atom_candidates(c: sqlite3.Connection, qvec: List[float], top: int,
                          model: str) -> List[Tuple[str, float]]:
-    """atoms 的向量候选：JOIN 源表沿用 state='active' scope，余弦取 top。"""
+    """atoms 的向量候选：JOIN 源表沿用 state='active' scope，余弦过语义 floor 后取 top。"""
     import numpy as _np
     q = _np.asarray(qvec, dtype="<f4")
     rows = c.execute(
@@ -1077,8 +1092,16 @@ def _vec_atom_candidates(c: sqlite3.Connection, qvec: List[float], top: int,
     mat = mat / (_np.linalg.norm(mat, axis=1, keepdims=True) + 1e-12)
     qv = q / (_np.linalg.norm(q) + 1e-12)
     cos = mat @ qv
-    order = _np.argsort(-cos)[:max(1, int(top))]
-    return [(str(rows[i][0]), float(cos[i])) for i in order]
+    floor = _vec_floor()
+    order = _np.argsort(-cos)
+    out = []
+    for i in order:
+        if float(cos[i]) < floor:
+            break  # 已降序，后面更低
+        out.append((str(rows[i][0]), float(cos[i])))
+        if len(out) >= max(1, int(top)):
+            break
+    return out
 
 
 def _vec_l0_candidates(c: sqlite3.Connection, qvec: List[float], top: int, model: str,
@@ -1096,11 +1119,14 @@ def _vec_l0_candidates(c: sqlite3.Connection, qvec: List[float], top: int, model
         return []
     q = _np.asarray(qvec, dtype="<f4")
     q = q / (_np.linalg.norm(q) + 1e-12)
+    floor = _vec_floor()
     scored = []
     for r in rows:
         v = _np.frombuffer(r[8], dtype="<f4")
         v = v / (_np.linalg.norm(v) + 1e-12)
-        scored.append((float(v @ q), r))
+        cos = float(v @ q)
+        if cos >= floor:
+            scored.append((cos, r))
     scored.sort(key=lambda x: -x[0])
     return [r for _s, r in scored[:max(1, int(top))]]
 

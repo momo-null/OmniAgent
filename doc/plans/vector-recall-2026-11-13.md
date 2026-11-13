@@ -48,8 +48,14 @@ narrative/scene；不做隐性触发（「她没发起检索」问题，独立�
      · 有 FTS rank → rel = bm25_rank_to_score(rank)（原值）
      · 仅向量命中 → rel = max(0, cos)
                                     ↓
+   语义 floor（cos < 0.52 的向量候选直接丢弃）                    ↓
    floor(0.30) / 场合·peer·圈层加权 / 轮换环 / 去冗余 —— 全部原样
 ```
+
+**语义 floor（`vector.cos_floor`，缺省 0.52）是必要件而非可选件**：final 公式的
+importance/recency 两项会把任何向量专属行抬过既有 floor（cos=0 也有 0.30 基础分）——
+没有语义下限，无关查询也会被塞满 k 条（实测满额率 1.0、负样本 20 条凭空召回）。
+校准依据：正样本 cos 最低 0.543 / 负样本最高 0.493（2026-11-13 实测），0.52 居间。
 
 - **RRF 不是最终排序，只做候选合并/去重**：RRF 单路 top1 ≈0.016、双路 ≈0.033，
   而 `rel∈[0,1]`、floor=0.30——把 RRF 分数当 rel 代入会被 importance/recency
@@ -121,6 +127,7 @@ narrative/scene；不做隐性触发（「她没发起检索」问题，独立�
 | `runtime.knowledge.memory.vector.enabled` | False | 总开关（缺省关=行为与今日完全一致） |
 | `runtime.knowledge.memory.vector.model` | bge-m3 | 模型名；低配可切，换模型按 §5 过渡 |
 | `runtime.knowledge.memory.vector.device` | auto | auto / gpu / cpu |
+| `runtime.knowledge.memory.vector.cos_floor` | 0.52 | 向量候选语义下限（校准见 §3；关掉=「每问必答」灌水回归） |
 
 设置页改动**不在本分支**（另一条未拍板的线，不搭车）；本分支全部用 config 键 +
 脚本开关驱动，核心链路零依赖设置页。
