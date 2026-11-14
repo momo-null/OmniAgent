@@ -49,7 +49,13 @@ export default function PluginFrame({
   }, [url]);
   const text = statusText(source, note);
   const color = STATE_COLOR[source?.state || "stopped"] || "text.secondary";
-  const blocked = !!source && source.state !== "connected";
+  // 没有快照 = 网关没跑过，插件服务也不会被拉起；不给空白 iframe
+  const blocked = !url || !source || source.state !== "connected";
+  const reason = !url
+    ? "该插件未在 manifest 里声明页面地址（ui.url）。"
+    : !source
+      ? "网关未运行，读不到事件源状态；启动网关后插件页会自动出现。"
+      : `插件服务${text}，页面暂不可用。${source.error ? "" : "启动网关后会自动拉起该服务。"}`;
 
   return (
     <Box sx={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -74,7 +80,7 @@ export default function PluginFrame({
         // 服务不可用时不留空白 iframe：把原因说清楚（判据 7 的「自动变红并给出原因」）
         <Box sx={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", p: 3 }}>
           <Typography variant="body2" color="text.secondary" sx={{ textAlign: "center", maxWidth: 420 }}>
-            插件服务{text}，页面暂不可用。{source?.error ? "" : "启动网关后会自动拉起该服务。"}
+            {reason}
           </Typography>
         </Box>
       ) : (
