@@ -20,6 +20,8 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
+os.environ["OMNI_LOG_TAG"] = "harness"  # 网关自报家门；硬置——被 backend 派生时会继承父进程的 tag
+
 from . import dispatch
 from .events import registry as context
 from .scheduler import Scheduler, submit_via_web

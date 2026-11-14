@@ -6,8 +6,11 @@
 注意：本入口**不**在启动时自动拉起任何模型；但会探测并接管
 因后端异常退出而残留的 llama-server 孤儿进程（见 lifespan）。
 """
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+os.environ.setdefault("OMNI_LOG_TAG", "backend")  # 每进程独占日志文件：先于任何 get_logger
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
