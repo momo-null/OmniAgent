@@ -4,5 +4,12 @@
   "title": "联网",
   "description": "联网抓取（HTML→可读文本）与无密钥联网搜索",
   "enabled": true,
-  "permissions": ["net"]
+  "permissions": [
+    "net"
+  ],
+  "requires": {
+    "host": [
+      "register_tools"
+    ]
+  }
 }

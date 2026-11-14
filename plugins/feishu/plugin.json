@@ -1,0 +1,25 @@
+{
+  "name": "feishu",
+  "version": "1.0.0",
+  "title": "飞书通道",
+  "description": "飞书事件源：长连接接收消息，按 reply_mode 直接回发。连接参数在 plugins/feishu.yaml。",
+  "enabled": true,
+  "permissions": [
+    "network"
+  ],
+  "events": {
+    "transport": "pull",
+    "factory": "channel:build"
+  },
+  "lifecycle": {
+    "autostart": true
+  },
+  "requires": {
+    "host": [
+      "subscribe_events",
+      "reply_handle",
+      "config",
+      "log"
+    ]
+  }
+}

@@ -4,5 +4,13 @@
   "title": "消息通道",
   "description": "通用消息投递：msg_send_text / msg_send_voice / msg_send_card / msg_stay_silent。工具按行为命名，通道（飞书/企微…）作为参数，由 gateway/channels 注册表解析——新增通道本插件零改动。",
   "enabled": true,
-  "permissions": ["msg_send"]
+  "permissions": [
+    "msg_send"
+  ],
+  "requires": {
+    "host": [
+      "register_tools",
+      "reply_handle"
+    ]
+  }
 }

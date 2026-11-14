@@ -91,6 +91,14 @@ class ServiceManager:
         return f"http://127.0.0.1:{self._port(spec)}"
 
     def _log_path(self, name: str) -> str:
+        spec = self.spec(name)
+        # 插件自带服务可显式指定日志文件；缺省仍落在模型目录下（与本文件历史口径一致）
+        explicit = str(self._sub(spec.get("log") or "")).strip()
+        if explicit:
+            d = os.path.dirname(explicit)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            return explicit
         d = os.path.join(_models_root(), name)
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, "svc.log")

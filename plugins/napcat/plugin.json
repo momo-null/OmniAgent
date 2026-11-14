@@ -1,0 +1,25 @@
+{
+  "name": "napcat",
+  "version": "1.0.0",
+  "title": "QQ 通道（NapCat）",
+  "description": "QQ 事件源（NapCat / OneBot11）：群聊与私聊收发，含群自然存在感判定。连接参数在 plugins/napcat.yaml。",
+  "enabled": true,
+  "permissions": [
+    "network"
+  ],
+  "events": {
+    "transport": "pull",
+    "factory": "channel:build"
+  },
+  "lifecycle": {
+    "autostart": true
+  },
+  "requires": {
+    "host": [
+      "subscribe_events",
+      "reply_handle",
+      "config",
+      "log"
+    ]
+  }
+}

@@ -1,43 +1,49 @@
 """网关主入口 —— 常驻进程：消息通道 + 定时任务 + 派发队列，一体启动。
 
 用法（OmniAgent 仓库根）：
-    python -m gateway.channel_gateway                # 全量（channels/ 下有配置文件的通道）
+    python -m gateway.channel_gateway                # 全量（声明了 events 的插件）
     python -m gateway.channel_gateway --no-channels  # 只跑调度器（无飞书时先跑 cron）
     python -m gateway.channel_gateway --no-scheduler # 只跑通道（调飞书连通性）
 
 云端部署：systemd/任务计划程序托管本入口；本地调试直接跑。
-配置：``~/.omniagent/channels/<name>.yaml``（每通道一文件，与 plugins/ 同构）+
-``channels/routes.yaml``（聊天路由）。不再读主配置的 channels:/chat_routes: 段。
+配置：``~/.omniagent/plugins/<name>.yaml``（每插件一文件，阶段 4 起为主源；
+过渡期回落 ``~/.omniagent/channels/<name>.yaml``）+ ``channels/routes.yaml``（聊天路由）。
+不再读主配置的 channels:/chat_routes: 段，也不再有“通道”专属注册表——通道 = 声明了
+events 面的插件。
 """
 from __future__ import annotations
 
 import signal
 import sys
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from . import dispatch
 from .events import registry as context
 from .scheduler import Scheduler, submit_via_web
 
-_ADAPTER_FACTORIES = {}  # name -> build(cfg)  惰性注册（避免 import 不必要 SDK）
-
 
 def channel_config(name: str) -> Dict[str, Any]:
-    """通道自有配置 ``~/.omniagent/channels/<name>.yaml``（缺失/损坏返回空 dict）。
+    """插件配置（阶段 4 起单源）：``~/.omniagent/plugins/<name>.yaml`` 优先，
+    缺失回落旧路径 ``~/.omniagent/channels/<name>.yaml`` 并打 warning（三个月后删回落）。
 
-    与 ``plugin_config``（omni_core/tools/loader.py）完全对称：一通道一文件。
-    通道连接信息（token/ws_url 等）是部署事实，不该和 brain/runtime 等 core 配置
-    挤在同一份主配置里；独立成文件也为通道插件化预留了同一套布局。
+    与 ``plugin_config``（omni_core/tools/loader.py）同一布局：一插件一文件。通道连接
+    信息（token/ws_url 等）是部署事实，不该和 brain/runtime 等 core 配置挤在主配置里。
     """
+    plugin_file = None
+    legacy_file = None
     try:
-        from omni_core.local.runtime_paths import channel_config_file
+        from omni_core.local.runtime_paths import channel_config_file, plugin_config_file
 
-        path = channel_config_file(name)
+        plugin_file = plugin_config_file(name)
+        legacy_file = channel_config_file(name)
     except Exception:
         return {}
-    if not path.is_file():
+    path = plugin_file if plugin_file is not None and plugin_file.is_file() else legacy_file
+    if path is None or not path.is_file():
         return {}
+    if path is legacy_file and plugin_file is not None:
+        print(f"[gateway] 通道 {name} 仍在用旧配置 {path.name}（建议运行 scripts/migrate_plugin_configs.py）")
     try:
         import yaml
 
@@ -45,17 +51,31 @@ def channel_config(name: str) -> Dict[str, Any]:
     except Exception as e:
         print(f"[gateway] 通道 {name} 配置读取失败（忽略）: {e}")
         return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _channel_names() -> List[str]:
-    """枚举 ``channels/`` 下的通道配置文件名（routes.yaml 是路由表，不是通道）。"""
+    cfg = data if isinstance(data, dict) else {}
+    # 能力层开关单源（§0.6-A3）：plugin.yaml > manifest.enabled。
+    # 旧 ``channels/<name>.yaml`` 里的 enabled 阶段 4 起忽略（合并时会删掉该字段）。
     try:
-        from omni_core.local.runtime_paths import channels_root
+        from .events import discover
 
-        return sorted(p.stem for p in channels_root().glob("*.yaml") if p.stem != "routes")
+        meta = discover.manifests().get(name) or {}
+        if meta:
+            cfg["enabled"] = bool(meta.get("enabled", cfg.get("enabled", True)))
     except Exception:
-        return []
+        pass
+    return cfg
+
+
+def _discovered() -> Dict[str, Any]:
+    """manifest 清单（宿主的唯一插件认知来源）。"""
+    from .events import discover
+
+    return discover.manifests()
+
+
+def _channel_names(discovered: Optional[Dict[str, Any]] = None) -> List[str]:
+    """声明了 events 面的插件名（旧「通道」概念已并入插件：不再扫 channels/*.yaml）。"""
+    table = discovered if discovered is not None else _discovered()
+    return [name for name, meta in table.items() if meta.get("events")]
 
 
 def _load_routes() -> Dict[str, Any]:
@@ -65,35 +85,27 @@ def _load_routes() -> Dict[str, Any]:
     return load_routes()
 
 
-def _register_factories() -> None:
-    from plugins.bilibili import channel as bilibili
-    from plugins.feishu import channel as feishu
-    from plugins.napcat import channel as napcat
-    from plugins.wecom import channel as wecom
-    from plugins.xiaohongshu import channel as xiaohongshu
-    _ADAPTER_FACTORIES["bilibili"] = bilibili.build
-    _ADAPTER_FACTORIES["feishu"] = feishu.build
-    _ADAPTER_FACTORIES["wecom"] = wecom.build
-    _ADAPTER_FACTORIES["napcat"] = napcat.build
-    _ADAPTER_FACTORIES["xiaohongshu"] = xiaohongshu.build
-
-
 def build_adapter(name: str):
-    """按 ``channels/<name>.yaml`` 构造适配器（**不连接**），供非网关进程使用。
+    """按 manifest 构造事件源适配器（**不连接**），供非网关进程使用。
 
-    背景：``msg_send_*`` 工具取通道走本进程的注册表（``channels.context``），只有网关
-    进程里有实例。在 Web 后端进程里让 agent 主动发消息时，注册表是空的 → 工具返回
+    背景：``msg_send_*`` 工具取通道走本进程的注册表（``gateway.events.registry``），只有
+    网关进程里有实例。在 Web 后端进程里让 agent 主动发消息时，注册表是空的 → 工具返回
     "无可用通道"，模型只能绕去 shell 调 OneBot HTTP（实测发生过：绕了 9 步）。
 
     这里只构造「会发消息」的句柄：napcat 的发送走 HTTP，不依赖 WS 长连接，所以
-    **不 connect** 也能正常发；返回 None 表示通道未知或未启用（fail-closed）。
+    **不 connect** 也能正常发；返回 None 表示插件不存在 / 能力层关闭 / 构造失败
+    （fail-closed，门限口径与网关一致：``plugin.yaml`` > ``manifest.enabled``）。
     """
     try:
-        _register_factories()
-        factory = _ADAPTER_FACTORIES.get(name)
-        if factory is None:
+        from .events import registry
+
+        meta = _discovered().get(name) or {}
+        if not meta or not meta.get("enabled", True) or not meta.get("events"):
             return None
-        return factory(channel_config(name))
+        if not meta.get("configured"):
+            return None
+        return registry.build(name, channel_config(name),
+                              (meta.get("events") or {}).get("factory"))
     except Exception:
         return None
 
@@ -121,25 +133,49 @@ def channel_client(name: str):
 
 
 def start_channels() -> int:
-    """拉起 ``channels/`` 下所有已启用通道；返回成功数。"""
-    _register_factories()
+    """拉起所有声明了 events 的插件（能力层启用才连）；返回成功数。
+
+    工厂不再由宿主硬编码：``registry.bootstrap`` 按 manifest 的
+    ``events.factory`` 用 importlib 构造，失败记 ``failed`` 并跳过。
+    """
+    from .events import lifecycle, registry
+
+    discovered = _discovered()
+    names = _channel_names(discovered)
+    built = registry.bootstrap(names, channel_config, discovered)
     started = 0
-    for name in _channel_names():
-        factory = _ADAPTER_FACTORIES.get(name)
-        if factory is None:
-            print(f"[gateway] 未知通道 {name}（跳过；可用: {sorted(_ADAPTER_FACTORIES)}）")
+    for name in names:
+        meta = discovered.get(name) or {}
+        rec = built.get(name) or {}
+        state = rec.get("state")
+        if state == "disabled":
+            lifecycle.mark_disabled(name, "plugin.yaml/manifest enabled=false", meta)
+            print(f"[gateway] 事件源 {name} 未启用（plugin.yaml/manifest enabled=false）")
             continue
+        if not meta.get("configured"):
+            lifecycle.mark_disabled(name, "未配置（plugins/<name>.yaml 缺失）", meta)
+            print(f"[gateway] 事件源 {name} 未配置（跳过）")
+            continue
+        if state == "failed":
+            lifecycle.mark_failed(name, rec.get("error") or "", meta)
+            print(f"[gateway] 事件源 {name} 构造失败: {rec.get('error')}")
+            continue
+        adapter = rec.get("adapter")
+        if adapter is None:
+            lifecycle.mark_failed(name, "工厂返回 None", meta)
+            print(f"[gateway] 事件源 {name} 无适配器（跳过）")
+            continue
+        lifecycle.mark_starting(name, meta)
         try:
-            adapter = factory(channel_config(name))
-            if adapter is None:
-                print(f"[gateway] 通道 {name} 未启用（enabled=false）")
-                continue
             adapter.connect(_on_message)
             context.register(adapter)
+            lifecycle.bind(name, adapter, meta)
             started += 1
-            print(f"[gateway] 通道 {name} 已连接")
-        except Exception as e:
-            print(f"[gateway] 通道 {name} 启动失败: {e}")
+            print(f"[gateway] 事件源 {name} 已连接（transport={(meta.get('events') or {}).get('transport')}）")
+        except Exception as e:  # noqa: BLE001
+            lifecycle.mark_failed(name, e, meta)
+            print(f"[gateway] 事件源 {name} 启动失败: {e}")
+    lifecycle.write_snapshot()
     return started
 
 
@@ -229,6 +265,16 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001
         print(f"[gateway] 本地服务拉起失败（已忽略）: {e}")
 
+    # 插件自带服务（manifest lifecycle.spawn）与事件源体检：同一执行侧（ServiceManager）
+    from .events import lifecycle
+
+    try:
+        for r in lifecycle.ensure_plugin_services():
+            print(f"[gateway] 插件服务 {r.get('name')}: {r.get('result')}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[gateway] 插件服务拉起失败（已忽略）: {e}")
+    lifecycle.start_health_loop()
+
     n = 0 if no_channels else start_channels()
     if not no_channels and n == 0:
         print("[gateway] ⚠ 无任何通道连接（检查 ~/.omniagent/channels/ 下的通道配置）")
@@ -253,6 +299,12 @@ def main() -> int:
         time.sleep(1)
     if sched:
         sched.stop()
+    try:
+        from .events import lifecycle as _lifecycle
+
+        _lifecycle.stop_health_loop()
+    except Exception:
+        pass
     print("[gateway] 退出")
     return 0
 

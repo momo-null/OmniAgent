@@ -1,0 +1,25 @@
+{
+  "name": "wecom",
+  "version": "1.0.0",
+  "title": "企业微信通道",
+  "description": "企业微信事件源（P1 通用化验收件，收发未实装）。连接参数在 plugins/wecom.yaml。",
+  "enabled": true,
+  "permissions": [
+    "network"
+  ],
+  "events": {
+    "transport": "pull",
+    "factory": "channel:build"
+  },
+  "lifecycle": {
+    "autostart": true
+  },
+  "requires": {
+    "host": [
+      "subscribe_events",
+      "reply_handle",
+      "config",
+      "log"
+    ]
+  }
+}

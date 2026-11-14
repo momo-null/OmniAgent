@@ -134,25 +134,58 @@ def sent_count() -> int:
 
 # ── 构造（importlib，不静态 import 插件） ─────────────────────────────────
 
-def build(name: str, cfg: Optional[Dict[str, Any]] = None):
-    """按插件名构造事件源实例（**不 connect**）→ ``plugins.<name>.channel:build(cfg)``。
+def _construct(name: str, cfg: Optional[Dict[str, Any]], factory: Optional[str]):
+    """真正构造；异常向上抛（``build`` 才吞异常）。"""
+    module_file, _, attr = str(factory or "channel:build").partition(":")
+    from importlib import import_module
 
-    返回 None = 未知 / 模块无 build / 构造失败（调用方按 fail-closed 处理）。
-    ``build`` 由插件自己决定是否读 ``cfg.enabled``（通道实现统一在 enabled=false
-    时返回 None；只读客户端 ``client(cfg)`` 不受门限，见插件模块）。
+    mod = import_module(f"plugins.{name}.{module_file or 'channel'}")
+    fn = getattr(mod, attr or "build")
+    return fn(dict(cfg or {}))
+
+
+def build(name: str, cfg: Optional[Dict[str, Any]] = None,
+          factory: Optional[str] = None):
+    """按 manifest 声明的工厂构造事件源实例（**不 connect**）。
+
+    ``factory`` = ``"<模块文件>:<函数名>"``（默认 ``channel:build``）；宿主只做机械
+    解析，不认识具体插件。返回 None = 未知 / 无工厂 / 构造失败（调用方 fail-closed）。
     """
     if not name or not name.isidentifier():
         return None
     try:
-        from importlib import import_module
-
-        mod = import_module(f"plugins.{name}.channel")
-        factory = getattr(mod, "build", None)
-        if not callable(factory):
-            return None
-        return factory(dict(cfg or {}))
+        return _construct(name, cfg, factory)
     except Exception:
         return None
+
+
+def bootstrap(names: List[str], config_provider=None,
+              discovered: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+    """按 discovered 清单逐个构造事件源（阶段 3.3）：失败记 ``failed`` 并跳过。
+
+    返回 ``{name: {adapter, state, error}}``；``state`` ∈ built / disabled / empty /
+    failed。``config_provider(name)`` 由调用方注入（宿主配置读法属于调用方，注册表不猜）。
+    """
+    from . import discover as _discover
+
+    table = discovered if discovered is not None else _discover.manifests()
+    out: Dict[str, Dict[str, Any]] = {}
+    for name in names:
+        meta = table.get(name) or {}
+        if not meta.get("enabled", True):
+            out[name] = {"adapter": None, "state": "disabled", "error": ""}
+            continue
+        events = meta.get("events") or {}
+        try:
+            cfg = config_provider(name) if callable(config_provider) else {}
+            adapter = _construct(name, cfg, events.get("factory"))
+        except Exception as e:  # noqa: BLE001 —— 坏插件不能让整批注册失败
+            out[name] = {"adapter": None, "state": "failed", "error": str(e)}
+            continue
+        out[name] = {"adapter": adapter,
+                     "state": "built" if adapter is not None else "empty",
+                     "error": ""}
+    return out
 
 
 __all__ = [
@@ -161,5 +194,5 @@ __all__ = [
     "set_source_external", "get_source_external",
     "set_source_kind", "get_source_kind",
     "reset_sent", "note_sent", "take_sent", "sent_count",
-    "build",
+    "build", "bootstrap",
 ]

@@ -171,5 +171,11 @@
         "desc": "留空=weights/doro-e30.ckpt（相对路径按 gptsovits_dir 解析）。"
       }
     ]
+  },
+  "requires": {
+    "host": [
+      "register_tools",
+      "config"
+    ]
   }
 }
