@@ -72,7 +72,7 @@ copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
 - 服务默认只听回环、按需懒加载、空闲释放模型（进程不退、监听常在）；要放到局域网就改 `service_host` **并务必设 `service_token`**。
 - 一个音色 = `voices/<名字>.wav`（参考音频）+ 同名 `.txt`（韵律参考文本）；音色本体在微调权重里，wav 只提供音色与韵律参考。
 - 唱歌的在线曲库总闸 `sing_online` **默认关**：开着时库外点歌先应下、后台跑完整条管线再补投，失败也会回话；关着就维持「这首我还不会唱」。站点源插件放 `~/.omniagent/song_sources/`，不入公开仓。
-- 设置页入口：**设置 → 模型** 里的语音引擎卡片（端点 + 服务配置 + 探活 + 试听）。插件本身默认 `enabled: false`。
+- 设置页入口：**设置 → 模型** 里的语音服务卡片负责引擎参数与音色；**右侧「语音调用端点」插件页**（在技能与工具启用语音插件后注入）负责调用端点（base_url / API Key / 模型名）与试听。插件本身默认 `enabled: false`。
 
 ## 功能清单
 

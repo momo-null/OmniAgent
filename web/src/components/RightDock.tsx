@@ -211,7 +211,7 @@ function HomeView({ onNavigate, pluginViews, sources, note }:
             {t.icon}
             <Typography variant="body2" sx={{ fontSize: 13.5, flex: 1, minWidth: 0 }}>{t.label}</Typography>
             {"plugin" in t && (
-              <Tooltip title={src ? `${src.state}${src.error ? `：${src.error}` : ""}` : (note || "网关未运行")} placement="left">
+              <Tooltip title={src ? `${src.state}${src.error ? `：${src.error}` : ""}` : (note || "事件源状态未报告")} placement="left">
                 <Box sx={{
                   width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
                   bgcolor: !src ? "text.disabled" : src.state === "connected"

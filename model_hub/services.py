@@ -12,6 +12,7 @@ desktop TS 管语音、``omni_core.local.embedder`` 管向量、``model_hub`` �
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -127,6 +128,26 @@ class ServiceManager:
         except Exception:
             return False
 
+    def health_detail(self, name: str, timeout: float = HEALTH_TIMEOUT) -> Optional[Dict[str, Any]]:
+        """健康端点返回的 JSON 详情；没有健康端点或响应不是 JSON 时返回 None。
+
+        模型服务状态只给「起没起 / 能不能用」；音色、模型就绪等细节由服务自己
+        在 ``/healthz`` 里自报，这里原样透传，不在宿主里认识任何业务键名。
+        """
+        spec = self.spec(name)
+        path = str(self.spec(name).get("health") or "").strip()
+        if not path:
+            return None
+        from urllib.request import urlopen
+
+        try:
+            with urlopen(self._url(spec) + path, timeout=timeout) as r:
+                raw = r.read()
+            data = json.loads(raw.decode("utf-8", "replace"))
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
     def status(self, name: str) -> Dict[str, Any]:
         spec = self.spec(name)
         port = self._port(spec)
@@ -142,6 +163,7 @@ class ServiceManager:
             "port": port,
             "pid": (proc.pid if alive else None),
             "kind": str(spec.get("kind") or "python_service"),
+            "detail": self.health_detail(name) if running else None,
         }
 
     # ── 生命周期 ──────────────────────────────────────────

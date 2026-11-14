@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>语音调用端点</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #1c1c1c;
+    --fg: #e0e0e0;
+    --muted: #9a9a9a;
+    --border: #2e2e2e;
+    --card: #1c1c1c;
+    --input-bg: #121212;
+    --input-border: #3a3a3c;
+    --focus: #e0e0e0;
+    --primary: #e0e0e0;
+    --primary-fg: #121212;
+    --primary-hover: #f2f2f2;
+    --ghost-hover: rgba(255, 255, 255, 0.06);
+    --err: #ff6961;
+    --ok: #30d158;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #ffffff;
+    --fg: #1d1d1f;
+    --muted: #6e6e73;
+    --border: #e3e3e6;
+    --card: #ffffff;
+    --input-bg: #ffffff;
+    --input-border: #d0d0d4;
+    --focus: #1d1d1f;
+    --primary: #1d1d1f;
+    --primary-fg: #ffffff;
+    --primary-hover: #333333;
+    --ghost-hover: rgba(0, 0, 0, 0.05);
+    --err: #d70015;
+    --ok: #248a3d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px 16px 32px;
+    font: 13px/1.55 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+    color: var(--fg); background: var(--bg);
+  }
+  header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  h1 { font-size: 14px; font-weight: 600; margin: 0; }
+  .chip {
+    font-size: 11px; border: 1px solid var(--border); border-radius: 999px;
+    padding: 1px 8px; opacity: .85;
+  }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; border-radius: 6px; border: 1px solid transparent; padding: 4px 10px;
+    cursor: pointer; background: var(--primary); color: var(--primary-fg);
+  }
+  button:hover { background: var(--primary-hover); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; color: var(--fg); border-color: var(--border); }
+  button.ghost:hover { background: var(--ghost-hover); }
+  .card {
+    border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+    margin-bottom: 10px; background: var(--card);
+  }
+  .hint { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+  .field { margin-bottom: 11px; }
+  .field label { display: block; font-size: 12px; margin-bottom: 4px; opacity: .8; }
+  .field input {
+    width: 100%; font: inherit; border: 1px solid var(--input-border); border-radius: 6px;
+    padding: 6px 8px; background: var(--input-bg); color: var(--fg);
+  }
+  .field input:focus {
+    outline: none; border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus);
+  }
+  .field input::placeholder { color: var(--muted); opacity: 1; }
+  .field .desc { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+  .actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  .err { font-size: 12px; color: var(--err); margin: 8px 0; white-space: pre-wrap; }
+  .ok { font-size: 12px; color: var(--ok); margin: 8px 0; white-space: pre-wrap; }
+</style>
+<script>
+  (() => {
+    try {
+      const t = new URLSearchParams(location.search).get("theme");
+      document.documentElement.dataset.theme = t === "light" ? "light" : "dark";
+    } catch (e) { /* 无脚本环境按默认 dark */ }
+  })();
+</script>
+</head>
+<body>
+<header>
+  <h1>语音调用端点</h1>
+  <span id="state" class="chip">读取中…</span>
+  <span class="spacer"></span>
+  <button class="ghost" id="refresh" type="button">刷新</button>
+</header>
+<div id="err" class="err" hidden></div>
+<div id="ok" class="ok" hidden></div>
+<div class="card">
+  <p class="hint">
+    这里只改这个语音插件的调用端：本机引擎或在线厂商都只动这一块。
+    引擎参数（音色 / 空闲回收 / 路径）在设置 → 模型 → 语音服务，不在这里。
+  </p>
+  <form id="form">
+    <div id="fields"></div>
+    <div class="actions">
+      <button type="submit" id="save">保存端点</button>
+      <button type="button" class="ghost" id="preview">试听</button>
+      <span id="busy" class="hint"></span>
+    </div>
+  </form>
+</div>
+<datalist id="voice-options"></datalist>
+<script>
+const $ = (id) => document.getElementById(id);
+let busy = false;
+let schema = [];
+let values = {};
+let secrets = {};
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+function showErr(msg) {
+  const box = $("err");
+  box.hidden = !msg;
+  box.textContent = msg || "";
+}
+
+function showOk(msg) {
+  const box = $("ok");
+  box.hidden = !msg;
+  box.textContent = msg || "";
+}
+
+async function call(path, opts) {
+  const r = await fetch(path, opts);
+  let body = {};
+  try { body = await r.json(); } catch (e) { /* 非 JSON：下面统一报状态码 */ }
+  if (!r.ok) throw new Error(body.error || ("HTTP " + r.status));
+  return body;
+}
+
+function addVoiceOptions(voices) {
+  const list = $("voice-options");
+  list.replaceChildren();
+  const f = schema.find((x) => x.key === "voice");
+  if (!f) return;
+  const note = f.desc ? ` ${f.desc}` : "";
+  const input = document.querySelector('[data-key="voice"]');
+  if (!input) return;
+  input.placeholder = voices.length ? `留空 = 服务端默认（可用：${voices.join(" / ")}）` : "留空 = 服务端默认";
+  if (voices.length) {
+    voices.forEach((v) => {
+      const opt = el("option");
+      opt.value = v;
+      list.append(opt);
+    });
+  }
+  const hint = document.querySelector('[data-hint="voice"]');
+  if (hint) hint.textContent = voices.length ? `当前引擎音色：${voices.join(" / ")}` : note.trim();
+}
+
+async function loadVoices() {
+  try {
+    const r = await call("/api/voices");
+    const voice = (r || []).find((s) => s && s.name === "voice");
+    addVoiceOptions(((voice || {}).detail || {}).voices || []);
+  } catch (e) {
+    addVoiceOptions([]);
+  }
+}
+
+function buildField(f) {
+  const wrap = el("div", "field");
+  const id = "f_" + f.key.replace(/[^\w]/g, "_");
+  const label = el("label", null, f.label || f.key);
+  label.htmlFor = id;
+  const input = el("input");
+  input.id = id;
+  input.dataset.key = f.key;
+  input.type = f.type === "password" ? "password" : f.type === "number" ? "number" : "text";
+  input.value = values[f.key] == null ? "" : String(values[f.key]);
+  if (f.type === "password" && secrets[f.key]) {
+    input.placeholder = "已配置，留空保持不变";
+  } else if (f.key === "voice") {
+    input.setAttribute("list", "voice-options");
+  }
+  wrap.append(label, input);
+  if (f.desc) {
+    const desc = el("div", "desc", f.desc);
+    if (f.key === "voice") desc.dataset.hint = "voice";
+    wrap.append(desc);
+  }
+  return wrap;
+}
+
+function render() {
+  const box = $("fields");
+  box.replaceChildren();
+  schema.forEach((f) => box.append(buildField(f)));
+  const voiceNote = document.querySelector('[data-hint="voice"]');
+  if (voiceNote) voiceNote.textContent = "音色列表由本机语音引擎提供；留空使用服务端默认。";
+}
+
+function collect() {
+  const out = {};
+  schema.forEach((f) => {
+    const input = document.querySelector(`[data-key="${f.key}"]`);
+    if (!input) return;
+    let v = input.value;
+    if (f.type === "number" && v !== "") v = Number(v);
+    out[f.key] = v;
+  });
+  return out;
+}
+
+async function load() {
+  try {
+    showErr("");
+    showOk("");
+    const cfg = await call("/api/config");
+    schema = cfg.schema || [];
+    values = cfg.values || {};
+    secrets = cfg.secrets_set || {};
+    $("state").textContent = "端点配置";
+    render();
+    await loadVoices();
+  } catch (e) {
+    $("state").textContent = "读取失败";
+    showErr(String(e.message || e));
+  }
+}
+
+async function save(ev) {
+  ev.preventDefault();
+  if (busy) return;
+  busy = true;
+  $("save").disabled = true;
+  $("busy").textContent = "保存中…";
+  try {
+    showErr("");
+    showOk("");
+    await call("/api/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values: collect() }),
+    });
+    await load();
+    showOk("端点配置已保存，下一次调用即生效。");
+  } catch (e) {
+    showErr(String(e.message || e));
+  } finally {
+    busy = false;
+    $("save").disabled = false;
+    $("busy").textContent = "";
+  }
+}
+
+async function preview() {
+  if (busy) return;
+  busy = true;
+  $("preview").disabled = true;
+  $("busy").textContent = "合成中…";
+  try {
+    showErr("");
+    showOk("");
+    const r = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "你好，这是语音插件的端点试听。" }),
+    });
+    if (!r.ok) {
+      let body = {};
+      try { body = await r.json(); } catch (e) { /* 非 JSON */ }
+      throw new Error(body.error || ("试听失败 (HTTP " + r.status + ")"));
+    }
+    const blob = await r.blob();
+    await new Audio(URL.createObjectURL(blob)).play();
+    showOk("试听成功：引擎按当前端点返回了音频。");
+  } catch (e) {
+    showErr(String(e.message || e));
+  } finally {
+    busy = false;
+    $("preview").disabled = false;
+    $("busy").textContent = "";
+  }
+}
+
+$("form").addEventListener("submit", save);
+$("preview").addEventListener("click", preview);
+$("refresh").addEventListener("click", load);
+load();
+</script>
+</body>
+</html>

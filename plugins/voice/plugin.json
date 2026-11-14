@@ -5,6 +5,27 @@
   "description": "语音转文字与文字转语音的**调用端**：把请求发给 OpenAI 音频兼容端点（本机常驻语音服务或在线厂商）。引擎进程由 model_hub 管理（model_hub/servers/voice_engine.py，按 ~/.omniagent/model_hub.yaml 拉起；引擎参数在 ~/.omniagent/voice_service.yaml），插件只管端点、密钥与模型名。启用后 /api/audio/transcribe 与 /api/audio/tts 可用，Web 会话输入框出现按住说话按钮；QQ 通道获得 msg_send_voice 工具。",
   "enabled": false,
   "permissions": [],
+  "lifecycle": {
+    "autostart": true,
+    "spawn": {
+      "args": [
+        "-m",
+        "plugins.voice.page_server"
+      ],
+      "cwd": "{repo}",
+      "port": 18752,
+      "health": "/healthz"
+    }
+  },
+  "ui": [
+    {
+      "id": "endpoint",
+      "label": "语音调用端点",
+      "icon": "blocks",
+      "slot": "dock",
+      "url": "http://127.0.0.1:18752/"
+    }
+  ],
   "config": [
     {
       "key": "base_url",

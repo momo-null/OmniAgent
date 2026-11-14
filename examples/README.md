@@ -59,7 +59,7 @@ cp examples/cron/jobs.json  ~/.omniagent/cron/
 | `voice_service.yaml` | `~/.omniagent/voice_service.yaml` | 语音引擎服务（**独立进程**） | 监听/令牌/空闲秒数在**服务启动**时读，音色与路径在调用时读 | 设置 → 模型 → 语音引擎 |
 | `plugins/napcat.yaml`<br>`plugins/feishu.yaml`<br>`plugins/wecom.yaml`<br>`plugins/bilibili.yaml`<br>`plugins/xiaohongshu.yaml` | `~/.omniagent/plugins/<同名>.yaml` | 网关/插件加载器 | 重启网关（适配器在启动时按文件构造） | 无，纯手改 |
 | `channels/routes.yaml` | `~/.omniagent/channels/routes.yaml` | 网关聊天路由 | 每条消息重读，**改完即生效** | 无，纯手改 |
-| `plugins/voice.yaml` | `~/.omniagent/plugins/voice.yaml` | 语音插件调用端 | 端点类键调用时读；`enabled` 开关重启生效 | 技能与工具（开关） |
+| `plugins/voice.yaml` | `~/.omniagent/plugins/voice.yaml` | 语音插件调用端 | 端点类键调用时读；`enabled` 开关重启生效 | 右侧「语音调用端点」插件页（端点 / 试听 + 技能与工具开关） |
 | `cron/jobs.json` | `~/.omniagent/cron/jobs.json` | 调度器 | 每 tick 重读，**改文件即生效** | 定时任务 |
 
 > 旧版 `~/.omniagent/channels/<name>.yaml` 不再被运行时读取；已有旧配置先运行

@@ -1,10 +1,23 @@
 // 插件页容器（阶段 6）：宿主只画壳——标题 + 状态 + sandbox iframe。
 // 页面 100% 由插件服务自己出（不经主后端代管、不解析页面语义）；
 // 状态文字只来自 harness 落盘的 sources 快照，不探测、不猜。
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Box, IconButton, Stack, Tooltip, Typography } from "@mui/material";
+import { useTheme } from "@mui/material/styles";
 import { RefreshCwIcon } from "../icons";
 import type { SourceState } from "../../api/client.ts";
+
+function pageSrc(url: string, themeMode: string, stamp: number): string {
+  try {
+    const u = new URL(url);
+    u.searchParams.set("theme", themeMode);
+    if (stamp) u.searchParams.set("_", String(stamp));
+    return u.toString();
+  } catch {
+    const sep = url.includes("?") ? "&" : "?";
+    return `${url}${sep}theme=${encodeURIComponent(themeMode)}${stamp ? `&_=${stamp}` : ""}`;
+  }
+}
 
 const STATE_LABEL: Record<string, string> = {
   connected: "已连接",
@@ -22,7 +35,7 @@ const STATE_COLOR: Record<string, string> = {
 };
 
 function statusText(src?: SourceState, note?: string): string {
-  if (!src) return note || "网关未运行";
+  if (!src) return note || "插件页已加载（事件源状态未报告）";
   const base = STATE_LABEL[src.state] || src.state;
   if (src.state === "connected" && src.probe && src.probe !== "unknown") {
     return src.probe === "ready" ? `${base} · 就绪` : `${base} · 未就绪`;
@@ -38,23 +51,21 @@ export default function PluginFrame({
   source?: SourceState;
   note?: string;
 }) {
-  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const { palette: { mode: themeMode } } = useTheme();
   const [loadedAt, setLoadedAt] = useState(0);
   const reload = useCallback(() => {
-    if (frameRef.current) {
-      // 加时间戳绕过缓存：插件服务自己的页面不该被宿主缓存
-      frameRef.current.src = `${url}${url.includes("?") ? "&" : "?"}_=${Date.now()}`;
-      setLoadedAt(Date.now());
-    }
-  }, [url]);
+    // 加时间戳绕过缓存：插件服务自己的页面不该被宿主缓存
+    setLoadedAt(Date.now());
+  }, []);
+  const src = useMemo(() => pageSrc(url, themeMode, loadedAt), [url, themeMode, loadedAt]);
   const text = statusText(source, note);
   const color = STATE_COLOR[source?.state || "stopped"] || "text.secondary";
-  // 页面归插件服务，不归事件源状态：只要网关落过快照（说明宿主在跑）就渲染，
-  // 通道没连/未登录由状态文字如实展示，不能拿它当「页面不可用」。
-  const blocked = !url || !source;
+  // 页面归插件服务，不归事件源状态：只要 manifest 给了 URL 就渲染；
+  // 事件源状态只用于标题旁的状态文字（没有 events 面的工具插件不报告它）。
+  const blocked = !url;
   const reason = !url
     ? "该插件未在 manifest 里声明页面地址（ui.url）。"
-    : "网关未运行，读不到事件源状态；启动网关后插件页会自动出现。";
+    : "";
 
   return (
     <Box sx={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -86,8 +97,7 @@ export default function PluginFrame({
         <Box sx={{ flex: 1, minHeight: 0 }}>
           <Box
             component="iframe"
-            ref={frameRef}
-            src={loadedAt ? `${url}${url.includes("?") ? "&" : "?"}_=${loadedAt}` : url}
+            src={src}
             title={label}
             // 插件页的 API 就在它自己的源上（:18751）。不给 allow-same-origin 会让文档
             // 变成 opaque origin，连自己的 /api/* 都算跨源 → 浏览器直接 Failed to fetch。

@@ -5,39 +5,84 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>出站审批</title>
 <style>
-  :root { color-scheme: light dark; }
+  :root {
+    color-scheme: dark;
+    --bg: #1c1c1c;
+    --fg: #e0e0e0;
+    --muted: #9a9a9a;
+    --border: #2e2e2e;
+    --card: #1c1c1c;
+    --primary: #e0e0e0;
+    --primary-fg: #121212;
+    --primary-hover: #f2f2f2;
+    --ghost-hover: rgba(255, 255, 255, 0.06);
+    --danger: #ff6961;
+    --danger-border: #5a2a2a;
+    --danger-hover: rgba(255, 105, 97, 0.12);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #ffffff;
+    --fg: #1d1d1f;
+    --muted: #6e6e73;
+    --border: #e3e3e6;
+    --card: #ffffff;
+    --primary: #1d1d1f;
+    --primary-fg: #ffffff;
+    --primary-hover: #333333;
+    --ghost-hover: rgba(0, 0, 0, 0.05);
+    --danger: #d70015;
+    --danger-border: #f0c0c4;
+    --danger-hover: rgba(215, 0, 21, 0.06);
+  }
   * { box-sizing: border-box; }
   body {
     margin: 0; padding: 16px 16px 32px;
     font: 13px/1.55 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif;
-    color: #1d1d1f; background: #fff;
-  }
-  @media (prefers-color-scheme: dark) {
-    body { color: #e8e8ea; background: #1c1c1e; }
-    .card { border-color: #3a3a3c; }
-    .chip { border-color: #48484a; }
-    button.ghost { color: #e8e8ea; border-color: #48484a; }
+    color: var(--fg); background: var(--bg);
   }
   header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
   h1 { font-size: 14px; font-weight: 600; margin: 0; }
-  .chip { font-size: 11px; border: 1px solid #d0d0d4; border-radius: 999px; padding: 1px 8px; opacity: .85; }
+  .chip {
+    font-size: 11px; border: 1px solid var(--border); border-radius: 999px;
+    padding: 1px 8px; opacity: .85;
+  }
   .spacer { flex: 1; }
   button {
     font: inherit; border-radius: 6px; border: 1px solid transparent; padding: 4px 10px;
-    cursor: pointer; background: #0a84ff; color: #fff;
+    cursor: pointer; background: var(--primary); color: var(--primary-fg);
   }
+  button:hover { background: var(--primary-hover); }
   button:disabled { opacity: .5; cursor: default; }
-  button.ghost { background: transparent; color: #1d1d1f; border-color: #d0d0d4; }
-  button.danger { background: transparent; color: #d70015; border-color: #f0c0c4; }
-  .card { border: 1px solid #e3e3e6; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
-  .meta { display: flex; gap: 8px; align-items: center; font-size: 11px; opacity: .7; margin-bottom: 6px; }
+  button.ghost { background: transparent; color: var(--fg); border-color: var(--border); }
+  button.ghost:hover { background: var(--ghost-hover); }
+  button.danger {
+    background: transparent; color: var(--danger); border-color: var(--danger-border);
+  }
+  button.danger:hover { background: var(--danger-hover); }
+  .card {
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    margin-bottom: 10px; background: var(--card);
+  }
+  .meta {
+    display: flex; gap: 8px; align-items: center; font-size: 11px;
+    color: var(--muted); margin-bottom: 6px;
+  }
   .text { white-space: pre-wrap; margin: 0 0 8px; }
   .row { display: flex; gap: 8px; }
-  .empty, .err { font-size: 12px; opacity: .7; }
-  .err { color: #d70015; }
-  .hist { display: flex; gap: 8px; font-size: 11.5px; opacity: .7; margin: 2px 0; }
+  .empty { font-size: 12px; color: var(--muted); }
+  .err { font-size: 12px; color: var(--danger); margin: 8px 0; white-space: pre-wrap; }
+  .hist { display: flex; gap: 8px; font-size: 11.5px; color: var(--muted); margin: 2px 0; }
   .hist .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
+<script>
+  (() => {
+    try {
+      const t = new URLSearchParams(location.search).get("theme");
+      document.documentElement.dataset.theme = t === "light" ? "light" : "dark";
+    } catch (e) { /* 无脚本环境按默认 dark */ }
+  })();
+</script>
 </head>
 <body>
 <header>
