@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from gateway import dispatch as gw_dispatch  # noqa: E402
+from harness import dispatch as gw_dispatch  # noqa: E402
 from plugins.napcat import channel as mod  # noqa: E402
 from plugins.napcat.channel import NapcatAdapter  # noqa: E402
 from omni_core.tools.capability import (  # noqa: E402

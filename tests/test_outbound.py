@@ -1,11 +1,11 @@
 """出站守则离线测试。
 
-只验证 gateway/outbound 的归一/机械闸/场合自述逻辑与 msg_send_* 接线点；
+只验证 harness/outbound 的归一/机械闸/场合自述逻辑与 msg_send_* 接线点；
 不连任何通道、不发真实请求；本模块不触碰任何记忆接口。
 """
 import pytest
 
-from gateway.outbound import (context_key_of, enforce, flatten, note,
+from harness.outbound import (context_key_of, enforce, flatten, note,
                               resolve, split_paragraphs, voice_error)
 
 
@@ -39,7 +39,7 @@ def test_flatten_empty_and_bad_input():
 
 
 def test_resolve_reads_channel_config(monkeypatch):
-    monkeypatch.setattr("gateway.channel_gateway.channel_config",
+    monkeypatch.setattr("harness.channel_gateway.channel_config",
                         lambda name: ({"outbound": {"max_chars": 60,
                                                     "by_context": {"private": {"max_chars": 200}}}}
                                       if name == "stub" else {}))
@@ -246,16 +246,16 @@ class _Adapter:
 @pytest.fixture
 def stub_channel(monkeypatch):
     a = _Adapter()
-    from gateway.events import registry as ctx
+    from harness.events import registry as ctx
 
     ctx.register(a)
-    monkeypatch.setattr("gateway.channel_gateway.channel_config",
+    monkeypatch.setattr("harness.channel_gateway.channel_config",
                         lambda name: ({"outbound": {"max_chars": 10,
                                                     "by_context": {"group": {"max_chars": 20,
                                                                              "max_sentences": 1}}}}
                                       if name == "stub" else {}))
     yield a
-    from gateway.events import registry as ctx2
+    from harness.events import registry as ctx2
 
     ctx2._REGISTRY.pop("stub", None)
 
@@ -304,7 +304,7 @@ def test_blank_lines_become_three_real_messages_without_config(stub_channel, mon
     """回归：真机没配 outbound 时，一次 msg_send_text 也要真的发出三条。"""
     from plugins.messaging import plugin as msg
 
-    monkeypatch.setattr("gateway.channel_gateway.channel_config", lambda name: {})
+    monkeypatch.setattr("harness.channel_gateway.channel_config", lambda name: {})
     chunks, err = msg._outbound_chunks(stub_channel, "group:333", _PARA_TEXT)
     assert err == "" and len(chunks) == 3
     reply = stub_channel.reply_to("group:333")
@@ -317,7 +317,7 @@ def test_image_caption_opt_out_keeps_all_content(stub_channel, monkeypatch):
     """图片说明只取 chunks[0]，关掉分条才不会丢掉空行后的内容。"""
     from plugins.messaging import plugin as msg
 
-    monkeypatch.setattr("gateway.channel_gateway.channel_config", lambda name: {})
+    monkeypatch.setattr("harness.channel_gateway.channel_config", lambda name: {})
     text = "甲。\n\n乙。"
     chunks, err = msg._outbound_chunks(stub_channel, "group:333", text,
                                        split_blank_lines=False)

@@ -12,7 +12,7 @@ from omni_core.local import runtime_paths as P
 # === 加载器 ===
 
 def test_channel_config_reads_per_channel_file(_isolated_home):
-    from gateway import channel_gateway as gw
+    from harness import channel_gateway as gw
 
     P.ensure_global_dirs()
     P.plugin_config_file("napcat").write_text(
@@ -22,7 +22,7 @@ def test_channel_config_reads_per_channel_file(_isolated_home):
 
 def test_channel_config_prefers_plugin_file(_isolated_home):
     """新路径优先；旧路径还在时打 warning 但不再读它。"""
-    from gateway import channel_gateway as gw
+    from harness import channel_gateway as gw
 
     P.ensure_global_dirs()
     P.plugin_config_file("napcat").write_text("require_at: true\n", encoding="utf-8")
@@ -32,7 +32,7 @@ def test_channel_config_prefers_plugin_file(_isolated_home):
 
 def test_channel_config_falls_back_to_legacy(_isolated_home, capsys):
     """新文件缺失时回落旧路径（三个月内仍能启动），并提示迁移。"""
-    from gateway import channel_gateway as gw
+    from harness import channel_gateway as gw
 
     P.ensure_global_dirs()
     P.channel_config_file("napcat").write_text("require_at: false\n", encoding="utf-8")
@@ -64,7 +64,7 @@ def test_migrate_script_merges_and_drops_enabled(_isolated_home):
 
 
 def test_channel_config_missing_or_broken_returns_empty(_isolated_home):
-    from gateway import channel_gateway as gw
+    from harness import channel_gateway as gw
 
     assert gw.channel_config("nope") == {}
     P.channel_config_file("bad").write_text("a: [1, 2\n", encoding="utf-8")
@@ -73,7 +73,7 @@ def test_channel_config_missing_or_broken_returns_empty(_isolated_home):
 
 def test_channel_names_are_discovered_events_units(_isolated_home):
     """「通道」= manifest 声明了 events 的插件：不再扫 channels/*.yaml。"""
-    from gateway import channel_gateway as gw
+    from harness import channel_gateway as gw
 
     P.ensure_global_dirs()
     P.channel_routes_file().write_text('"x:*":\n  project_id: p\n', encoding="utf-8")
@@ -81,7 +81,7 @@ def test_channel_names_are_discovered_events_units(_isolated_home):
 
 
 def test_load_routes(_isolated_home):
-    from gateway import channel_gateway as gw
+    from harness import channel_gateway as gw
 
     assert gw._load_routes() == {}
     P.channel_routes_file().write_text(
@@ -93,7 +93,7 @@ def test_load_routes(_isolated_home):
 
 def test_build_adapter_reads_manifest_factory(monkeypatch, _isolated_home):
     """build_adapter = discover 清单 + registry 构造；未知/未配置/未启用一律 None。"""
-    from gateway import channel_gateway as gw
+    from harness import channel_gateway as gw
 
     captured = {}
 
@@ -101,7 +101,7 @@ def test_build_adapter_reads_manifest_factory(monkeypatch, _isolated_home):
         captured["args"] = (name, cfg, factory)
         return object()
 
-    monkeypatch.setattr("gateway.events.registry.build", fake_build)
+    monkeypatch.setattr("harness.events.registry.build", fake_build)
     meta = {"enabled": True, "configured": True, "events": {"factory": "channel:build"}}
     monkeypatch.setattr(gw, "_discovered", lambda: {"napcat": meta})
     P.channel_config_file("napcat").write_text("enabled: true\n", encoding="utf-8")
@@ -112,8 +112,8 @@ def test_build_adapter_reads_manifest_factory(monkeypatch, _isolated_home):
 
 def test_start_channels_bootstraps_discovered_units(monkeypatch, _isolated_home):
     """start_channels：discover → bootstrap → connect → lifecycle.bind；未配置跳过。"""
-    from gateway import channel_gateway as gw
-    from gateway.events import lifecycle
+    from harness import channel_gateway as gw
+    from harness.events import lifecycle
 
     lifecycle.reset()
     built = []
@@ -124,7 +124,7 @@ def test_start_channels_bootstraps_discovered_units(monkeypatch, _isolated_home)
         def connect(self, cb):
             built.append("connect")
 
-    monkeypatch.setattr("gateway.events.registry.bootstrap",
+    monkeypatch.setattr("harness.events.registry.bootstrap",
                         lambda names, provider, disc: {"napcat": {
                             "adapter": Dummy(), "state": "built", "error": ""}})
     monkeypatch.setattr(gw, "_discovered", lambda: {
@@ -160,7 +160,7 @@ def test_channel_client_ignores_enabled_gate(monkeypatch):
 
 def test_channel_client_resolves_by_name(monkeypatch):
     """宿主门面按名解析通道的 client(cfg)；非法名/未知名 fail-closed。"""
-    from gateway import channel_gateway as gw
+    from harness import channel_gateway as gw
     from plugins.bilibili import channel as bilibili
 
     assert gw.channel_client("") is None

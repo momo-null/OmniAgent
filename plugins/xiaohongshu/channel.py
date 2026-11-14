@@ -49,7 +49,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from gateway.events.protocol import InboundMessage, OnMessage, ReplyChannel
+from harness.events.protocol import InboundMessage, OnMessage, ReplyChannel
 from utils import get_logger
 
 logger = get_logger("channels.xiaohongshu")

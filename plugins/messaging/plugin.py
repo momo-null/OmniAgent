@@ -3,7 +3,7 @@
 - 工具按**行为**命名（msg_send_text / msg_send_voice / msg_send_card），通道只是参数——
   接十个通道工具清单不变（通用化红线）。用什么方式说（文字/语音）由模型自己选，
   工具不按通道状态偷偷改写发送形式。
-- 通道实现来自 gateway/channels 注册表（与网关同进程闭环）：
+- 通道实现来自 harness.events 注册表（与网关同进程闭环）：
   · channel 缺省 = 当前任务来源通道（dispatch 注入的线程上下文）
   · target  缺省 = 来源会话 / 通道默认会话
 - 网关未运行时（如本地 CLI 跑 run_agent_autonomous），工具返回明确的
@@ -42,7 +42,7 @@ def _resolve(channel: str, target: str):
     来源会话。否则群里的人可以让它 `channel="feishu"` 或 `target="private:别人"`
     —— 不碰任何高危工具也能把消息从别的通道发出去，绕过工具白名单做跳板。
     """
-    from gateway.events import registry as context
+    from harness.events import registry as context
 
     cur = context.get_current_reply()
     if context.get_source_external():
@@ -66,7 +66,7 @@ def _resolve(channel: str, target: str):
         # 因此不依赖网关进程；这样 msg_send_text 在任何进程都能一次成功，模型不必
         # 绕去 shell 手撸 curl（实测踩过：绕了 9 步）。
         try:
-            from gateway.channel_gateway import build_adapter
+            from harness.channel_gateway import build_adapter
 
             adapter = build_adapter(ch_name)
         except Exception:
@@ -91,7 +91,7 @@ def _external_note(result: Dict[str, Any]) -> Dict[str, Any]:
     让模型知道「我指定别的会话没生效」，避免它以为发出去了而实际发在来源群。
     """
     try:
-        from gateway.events import registry as _ctx
+        from harness.events import registry as _ctx
 
         if isinstance(result, dict) and result.get("ok") and _ctx.get_source_external():
             extra = "外部来源：只能发回本会话，channel/target 参数已被忽略"
@@ -102,13 +102,13 @@ def _external_note(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _outbound_flat(adapter: Any, chat_id: str) -> Dict[str, Any]:
-    """按 (通道, 会话) 解析出站守则（§8 统一契约：归一逻辑只在 gateway.outbound）。
+    """按 (通道, 会话) 解析出站守则（§8 统一契约：归一逻辑只在 harness.outbound）。
 
     发送时现解析而非线程上下文：Web 并发不串轮、cron 无来源也能命中
     （明确 target 时按 target 解析，与外部来源锁死回来源会话的语义一致）。
     """
     try:
-        from gateway.outbound import resolve as _ob_resolve
+        from harness.outbound import resolve as _ob_resolve
 
         return _ob_resolve(str(getattr(adapter, "name", "") or ""), chat_id or "")
     except Exception:
@@ -123,7 +123,7 @@ def _outbound_chunks(adapter: Any, chat_id: str, text: str,
     它只会取 chunks[0]，若按空行拆段就会悄悄丢掉后面的说明。
     """
     try:
-        from gateway.outbound import enforce as _ob_enforce
+        from harness.outbound import enforce as _ob_enforce
 
         return _ob_enforce(_outbound_flat(adapter, chat_id), text,
                            split_blank_lines=split_blank_lines)
@@ -190,7 +190,7 @@ def msg_send_text(text: str, channel: str = "", target: str = "") -> Dict[str, A
     if err:
         return {"ok": False, "error": err}
     try:
-        from gateway.events import registry as _ctx
+        from harness.events import registry as _ctx
     except Exception:  # 非网关进程/极端导入失败：不影响发送本身
         _ctx = None
     try:
@@ -227,7 +227,7 @@ def msg_send_voice(text: str, channel: str = "", target: str = "") -> Dict[str, 
     # §8 出站守则：语音同样受上限约束——只拒不拆（拆条朗读很怪，模型该自己精简
     # 或改用文字拆几条短发）。
     try:
-        from gateway.outbound import voice_error as _ob_voice_err
+        from harness.outbound import voice_error as _ob_voice_err
 
         _verr = _ob_voice_err(_outbound_flat(adapter, chat_id), text)
         if _verr:
@@ -245,7 +245,7 @@ def msg_send_voice(text: str, channel: str = "", target: str = "") -> Dict[str, 
             return {"ok": False, "error": f"语音发送返回异常: {result!r}"}
         if result.get("ok") and not result.get("duplicate"):
             try:
-                from gateway.events import registry as _ctx
+                from harness.events import registry as _ctx
 
                 _ctx.note_sent(text)  # 记账：本轮真的发出去了（去重跳过不算）
             except Exception:  # 记账失败不影响已发出的消息
@@ -294,7 +294,7 @@ def msg_send_image(image_path: str, text: str = "", channel: str = "", target: s
             return {"ok": False, "error": f"图片发送返回异常: {result!r}"}
         if result.get("ok") and not result.get("duplicate") and not result.get("queued"):
             try:
-                from gateway.events import registry as _ctx
+                from harness.events import registry as _ctx
 
                 _ctx.note_sent(f"[图片:{os.path.basename(path)}] {chunks[0] if chunks else ''}".strip())
             except Exception:
@@ -333,7 +333,7 @@ def msg_send_sticker(name: str = "", channel: str = "", target: str = "") -> Dic
             return {"ok": False, "error": f"表情发送返回异常: {result!r}"}
         if result.get("ok") and not result.get("duplicate"):
             try:
-                from gateway.events import registry as _ctx
+                from harness.events import registry as _ctx
 
                 _ctx.note_sent(f"[表情:{result.get('sticker') or name}]")
             except Exception:  # 记账失败不影响已发出的消息
@@ -584,7 +584,7 @@ def msg_group_history(group_id: str = "", limit: int = 20, channel: str = "",
     adapter, chat_id, err = _resolve(channel, "")
     if err:
         return {"ok": False, "error": err}
-    from gateway.events import registry as _ctx
+    from harness.events import registry as _ctx
 
     gid = str(group_id or "").strip()
     if _ctx.get_source_external():
@@ -617,7 +617,7 @@ def msg_group_history(group_id: str = "", limit: int = 20, channel: str = "",
             memory_brain = None
         sid = ""
         try:
-            from gateway.chat_routes import resolve as _resolve_route
+            from harness.chat_routes import resolve as _resolve_route
             ch_name = str(getattr(adapter, "name", "") or channel or "")
             sid = _resolve_route(ch_name, f"group:{gid}")[1]
         except Exception:
@@ -667,7 +667,7 @@ def msg_group_image(message_id: str, group_id: str = "", channel: str = "") -> D
     adapter, chat_id, err = _resolve(channel, "")
     if err:
         return {"ok": False, "error": err}
-    from gateway.events import registry as _ctx
+    from harness.events import registry as _ctx
 
     gid = str(group_id or "").strip()
     if _ctx.get_source_external():
@@ -725,7 +725,7 @@ def msg_send_card(payload: Dict[str, Any], channel: str = "", target: str = "") 
 # （实测绕了 7~9 步）。这里给助手一条直路：谁找过、什么时候、助手当时怎么回的。
 # 数据源就是会话记录本身（projects/<pid>/s_*.jsonl）：不新增存储，不依赖网关进程。
 
-#: 通道写进 user 文本首行的「场合说明」前缀（见 gateway/channels/napcat.py）
+#: 通道写进 user 文本首行的「场合说明」前缀（见对应插件的 channel.py）
 _CTX_PREFIXES = ("（这是你的 QQ",)
 _PEER_RE = re.compile(r"「(.+?)」\((\d+)\)")
 

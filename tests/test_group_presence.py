@@ -774,7 +774,7 @@ def test_group_note_carries_voice_mode(adapter, monkeypatch):
 
 def test_chat_routes_exact_beats_channel(monkeypatch):
     """路由：精确键优先于通道通配，会话 ID 与 chat 绑定。"""
-    from gateway import chat_routes
+    from harness import chat_routes
 
     monkeypatch.setattr(chat_routes, "load_routes", lambda: {
         "napcat:*": {"project_id": "qq"},

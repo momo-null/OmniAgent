@@ -40,7 +40,7 @@ class ChatRequest(BaseModel):
     mode: Literal["auto", "chat", "task"] = "auto"
     # 能力门（运行级，2026-11-05）：plan §3.1 规定 chat lane 是「轻工具集」，但
     # 2026-10-29 mode 收窄后实现从未裁过工具（mode 只管取向纪律）——对话/语音轮
-    # 因此拿到全量执行原语，闲聊跑偏去操作设备。这里把 gateway 已在用的运行级
+    # 因此拿到全量执行原语，闲聊跑偏去操作设备。这里把 harness 已在用的运行级
     # 能力门（core.ToolLoop tools_enabled / tool_allowlist，2026-10-29 引入）向上
     # 暴露到 chat 入口：False = 纯对话运行（物理上无工具可调）；allowlist 在
     # False 时仍暴露列出的只读/记忆工具。None = 不干预（缺省全量，语义不变）。

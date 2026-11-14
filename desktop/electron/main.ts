@@ -77,7 +77,7 @@ let appView: WebContentsView | null = null;
 let sidebarCollapsed = false;
 let backend: BackendHandle | null = null;
 /** 网关进程（cron 调度 + 消息通道），随应用生命周期 */
-let gateway: ChildProcess | null = null;
+let harness: ChildProcess | null = null;
 let quitting = false;
 let restarts = 0;
 let cfg: DesktopConfig;
@@ -350,10 +350,10 @@ function spawnGatewayWithRestart(root: string): void {
   if (quitting) return;
   // 后端端口可能是 findFreePort 拿到的非 8000，交给网关做事件通知的目标地址
   const backendUrl = backend ? `http://127.0.0.1:${backend.port}` : "";
-  gateway = startGateway(root, backendUrl);
-  gateway.once("exit", (code) => {
+  harness = startGateway(root, backendUrl);
+  harness.once("exit", (code) => {
     if (quitting) return;
-    shellLog(`gateway 退出(code=${code})，5s 后自动重启`);
+    shellLog(`harness 退出(code=${code})，5s 后自动重启`);
     setTimeout(() => {
       if (!quitting && backend) spawnGatewayWithRestart(root);
     }, 5000);
@@ -384,7 +384,7 @@ async function ensureBackend(): Promise<void> {
     handle.process.once("exit", onBackendExit);
     // 网关与后端并列常驻：cron 定时触发 + 飞书通道（凭据缺失时网关自身降级为只跑调度器）。
     // 守卫：手动「重启后端」/ 崩溃自愈重入时避免拉出第二个网关（scheduler 会双触发）。
-    if (!gateway || gateway.exitCode !== null) {
+    if (!harness || harness.exitCode !== null) {
       spawnGatewayWithRestart(root);
     }
     await waitForHealth(port, HEALTH_TIMEOUT_MS, (s) => setStatus(`正在启动后端… ${s}s`));
@@ -507,9 +507,9 @@ app.on("before-quit", (event) => {
           ]),
         );
       }
-      if (gateway) {
-        const gpid = gateway.pid;
-        gateway = null;
+      if (harness) {
+        const gpid = harness.pid;
+        harness = null;
         if (gpid) kills.push(killBackendTree(gpid));
       }
       await Promise.race([

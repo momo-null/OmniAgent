@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException
 from datetime import datetime
 from typing import Optional
 
-from gateway import scheduler as cron_store
+from harness import scheduler as cron_store
 
 router = APIRouter(tags=["cron"])
 

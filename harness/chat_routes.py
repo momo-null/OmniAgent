@@ -19,7 +19,7 @@ from typing import Any, Dict, Tuple
 
 from utils import get_logger
 
-logger = get_logger("gateway.chat_routes")
+logger = get_logger("harness.chat_routes")
 
 
 def load_routes() -> Dict[str, Any]:

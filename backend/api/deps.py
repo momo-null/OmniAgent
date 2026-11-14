@@ -2,7 +2,7 @@
 
 提供 FastAPI 依赖单例（model_hub 管理器），
 并暴露 ``_resolve_model_name`` / ``_ensure_model_running`` 供 router_llm 复用
-（逻辑从原 ``llm_runtime/api_gateway.py`` 搬来）。
+（逻辑从原 ``llm_runtime/api_harness.py`` 搬来）。
 
 注：X2 的 AgentService（StateManager/CognitionModule 封装）已随 X3 两层架构
 重构移除（归档见 git 历史）；X3 agent 运行时由

@@ -59,7 +59,7 @@ def _extract_summary(result: Any) -> str:
 
 #: IM 历史窗时间上限（分钟；与条数上限 12/40 取交集）。「指代」时效是分钟级，
 #: 跨窗旧话一律 conversation_search 现查（2026-11-02 实测：安静群的 40 条窗
-#: 最远覆盖到 50 小时前，全是低相关闲聊原文）。可经 config: gateway.im_history_minutes 覆盖。
+#: 最远覆盖到 50 小时前，全是低相关闲聊原文）。可经 config: harness.im_history_minutes 覆盖。
 _IM_HISTORY_MINUTES = 90
 
 #: 会话尾部原始行预读上限（read_session 的 limit）：coalesce 把 partial 并回 final，
@@ -71,7 +71,7 @@ _HISTORY_RAW_LIMIT = 400
 def _im_history_minutes() -> int:
     try:
         import config as _config
-        return max(1, int(_config.get_config("gateway.im_history_minutes",
+        return max(1, int(_config.get_config("harness.im_history_minutes",
                                              _IM_HISTORY_MINUTES)
                           or _IM_HISTORY_MINUTES))
     except Exception:
@@ -453,7 +453,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             run_objective = f"{run_objective}\n{_fold}"
         if reply is not None:
             try:
-                from gateway.outbound import note as _ob_note, resolve as _ob_resolve
+                from harness.outbound import note as _ob_note, resolve as _ob_resolve
 
                 _ob_text = _ob_note(_ob_resolve(str(getattr(reply, "channel_name", "") or ""),
                                                 str(getattr(reply, "chat_id", "") or "")))
@@ -577,7 +577,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             # 产物收编（零内核桥）：沙箱把任务写隔离进产物区，运行结束把语料/日记
             # 归位回项目目录（corpus|diary），下一次觉醒/采集才能读到。规则窄且只增不删。
             try:
-                from gateway.artifact_collector import collect as _collect
+                from harness.artifact_collector import collect as _collect
 
                 _collect(str(meta.get("project_id") or ""), real_task_id)
             except Exception as e:  # noqa: BLE001 —— 收编是增强项，失败不影响任务结果

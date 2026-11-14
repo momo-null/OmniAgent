@@ -124,9 +124,9 @@ def test_external_relation_reads_summary_only(brain, monkeypatch):
 
 # ---- 4. 入站归一与边界盖章 ----
 
-def test_gateway_fills_speaker_from_user_id(monkeypatch):
-    from gateway import channel_gateway as cgw
-    from gateway.events.protocol import InboundMessage
+def test_harness_fills_speaker_from_user_id(monkeypatch):
+    from harness import channel_gateway as cgw
+    from harness.events.protocol import InboundMessage
 
     captured = {}
     monkeypatch.setattr(cgw.dispatch, "ensure_worker", lambda: None)
@@ -146,7 +146,7 @@ def test_gateway_fills_speaker_from_user_id(monkeypatch):
 
 
 def test_dispatch_stamps_peer_boundary(monkeypatch):
-    from gateway import dispatch
+    from harness import dispatch
     from omni_core.local.loop import context_signal as cs
 
     seen = []

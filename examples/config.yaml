@@ -17,7 +17,7 @@
 #   会顺带失效缓存）。桌面端由壳托管后端，退出再启动即可。
 # Web 面板的写入语义：只写「与代码缺省不同」的键（差集），并且只保留白名单顶层节
 #   runtime / brain / local_model / llm / security / skill；你手加的其它顶层节
-#   （server / desktop / knowledge / gateway / cuda）在面板保存时**不会被抹掉**。
+#   （server / desktop / knowledge / harness / cuda）在面板保存时**不会被抹掉**。
 # ⚠ 白名单外的键不是不能读——get_config 读的是合并后的整棵树，手改照样生效；
 #   白名单只限制「面板能写哪些节」。
 # ============================================================================
@@ -218,8 +218,8 @@ skill:
   evict_candidate_ttl_days: 14  # candidate 过期 → 移入 _archive/
   evict_active_idle_days: 30    # active 闲置且低效用 → 同上
 
-# ── gateway：IM 网关行为 ───────────────────────────────────────────────────
-gateway:
+# ── harness：IM 网关行为 ───────────────────────────────────────────────────
+harness:
   # 派发时给模型的「刚才在聊什么」回溯窗口（分钟）。条数上限在 dispatch 里另有约束，
   # 两者取交集；跨窗的旧话让模型自己走 conversation_search 现查。
   im_history_minutes: 90

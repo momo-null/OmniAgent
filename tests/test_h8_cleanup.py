@@ -42,14 +42,14 @@ def _diary_stub(monkeypatch, tmp_path):
     return tmp_path / "projects"
 
 
-def test_kernel_never_imports_gateway_channels():
+def test_kernel_never_imports_harness_channels():
     """边界映射只能在网关层；内核不得反向 import 通道上下文。"""
     bad = []
     for p in sorted((ROOT / "omni_core").rglob("*.py")):
         if "__pycache__" in p.parts:
             continue
         for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
-            if "from gateway.channels import context" in line:
+            if ("from harness" in line) or ("import harness" in line):
                 bad.append(f"{p.relative_to(ROOT).as_posix()}:{i}")
     assert bad == [], bad
 

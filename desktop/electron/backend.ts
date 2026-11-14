@@ -119,7 +119,7 @@ export function startBackend(root: string, port: number): BackendHandle {
 }
 
 /** 壳层事件日志（默认记网关侧；后端侧直接走 backend.log 的 pump） */
-export function shellLog(msg: string, name = "gateway.log"): void {
+export function shellLog(msg: string, name = "harness.log"): void {
   appendLog(`\n[shell] ${new Date().toISOString()} ${msg}\n`, name);
 }
 
@@ -133,14 +133,14 @@ export function startGateway(root: string, backendUrl = ""): ChildProcess {
   // 才能在跑完一轮后通知前端刷新；未注入时网关回退 127.0.0.1:8000。
   const env = cleanEnv();
   if (backendUrl) env.OMNIAGENT_BACKEND_URL = backendUrl;
-  const child = spawn(projectPython(root), ["-m", "gateway.channel_gateway"], {
+  const child = spawn(projectPython(root), ["-m", "harness.channel_gateway"], {
     cwd: root,
     env,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  appendLog(`\n[shell] ${new Date().toISOString()} spawn gateway pid=${child.pid}\n`, "gateway.log");
-  const pump = (chunk: Buffer) => appendLog(chunk.toString("utf8"), "gateway.log");
+  appendLog(`\n[shell] ${new Date().toISOString()} spawn harness pid=${child.pid}\n`, "harness.log");
+  const pump = (chunk: Buffer) => appendLog(chunk.toString("utf8"), "harness.log");
   child.stdout?.on("data", pump);
   child.stderr?.on("data", pump);
   return child;

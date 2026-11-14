@@ -1,7 +1,7 @@
 """OpenAI 兼容推理路由
 
 提供 ``/v1/chat/completions``、``/v1/completions``、``/v1/models``，
-逻辑从原 ``llm_runtime/api_gateway.py`` 搬来（含 lazy load）。
+逻辑从原 ``llm_runtime/api_harness.py`` 搬来（含 lazy load）。
 """
 import json
 import time

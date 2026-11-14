@@ -11,8 +11,8 @@
 # 安全定位：B站评论区任何人可触达 → allow_tools 缺省 false（纯对话+发送工具）；
 #   平台写操作只经本适配器（配额/黑名单/风控暂停在通道侧机械执行，不靠提示词）。
 # 凭证（三选一，优先级从高到低）：
-#   1. TV 扫码登录（推荐）：双击 gateway/channels/bilibili_login.bat，或
-#      python -m gateway.channels.bilibili --login
+#   1. TV 扫码登录（推荐）：双击 plugins/bilibili/scripts/bilibili_login.bat，或
+#      python -m plugins.bilibili.channel --login
 #      终端出二维码 → 哔哩哔哩 App 扫码确认 → 凭证自动存 state_dir 凭证文件；
 #   2. 环境变量：BILI_SESSDATA / BILI_JCT / DEDEUSERID
 #      （F12 → Application → Cookies → .bilibili.com 复制三件套）；
@@ -20,7 +20,7 @@
 # 未登录行为（机械闸，不靠提示词）：connect 照常注册但不轮询；调度器就绪闸
 #   （ready()=False）跳过 notify_channel=bilibili 的 job 并记 runs.jsonl skipped；
 #   draft/live 发送返回明确「未登录」错误。登录后重启网关开始轮询。
-# 验证：python -m gateway.channels.bilibili --whoami
+# 验证：python -m plugins.bilibili.channel --whoami
 # ============================================================================
 
 enabled: false                  # 出厂关：cookie 配好、联调完再置 true

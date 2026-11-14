@@ -14,7 +14,7 @@ router = APIRouter(prefix="/bilibili", tags=["runtime"])
 
 
 def _adapter():
-    from gateway.channel_gateway import channel_client
+    from harness.channel_gateway import channel_client
 
     client = channel_client("bilibili")
     if client is None:

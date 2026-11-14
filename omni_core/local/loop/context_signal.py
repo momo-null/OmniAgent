@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 _CURRENT: Dict[str, Any] = {}
-#: 边界层写入的结构（F-4：channel 只给结构；内核只读，不反向依赖 gateway）。
+#: 边界层写入的结构（F-4：channel 只给结构；内核只读，不反向依赖 harness）。
 #: ``sent_count`` 是边界注入的取值函数，内核只调用不认识其实现。
 _BOUNDARY: Dict[str, Any] = {}
 

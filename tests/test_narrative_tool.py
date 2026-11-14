@@ -120,7 +120,7 @@ def test_external_search_still_recalls_all(brain, monkeypatch):
 def test_explicit_allowlist_includes_narrative_tools():
     import inspect
 
-    from gateway import dispatch
+    from harness import dispatch
     src = inspect.getsource(dispatch._run_task_once)
     assert '"narrative_search"' in src and '"narrative_read"' in src
     # 工具已注册（导入即注册）
@@ -160,7 +160,7 @@ def test_quota_enforced_within_run_scope(brain):
 def test_observability_row_schema(brain, monkeypatch, tmp_path):
     """§8.3 定稿字段：run_id / context_key / source_kind / by_tool / context_chars。"""
     import json as _json
-    import gateway.events.registry as ch
+    import harness.events.registry as ch
 
     monkeypatch.setattr(ch, "_CURRENT_REPLY", None, raising=False)
     monkeypatch.setattr(ch, "_SOURCE_KIND", "chat", raising=False)

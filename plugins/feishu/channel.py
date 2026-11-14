@@ -14,7 +14,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from gateway.events.protocol import InboundMessage, OnMessage, ReplyChannel
+from harness.events.protocol import InboundMessage, OnMessage, ReplyChannel
 
 _OMNI_DIR = Path.home() / ".omniagent"
 _SEEN_FILE = _OMNI_DIR / "feishu_seen_message_ids.json"

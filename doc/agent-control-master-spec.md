@@ -281,7 +281,7 @@
 | 阈值 | 值（建议） | 作用 | 行业参照 |
 |------|-----------|------|---------|
 | `compress_threshold` | **0.65** | 用到窗口 65% 即压，抢在 context rot 前 | Hermes 50% 中段裁剪 |
-| `hard_ceiling` | **0.85** | 到 85% 无条件压（兜底） | Hermes gateway 85% |
+| `hard_ceiling` | **0.85** | 到 85% 无条件压（兜底） | Hermes harness 85% |
 | `max_turns` | **16（次级兜底）** | 多小轮也压；不截断任务 | Codex 罕见兜底 |
 
 **摘要必须是 handoff（前瞻），不是 backward summary**：含 ①已完成进展 / 关键决策 ②约束与用户偏好 ③剩余待办 ④续做所需关键数据（沿用 Codex handoff prompt 范式）。用户 / 目标原文不丢。
@@ -317,7 +317,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 
 - **Codex CLI**：~95% 窗口触发；Handoff 摘要（前向交接：进展 / 决策 / 约束 / 剩余 / 续做数据）；用户消息原文保留，assistant+tool 换成摘要；最近 ~20K token 用户消息保。
 - **Claude Code**：接近窗口自动压 + `/compact` 手动；三层渐进（裁工具输出 → prompt cache → 结构化摘要）；系统提示 / CLAUDE.md 压缩后从磁盘重注入。
-- **Hermes**：两层（agent 内 50% 窗口 + gateway 85% 兜底）；先**规则裁剪旧工具输出**（去重 / 截断，不调 LLM）→ 再 LLM 摘要中段；`protect_last_n:20` / `protect_first_n:3`；持久 MEMORY.md 层永远注入（压缩只管活窗口）。
+- **Hermes**：两层（agent 内 50% 窗口 + harness 85% 兜底）；先**规则裁剪旧工具输出**（去重 / 截断，不调 LLM）→ 再 LLM 摘要中段；`protect_last_n:20` / `protect_first_n:3`；持久 MEMORY.md 层永远注入（压缩只管活窗口）。
 - **OpenCode**：阈值触发先 prune 40K 旧工具输出再 compact。
 - **实证**：Chroma 2025（18 前沿模型）50K token 起退化；Claude 官方 "context rot"；Zylos 2026 长任务靠「压缩 + 结构化外部记忆 + 子 agent 委派」三层。
 
@@ -395,7 +395,7 @@ X3 任务可连续数小时甚至跨天，带来三个 Codex 不用面对的问�
 
 1. **远程客户端 `memory/sync` 端点**（契约已冻结，唯一内核待办）：外部客户端离线会话回放，(session_id, seq) 幂等去重，喂入 capture 管线。
 2. **语音真机验收**：Web 按住说话 / 免提 / QQ 语音消息在真实环境跑通（引擎听感已验收）；CosyVoice2 流式化（当前整段合成 RTF≈1.6-2.0）为后续优化项。
-3. **通道插件仓库化**（立项不排期）：QQ / 飞书 / 企业微信连接器拆独立插件仓，主仓只留通用通道接口——具体见 `doc/plans/implemented/message-gateway-2026-10-28.md` 与 Backlog。
+3. **通道插件仓库化**（立项不排期）：QQ / 飞书 / 企业微信连接器拆独立插件仓，主仓只留通用通道接口——具体见 `doc/plans/implemented/message-harness-2026-10-28.md` 与 Backlog。
 4. 记忆层后续开放项以 `doc/plans/implemented/memory-architecture.md` 与 `vector-recall-2026-11-13.md` 为准（早期「遗忘 dry-run / hit@8 标注 / L3 待实现」已随 2026-11-02 召回整治与 11-11 三分法退役）。
 5. 可选：跑真在线分层闭环验证，看 skill 库 + world-model 持久化在真机的产出。
 6. 后续独立项（非阻塞）：模型路径 allow-list。

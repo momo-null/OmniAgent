@@ -46,7 +46,7 @@ cd web && npm install && cd ..
 
 1. 装 [NapCat](https://github.com/NapNeko/NapCatQQ)，开启 HTTP（默认 `:3000`）与 WebSocket 服务（默认 `:3001`）；
 2. 抄 `examples/channels/napcat.yaml` 建 `~/.omniagent/channels/napcat.yaml`：`enabled` / `http_url` / `ws_url` / `token`，群聊闸门 `reply_groups` / `allow_groups` / `require_at`，私聊白名单 `allow_users`；
-3. 起网关：`python -m gateway.channel_gateway`（桌面端会自动拉起，不用手动跑）；
+3. 起网关：`python -m harness.channel_gateway`（桌面端会自动拉起，不用手动跑）；
 4. 私聊直接回；群聊**默认必须 @ 它**才响应。语音进来会转写成 `[语音] <内容>`，**要不要用语音回由模型决定**（`msg_send_voice` vs `msg_send_text`，通道不自动改发送形式），图片真的看懂。
 
 想让助手「像个人一样在群里待着」，就在同一份 yaml 里开 `group_presence`：`enabled_groups`（缺省全关）、`talk_value`（话痨度）、`thread_hot_min`（自己发过言后的跟进期）、`quiet_hours`（安静时段）、`aliases`（没打 @ 喊名字也算）。**回不回是通道侧算出来的**：一轮里助手没调发送工具就什么都不会发，内心独白不外泄，这类「静默轮」也不会再喂回下一轮上下文。
@@ -107,7 +107,7 @@ python -m venv .venv
 pip install -r requirements.txt
 cd web && npm install && cd ..
 .\start_all.bat                        # 后端 :8000 + 语音引擎 :18742 + 前端 :5173
-python -m gateway.channel_gateway      # 可选：IM 通道 + 定时任务（另开一个窗口）
+python -m harness.channel_gateway      # 可选：IM 通道 + 定时任务（另开一个窗口）
 .\start_all.bat stop                   # 停掉 :8000 / :18742 / :5173
 ```
 
@@ -225,7 +225,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | `omni_core/tools/` | 工具运行时：策略 / 审批、capability 注册、MCP、shell、技能、工作区 |
 | `omni_core/orchestration/` | 多 agent 编排（LangGraph 扇出 + 子任务板） |
 | `plugins/` | 能力插件：`filesystem` `web` `messaging` `host` `emulator` `voice` `ocr` `vision`（一插件一份 `plugin.json` + 一份用户级 yaml） |
-| `gateway/` | 常驻网关：`channels/`（napcat / feishu / wecom）、派发队列、群存在感、cron 调度 |
+| `harness/` | 常驻网关：`channels/`（napcat / feishu / wecom）、派发队列、群存在感、cron 调度 |
 | `backend/` | HTTP 服务与 API 路由；`web/dist` 存在时同源承载前端 |
 | `web/` | 前端单页（对话 / 定时任务 + 遮罩式设置与技能工具） |
 | `desktop/` | Electron 壳：自动拉起后端 + 网关 + 语音服务、托盘、打包 |
@@ -242,7 +242,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | 架构图集 N1–N10 |
 | [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | 架构决策权威（单一事实来源） |
 | [`doc/plans/implemented/memory-architecture.md`](doc/plans/implemented/memory-architecture.md) | 记忆架构现行事实源（L0–L3 / 日记 / 关系卡 / 不变量 / 明确不做） |
-| [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | 消息通道机制（协议 / 能力门 / 场合自述） |
+| [`doc/plans/implemented/message-harness-2026-10-28.md`](doc/plans/implemented/message-harness-2026-10-28.md) | 消息通道机制（协议 / 能力门 / 场合自述） |
 | [`doc/plans/implemented/group-presence-2026-10-30.md`](doc/plans/implemented/group-presence-2026-10-30.md) | 群自然存在感（T0/T1/T2 分层、闸门顺序、参数与状态划分） |
 | [`doc/plans/implemented/voice-2026-10-31.md`](doc/plans/implemented/voice-2026-10-31.md) | 语音交互与引擎（对讲式 / 免提 / 接口契约冻结） |
 | [`doc/plans/sing-2026-11-02.md`](doc/plans/sing-2026-11-02.md) | 唱歌选型与实施（TTS / SVC / SVS 分野、管线、闸门与实测） |
@@ -300,7 +300,7 @@ Prefer fewer windows? Use the desktop app (see [Quick Start](#quick-start)).
 
 1. Install [NapCat](https://github.com/NapNeko/NapCatQQ) with HTTP (`:3000`) and WebSocket (`:3001`) enabled;
 2. Copy `examples/channels/napcat.yaml` to `~/.omniagent/channels/napcat.yaml`: `enabled` / `http_url` / `ws_url` / `token`, group gates `reply_groups` / `allow_groups` / `require_at`, private allow-list `allow_users`;
-3. Start the gateway: `python -m gateway.channel_gateway` (the desktop app spawns it for you);
+3. Start the harness: `python -m harness.channel_gateway` (the desktop app spawns it for you);
 4. Private chats reply directly; group chats need an @ by default. Incoming voice is transcribed as `[voice] <content>`, and **the model decides** whether to answer with voice (`msg_send_voice`) or text — the channel never rewrites the medium. Images are genuinely understood.
 
 To let the assistant just hang out in a group, enable `group_presence` in the same yaml: `enabled_groups` (empty = off everywhere), `talk_value`, `thread_hot_min`, `quiet_hours`, `aliases` (its name counts as a mention). **Whether to speak is computed channel-side**: if no send tool is called nothing is sent, the inner monologue never leaks, and those silent runs are dropped from the next round's context.
@@ -338,7 +338,7 @@ copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
 | Character card | Single `character.md`, editable in Settings, effective from the next run; personality lives only in the card — channel narration states the situation, it does not act the persona out | On |
 | Projects & tasks | Project = workspace + project knowledge, task = one session; rename / save-to-project / delete / open folder | On |
 | IM channels | QQ / Feishu / WeCom, group @ trigger, private allow-list, voice replies, image input, cross-session lookback, natural group presence (T0 mention / T1 volunteering / T2 ambient; explicit send only, silent runs never re-enter history) | Needs config |
-| Cron jobs | Trigger + missed-run catch-up + result delivery + run history | Needs gateway |
+| Cron jobs | Trigger + missed-run catch-up + result delivery + run history | Needs harness |
 | Voice | Standalone engine service (OpenAI-audio compatible): SenseVoice STT + fine-tuned GPT-SoVITS v2 TTS; hold-to-talk, hands-free VAD, acoustic barge-in; QQ voice transcribed and optionally answered with voice | Plugin off |
 | Singing | A cappella song requests: RVC SVC voice bank + local library; online library (search → download → separate → chorus → key → store → sing) delivered asynchronously | Online gate off |
 | Vision | Screenshots / QQ images sent to a multimodal model; optional OCR (RapidOCR), optional SoM clicking | On (model dependent) |
@@ -361,7 +361,7 @@ python -m venv .venv
 pip install -r requirements.txt
 cd web && npm install && cd ..
 .\start_all.bat                        # backend :8000 + voice engine :18742 + frontend :5173
-python -m gateway.channel_gateway      # optional: IM channels + cron (own window)
+python -m harness.channel_gateway      # optional: IM channels + cron (own window)
 .\start_all.bat stop                   # stops :8000 / :18742 / :5173
 ```
 
@@ -372,11 +372,11 @@ Configure the provider and default model in Settings before the first conversati
 ```bash
 cd desktop
 npm install          # first run; China CDN mirror preconfigured
-npm run dev          # vite + backend + gateway + voice service + Electron
+npm run dev          # vite + backend + harness + voice service + Electron
 npm run dist         # NSIS installer + portable exe (desktop/dist/)
 ```
 
-Or run `pack_desktop.bat` from the repo root (builds `web/dist` first). The shell spawns backend, gateway and the voice engine service, restarts them on crash, and kills the whole process tree on quit; closing the window minimizes to the tray (restart backend / view logs / quit). Packages ship the **shell only**; backend code and `.venv` still point at this repo (`OMNIAGENT_HOME` or an `omniagent.home` file overrides the path).
+Or run `pack_desktop.bat` from the repo root (builds `web/dist` first). The shell spawns backend, harness and the voice engine service, restarts them on crash, and kills the whole process tree on quit; closing the window minimizes to the tray (restart backend / view logs / quit). Packages ship the **shell only**; backend code and `.venv` still point at this repo (`OMNIAGENT_HOME` or an `omniagent.home` file overrides the path).
 
 ### Gotchas
 
@@ -393,13 +393,13 @@ Or run `pack_desktop.bat` from the repo root (builds `web/dist` first). The shel
 
 | Path | Contents | Reader |
 |---|---|---|
-| `~/.omniagent/models.json` | **Single source of truth for model endpoints**: provider catalog + `defaults` slots (local GGUF, context, port, vision sidecar) | brain / gateway dispatch / memory |
+| `~/.omniagent/models.json` | **Single source of truth for model endpoints**: provider catalog + `defaults` slots (local GGUF, context, port, vision sidecar) | brain / harness dispatch / memory |
 | `~/.omniagent/config.yaml` | `brain` (reasoning mode, long-task params), `runtime` (dispatch, history windows), `security` (approval policy) | core |
-| `~/.omniagent/plugins/<name>.yaml` | Plugin/channel config (addr, token, gates, `group_presence` — one file per plugin); `channels/routes.yaml` is the routing table | gateway |
+| `~/.omniagent/plugins/<name>.yaml` | Plugin/channel config (addr, token, gates, `group_presence` — one file per plugin); `channels/routes.yaml` is the routing table | harness |
 | `~/.omniagent/plugins/<name>.yaml` | Plugin client config (`enabled`, voice `base_url`, …) | plugins |
 | `~/.omniagent/voice_service.yaml` | Voice engine service: port / token / idle reaping / model paths / timbre / singing gate | voice service |
 | `~/.omniagent/mcp.json` | MCP server list (stdio / streamable HTTP) | tool runtime |
-| `~/.omniagent/cron/jobs.json` | Cron jobs (hot-reloaded) | gateway scheduler |
+| `~/.omniagent/cron/jobs.json` | Cron jobs (hot-reloaded) | harness scheduler |
 | `~/.omniagent/character.md` | Assistant character card (injected with the system prompt, editable in Settings) | injection layer |
 | `~/.omniagent/AGENTS.md` | Global discipline file (shared across tasks; absent = zero injection) | injection layer |
 | `~/.omniagent/memory/` | `brain.db` (L1 atoms + L0 verbatim index) + `self_profile.md` (L3) + `relations/<uid>.md` | memory layer |
@@ -429,7 +429,7 @@ In the UI: right-click a project to rename (display name only) or delete (cascad
 
 ## Architecture (for developers)
 
-One line: **agent loop** (OpenAI Agents SDK `Runner`) → **tool layer** (plugins / capabilities / MCP, peers) → **orchestration** (LangGraph `Send` fan-out + subtask board) → **knowledge layer** (world model / skills / memory / three-tier `AGENTS.md` injection) → **FastAPI backend** → **React frontend / Electron shell / always-on gateway (IM + cron) / always-on voice engine service**.
+One line: **agent loop** (OpenAI Agents SDK `Runner`) → **tool layer** (plugins / capabilities / MCP, peers) → **orchestration** (LangGraph `Send` fan-out + subtask board) → **knowledge layer** (world model / skills / memory / three-tier `AGENTS.md` injection) → **FastAPI backend** → **React frontend / Electron shell / always-on harness (IM + cron) / always-on voice engine service**.
 
 | Layer | Tech |
 |---|---|
@@ -437,7 +437,7 @@ One line: **agent loop** (OpenAI Agents SDK `Runner`) → **tool layer** (plugin
 | Orchestration | LangGraph (`Send` fan-out, `update_state` soft injection) |
 | Backend | Python + FastAPI / uvicorn |
 | Frontend | TypeScript + React 18 + Vite + MUI + Tailwind (hand-rolled store), Lucide icons |
-| Desktop shell | Electron (spawns backend + gateway + voice service, tray-resident) |
+| Desktop shell | Electron (spawns backend + harness + voice service, tray-resident) |
 | Local inference | llama.cpp `llama-server` (multi-slot, `--mmproj` vision) |
 | Voice | Resident engine `model_hub/servers/voice_engine.py` (started by model_hub ServiceManager from `~/.omniagent/model_hub.yaml`; OpenAI-audio compatible, lazy load, idle release); STT = SenseVoice (sherpa-onnx int8); TTS = fine-tuned GPT-SoVITS v2 (subprocess in `external/GPT-SoVITS`'s own venv) |
 | Singing | Resident RVC SVC worker + PyMSS BS-Roformer separation (one-shot subprocess) + ffprobe duration screening |
@@ -474,10 +474,10 @@ The conclusion was **not to swap approaches and not to embed upstream wholesale*
 | `omni_core/tools/` | Tool runtime: policy / approvals, capability registry, MCP, shell, skills, workspace |
 | `omni_core/orchestration/` | Multi-agent orchestration (LangGraph fan-out + subtask board) |
 | `plugins/` | Capability plugins: `filesystem` `web` `messaging` `host` `emulator` `voice` `ocr` `vision` (one `plugin.json` + one user yaml each) |
-| `gateway/` | Always-on gateway: `channels/` (napcat / feishu / wecom), dispatch queue, group presence, cron scheduler |
+| `harness/` | Always-on harness: `channels/` (napcat / feishu / wecom), dispatch queue, group presence, cron scheduler |
 | `backend/` | HTTP service and API routes; serves `web/dist` same-origin when present |
 | `web/` | Single-page frontend (chat / cron + overlay-style settings & skills/tools) |
-| `desktop/` | Electron shell: spawns backend + gateway + voice service, tray, packaging |
+| `desktop/` | Electron shell: spawns backend + harness + voice service, tray, packaging |
 | `external/` | Upstream engine clones (GPT-SoVITS and its own venv), not tracked by git |
 | `model_hub/` `llm_runtime/` | Model metadata and llama-server lifecycle / inference backends |
 | `scripts/` | Red-line lint, real-device verification and benchmarks (`verify_memory_recall.py`, …) |
@@ -491,7 +491,7 @@ The conclusion was **not to swap approaches and not to embed upstream wholesale*
 | [`doc/agent-control-arch-design.html`](doc/agent-control-arch-design.html) | Architecture diagrams N1–N10 |
 | [`doc/agent-control-master-spec.md`](doc/agent-control-master-spec.md) | Authoritative architecture decisions |
 | [`doc/plans/implemented/memory-architecture.md`](doc/plans/implemented/memory-architecture.md) | Current memory architecture (L0–L3 / diary / relation cards / invariants / explicit non-goals) |
-| [`doc/plans/implemented/message-gateway-2026-10-28.md`](doc/plans/implemented/message-gateway-2026-10-28.md) | Message-channel design (protocol / tool gate / narration) |
+| [`doc/plans/implemented/message-harness-2026-10-28.md`](doc/plans/implemented/message-harness-2026-10-28.md) | Message-channel design (protocol / tool gate / narration) |
 | [`doc/plans/implemented/group-presence-2026-10-30.md`](doc/plans/implemented/group-presence-2026-10-30.md) | Natural group presence (T0/T1/T2 layering, gate ordering, parameter vs state split) |
 | [`doc/plans/implemented/voice-2026-10-31.md`](doc/plans/implemented/voice-2026-10-31.md) | Voice interaction & engines (walkie-talkie / hands-free / frozen API contract) |
 | [`doc/plans/sing-2026-11-02.md`](doc/plans/sing-2026-11-02.md) | Singing research and implementation (TTS / SVC / SVS split, pipeline, gates, measurements) |

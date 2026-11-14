@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/plugins", tags=["plugins"])
 
 @router.get("/ui")
 async def ui_views() -> Dict[str, Any]:
-    from gateway.events import discover
+    from harness.events import discover
 
     views: List[Dict[str, Any]] = discover.ui_units()
     return {"views": views}
@@ -25,7 +25,7 @@ async def ui_views() -> Dict[str, Any]:
 
 @router.get("/sources")
 async def sources() -> Dict[str, Any]:
-    from gateway.events import lifecycle
+    from harness.events import lifecycle
 
     path = lifecycle.snapshot_path()
     if not path.is_file():

@@ -1,5 +1,5 @@
 """任务产物收编桥离线测试（零内核桥：沙箱产物按任务写入的相对路径归位）。"""
-from gateway.artifact_collector import collect
+from harness.artifact_collector import collect
 
 
 def _make(tmp_path, project="bilibili", artifacts=None):

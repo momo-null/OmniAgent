@@ -4,7 +4,7 @@
   禁止平台专属键——平台差异只是值。
 - **归一**：``resolve(channel, chat_id)`` 是唯一的配置读取+拍平入口，
   三个消费方共用本模块：
-    · ``gateway/dispatch.py``   —— 网关入站：拍平结果作「本轮场合自述」附到模型输入
+    · ``harness/dispatch.py``   —— 网关入站：拍平结果作「本轮场合自述」附到模型输入
                                   （display_text 保留原话，会话历史不污染）；
     · ``chat_runtime.py``       —— Web 入口：同构（channels/web.yaml 缺省不存在 → 全空零影响）；
     · ``plugins/messaging``     —— 机械闸（唯一执行点）：发送时按 (通道, 会话) 解析，

@@ -9,7 +9,7 @@ import types
 
 import pytest
 
-from gateway.events.protocol import InboundMessage
+from harness.events.protocol import InboundMessage
 from omni_core.brain import sdk_loop as sl
 from omni_core.local.loop import ToolLoop
 
@@ -177,7 +177,7 @@ def test_build_user_content_ignores_unknown_attachment_types():
 # === 2. 网关派发层 ===
 
 def test_dispatch_submit_propagates_tools_enabled(monkeypatch):
-    from gateway import dispatch
+    from harness import dispatch
 
     items = []
     monkeypatch.setattr(dispatch, "ensure_worker", lambda: None)
@@ -189,8 +189,8 @@ def test_dispatch_submit_propagates_tools_enabled(monkeypatch):
     assert items[1]["tools_enabled"] is True
 
 
-def test_gateway_on_message_passes_channel_policy(monkeypatch):
-    from gateway import channel_gateway as gw
+def test_harness_on_message_passes_channel_policy(monkeypatch):
+    from harness import channel_gateway as gw
 
     seen = {}
     monkeypatch.setattr(gw.dispatch, "ensure_worker", lambda: None)

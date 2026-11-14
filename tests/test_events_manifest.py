@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from gateway.events import discover, lifecycle, registry
+from harness.events import discover, lifecycle, registry
 
 
 @pytest.fixture(autouse=True)

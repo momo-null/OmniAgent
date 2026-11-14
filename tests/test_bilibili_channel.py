@@ -460,8 +460,8 @@ def test_send_without_login_rejects_for_real_modes(state_dir):
 
 
 def test_scheduler_channel_gate_skips_unready(monkeypatch, state_dir):
-    from gateway.events import registry as ctx
-    from gateway import scheduler as sched
+    from harness.events import registry as ctx
+    from harness import scheduler as sched
 
     job = {"id": "bili-awake", "notify_channel": "bilibili"}
     # 通道未注册 → 放行（不在调度层猜配置）

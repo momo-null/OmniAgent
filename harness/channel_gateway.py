@@ -1,9 +1,9 @@
 """网关主入口 —— 常驻进程：消息通道 + 定时任务 + 派发队列，一体启动。
 
 用法（OmniAgent 仓库根）：
-    python -m gateway.channel_gateway                # 全量（声明了 events 的插件）
-    python -m gateway.channel_gateway --no-channels  # 只跑调度器（不连任何通道时先跑 cron）
-    python -m gateway.channel_gateway --no-scheduler # 只跑通道（检查通道连通性）
+    python -m harness.channel_gateway                # 全量（声明了 events 的插件）
+    python -m harness.channel_gateway --no-channels  # 只跑调度器（不连任何通道时先跑 cron）
+    python -m harness.channel_gateway --no-scheduler # 只跑通道（检查通道连通性）
 
 云端部署：systemd/任务计划程序托管本入口；本地调试直接跑。
 配置：``~/.omniagent/plugins/<name>.yaml``（每插件一文件，阶段 4 起为主源；
@@ -43,13 +43,13 @@ def channel_config(name: str) -> Dict[str, Any]:
     if path is None or not path.is_file():
         return {}
     if path is legacy_file and plugin_file is not None:
-        print(f"[gateway] 通道 {name} 仍在用旧配置 {path.name}（建议运行 scripts/migrate_plugin_configs.py）")
+        print(f"[harness] 通道 {name} 仍在用旧配置 {path.name}（建议运行 scripts/migrate_plugin_configs.py）")
     try:
         import yaml
 
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception as e:
-        print(f"[gateway] 通道 {name} 配置读取失败（忽略）: {e}")
+        print(f"[harness] 通道 {name} 配置读取失败（忽略）: {e}")
         return {}
     cfg = data if isinstance(data, dict) else {}
     # 能力层开关单源（§0.6-A3）：plugin.yaml > manifest.enabled。
@@ -79,7 +79,7 @@ def _channel_names(discovered: Optional[Dict[str, Any]] = None) -> List[str]:
 
 
 def _load_routes() -> Dict[str, Any]:
-    """聊天路由表（实现已抽到 ``gateway.chat_routes``，与通道层共用一份规则）。"""
+    """聊天路由表（实现已抽到 ``harness.chat_routes``，与通道层共用一份规则）。"""
     from .chat_routes import load_routes
 
     return load_routes()
@@ -88,7 +88,7 @@ def _load_routes() -> Dict[str, Any]:
 def build_adapter(name: str):
     """按 manifest 构造事件源适配器（**不连接**），供非网关进程使用。
 
-    背景：``msg_send_*`` 工具取通道走本进程的注册表（``gateway.events.registry``），只有
+    背景：``msg_send_*`` 工具取通道走本进程的注册表（``harness.events.registry``），只有
     网关进程里有实例。在 Web 后端进程里让 agent 主动发消息时，注册表是空的 → 工具返回
     "无可用通道"，模型只能绕去 shell 调 OneBot HTTP（实测发生过：绕了 9 步）。
 
@@ -150,20 +150,20 @@ def start_channels() -> int:
         state = rec.get("state")
         if state == "disabled":
             lifecycle.mark_disabled(name, "plugin.yaml/manifest enabled=false", meta)
-            print(f"[gateway] 事件源 {name} 未启用（plugin.yaml/manifest enabled=false）")
+            print(f"[harness] 事件源 {name} 未启用（plugin.yaml/manifest enabled=false）")
             continue
         if not meta.get("configured"):
             lifecycle.mark_disabled(name, "未配置（plugins/<name>.yaml 缺失）", meta)
-            print(f"[gateway] 事件源 {name} 未配置（跳过）")
+            print(f"[harness] 事件源 {name} 未配置（跳过）")
             continue
         if state == "failed":
             lifecycle.mark_failed(name, rec.get("error") or "", meta)
-            print(f"[gateway] 事件源 {name} 构造失败: {rec.get('error')}")
+            print(f"[harness] 事件源 {name} 构造失败: {rec.get('error')}")
             continue
         adapter = rec.get("adapter")
         if adapter is None:
             lifecycle.mark_failed(name, "工厂返回 None", meta)
-            print(f"[gateway] 事件源 {name} 无适配器（跳过）")
+            print(f"[harness] 事件源 {name} 无适配器（跳过）")
             continue
         lifecycle.mark_starting(name, meta)
         try:
@@ -171,10 +171,10 @@ def start_channels() -> int:
             context.register(adapter)
             lifecycle.bind(name, adapter, meta)
             started += 1
-            print(f"[gateway] 事件源 {name} 已连接（transport={(meta.get('events') or {}).get('transport')}）")
+            print(f"[harness] 事件源 {name} 已连接（transport={(meta.get('events') or {}).get('transport')}）")
         except Exception as e:  # noqa: BLE001
             lifecycle.mark_failed(name, e, meta)
-            print(f"[gateway] 事件源 {name} 启动失败: {e}")
+            print(f"[harness] 事件源 {name} 启动失败: {e}")
     lifecycle.write_snapshot()
     return started
 
@@ -191,7 +191,7 @@ def _on_message(msg) -> None:
     """
     dispatch.ensure_worker()
     preview = msg.text[:60].replace("\n", " ")
-    print(f"[gateway] 收到消息 <{msg.channel}:{msg.chat_id}> {preview}")
+    print(f"[harness] 收到消息 <{msg.channel}:{msg.chat_id}> {preview}")
     # 聊天路由：msg/<channel>/<chat_id> → 哪个项目 + 哪个会话（channels/routes.yaml 可覆盖）
     project_id, session_id = _route_chat(msg)
     # 结构化说话人：适配层能归一就直接用；只给 user_id 的通道在边界层补成
@@ -226,7 +226,7 @@ def _on_message(msg) -> None:
 
 
 def _route_chat(msg) -> tuple:
-    """消息 → (project_id, session_id)（规则见 ``gateway.chat_routes``）。
+    """消息 → (project_id, session_id)（规则见 ``harness.chat_routes``）。
 
     配了 project_id 的消息不再是「临时任务」（临时任务跑完即从任务索引删除，
     Web 任务列表里看不到），而是持久归属到该项目、可在界面点开看过程。
@@ -247,13 +247,13 @@ def _ensure_plugins() -> None:
 
         load_plugins(_config.load_config() or {})
     except Exception as e:
-        print(f"[gateway] 插件预装载失败（语音等能力可能不可用）: {e}")
+        print(f"[harness] 插件预装载失败（语音等能力可能不可用）: {e}")
 
 
 def main() -> int:
     no_channels = "--no-channels" in sys.argv
     no_scheduler = "--no-scheduler" in sys.argv
-    print("[gateway] 启动（Ctrl+C 退出）")
+    print("[harness] 启动（Ctrl+C 退出）")
     dispatch.ensure_worker()
     _ensure_plugins()
     # 本地服务统一拉起（model_hub 清单）：网关独立运行时也要保证向量/语音可用。
@@ -263,27 +263,27 @@ def main() -> int:
 
         ServiceManager().ensure_started()
     except Exception as e:  # noqa: BLE001
-        print(f"[gateway] 本地服务拉起失败（已忽略）: {e}")
+        print(f"[harness] 本地服务拉起失败（已忽略）: {e}")
 
     # 插件自带服务（manifest lifecycle.spawn）与事件源体检：同一执行侧（ServiceManager）
     from .events import lifecycle
 
     try:
         for r in lifecycle.ensure_plugin_services():
-            print(f"[gateway] 插件服务 {r.get('name')}: {r.get('result')}")
+            print(f"[harness] 插件服务 {r.get('name')}: {r.get('result')}")
     except Exception as e:  # noqa: BLE001
-        print(f"[gateway] 插件服务拉起失败（已忽略）: {e}")
+        print(f"[harness] 插件服务拉起失败（已忽略）: {e}")
     lifecycle.start_health_loop()
 
     n = 0 if no_channels else start_channels()
     if not no_channels and n == 0:
-        print("[gateway] ⚠ 无任何通道连接（检查 ~/.omniagent/channels/ 下的通道配置）")
+        print("[harness] ⚠ 无任何通道连接（检查 ~/.omniagent/channels/ 下的通道配置）")
 
     sched = None
     if not no_scheduler:
         sched = Scheduler(submit_via_web)
         sched.start()
-        print("[gateway] 调度器已启动（jobs 热加载）")
+        print("[harness] 调度器已启动（jobs 热加载）")
 
     stop = {"flag": False}
 
@@ -305,7 +305,7 @@ def main() -> int:
         _lifecycle.stop_health_loop()
     except Exception:
         pass
-    print("[gateway] 退出")
+    print("[harness] 退出")
     return 0
 
 

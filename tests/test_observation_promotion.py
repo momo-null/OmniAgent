@@ -263,7 +263,7 @@ def test_observation_entry_stamps_structure_signal(brain, monkeypatch):
 
 def test_scheduler_fire_passes_job_id(monkeypatch):
     """网关自然触发必传 job_id——dispatch 靠它写 runs.jsonl（否则零痕迹）。"""
-    from gateway import scheduler
+    from harness import scheduler
 
     captured: dict = {}
     s = scheduler.Scheduler(lambda *a, **kw: captured.update(kw) or "t_x")

@@ -6,7 +6,7 @@ extra.meta / 完成信息条），但进料道标 task、不伪装成聊天原�
 import threading
 
 from backend.api.routers import chat_runtime as cr
-from gateway import scheduler as sched
+from harness import scheduler as sched
 
 
 class _FakeTaskStore:
@@ -105,7 +105,7 @@ def test_submit_via_web_posts_non_external_payload(monkeypatch):
 
 def test_submit_via_web_falls_back_when_backend_down(monkeypatch):
     import requests
-    from gateway import dispatch
+    from harness import dispatch
 
     monkeypatch.setattr(sched, "_in_backend_process", lambda: False)
     monkeypatch.setattr(sched, "record_run", lambda *a, **kw: None)

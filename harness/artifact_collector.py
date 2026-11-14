@@ -11,7 +11,7 @@
 
 规则只增不删：永不删除项目内既有文件、内容相同不重复写。
 
-挂点：``gateway/dispatch._run_task_once`` 收尾（有 project_id 的任务才收）。
+挂点：``harness/dispatch._run_task_once`` 收尾（有 project_id 的任务才收）。
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from typing import List, Optional
 
 from utils import get_logger
 
-logger = get_logger("gateway.artifact_collector")
+logger = get_logger("harness.artifact_collector")
 
 
 def collect(project_id: str, task_id: str, *,

@@ -1,6 +1,6 @@
 """一次性归一：修复会话记录里被 O(n²) 膨胀的 thinking step 文本。
 
-背景（2026-11-04）：`gateway/dispatch.py` 曾把 emitter 的「完整快照」当增量做
+背景（2026-11-04）：`harness/dispatch.py` 曾把 emitter 的「完整快照」当增量做
 `content += text`，导致同一 block 的思考文本变成 s1+s2+…+sn（逐段加长的前缀拼接），
 单条最长 3.2MB，`qq` 会话 jsonl 里 thinking 占 93% 体积。
 

@@ -64,7 +64,7 @@ from urllib.parse import quote
 from utils import get_logger
 
 from .presence import GroupEvent, GroupPresence
-from gateway.events.protocol import InboundMessage, OnMessage, ReplyChannel
+from harness.events.protocol import InboundMessage, OnMessage, ReplyChannel
 
 logger = get_logger("channels.napcat")
 

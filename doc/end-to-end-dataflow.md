@@ -7,7 +7,7 @@
 > **多入口（2026-10-30 更新）**：同一 `/chat` 链路现在有三类入口——① Web UI（本文主线）；
 > ② **语音**：Web 按住说话 / 免提经 `POST /api/audio/transcribe` 转写后走同一入口，回复经
 > `/api/audio/tts` 播报（见 `doc/plans/voice-m3-2026-10-29.md`）；③ **通道网关与远程客户端**：
-> QQ / 飞书 / 企业微信连接器（`gateway/channels/`）与任意外部 HTTP 客户端
+> QQ / 飞书 / 企业微信连接器（`plugins/<name>/channel.py`）与任意外部 HTTP 客户端
 > （`doc/plans/implemented/remote-client-contract-2026-10-30.md`）复用同一 runtime 契约。
 
 ## 代码定位
@@ -20,7 +20,7 @@
 
 - `backend/api/routers/audio_api.py`：语音薄壳端点（`/api/audio/transcribe|tts`，capability 转发）
 
-- `gateway/channels/`：QQ / 飞书 / 企业微信连接器与通用通道基类（`base.py`）
+- `plugins/<name>/channel.py`：各 IM 连接器（manifest 声明 `events` 才被当事件源）
 
 - `omni_core/local/loop/`（core/parts/instructions/sdk_bridge/graph_runner/emitter/finish）：L2 内核 `ToolLoop`（编排注入 \+ 门控），主类位于 `core.py`
 

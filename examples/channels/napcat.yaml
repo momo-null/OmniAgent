@@ -7,7 +7,7 @@
 #
 # 前置：装 NapCat（https://github.com/NapNeko/NapCatQQ），开启 HTTP（缺省 :3000）
 #   与 WebSocket（缺省 :3001）服务，并把 ws_url 指向它——本程序是 WS **客户端**。
-# 谁来读：通道网关（gateway/channel_gateway.py）。适配器在网关启动时按这份文件构造，
+# 谁来读：通道网关（harness/channel_gateway.py）。适配器在网关启动时按这份文件构造，
 #   所以**改完要重启网关**（桌面端会自动拉起，不用手动跑）。Web 设置里没有通道页，纯手改。
 # 能力闸门的安全前提：QQ 上任何人都能给这个号发消息，所以缺省**纯对话**
 #   （allow_tools: false，模型侧连工具清单都没有）。除非确认只有你自己能发，
@@ -113,12 +113,12 @@ group_presence:
 # · 忽略 post_type=message_sent，否则本机发出的消息经 WS 回流变成新输入 → 自激循环
 # · message_id 去重（LRU 2000 条）；长文本按 1200 字符分条发送
 # · 群名靠 get_group_info 额外拉取并缓存 1 小时（OneBot 消息事件不带群名）
-# · 群上下文默认带最近若干条（条数/单条/总量都有上限），窗口另见 gateway.im_history_minutes
+# · 群上下文默认带最近若干条（条数/单条/总量都有上限），窗口另见 harness.im_history_minutes
 # · 撞名避让：其他成员名片**严格包含**她的名字时会先遮掉再判 mention，
 #   避免「群里另一只同名 agent 被人 @」被当成叫她
 
 # ── 出站守则 ──────────────────────────────────────────────────────────────
-# 归一/机械闸见 gateway/outbound.py；by_context 的键 = chat_id 首段（group/private）。
+# 归一/机械闸见 harness/outbound.py；by_context 的键 = chat_id 首段（group/private）。
 # 场合自述只喂模型不进会话历史；机械闸在 msg_send_* 超限拆条或拒发（闸管长度，文风靠声明）。
 outbound:
   identity: ""                  # 对外自称（可选）

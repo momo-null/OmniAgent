@@ -10,7 +10,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Callable, Dict, Optional
 
-from gateway.events.protocol import InboundMessage, OnMessage, ReplyChannel
+from harness.events.protocol import InboundMessage, OnMessage, ReplyChannel
 
 
 class WecomReply:

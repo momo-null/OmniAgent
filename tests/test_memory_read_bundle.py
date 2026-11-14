@@ -100,7 +100,7 @@ def test_quota_block_is_counted(monkeypatch):
 
 
 def test_history_fold_note_is_generic_capability_hint():
-    from gateway import dispatch
+    from harness import dispatch
     recs = [{"role": "user", "content": "x"}] * 15
     items = [{"role": "user", "content": "x"}] * 12
     note = dispatch._history_fold_note(recs, items)

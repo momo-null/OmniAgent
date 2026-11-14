@@ -299,7 +299,7 @@ def push_chat(role: str, text: str, extra: Optional[dict] = None, debug: bool = 
 def push_tasks_changed(task_id: str, project_id: str = "", kind: str = "run_done") -> None:
     """跨进程事件桥（B0）：外部进程（网关）跑完/新建会话后，通知 Web 端「这个会话变了」。
 
-    背景：SSE outbox 是**本进程内存**队列，而 QQ/飞书等消息由 ``gateway`` 进程处理，
+    背景：SSE outbox 是**本进程内存**队列，而 QQ/飞书等消息由 ``harness`` 进程处理，
     它跑完一轮前端完全不知道（只有刷新页面才看到）。网关改为在轮次开始/结束时
     POST 内部端点，由本进程把这条事实推进 outbox：
     - 目标 task 的 outbox（前端正打开该会话时能收到）；

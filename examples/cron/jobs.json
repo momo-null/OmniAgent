@@ -1,7 +1,7 @@
 // ============================================================================
 // OmniAgent 定时任务模板 → 拷到 ~/.omniagent/cron/jobs.json
 //
-// 谁来读：网关调度器（gateway/channel_gateway.py 拉起 scheduler，**每 tick 重读本文件**
+// 谁来读：网关调度器（harness/channel_gateway.py 拉起 scheduler，**每 tick 重读本文件**
 //         → 改完不用重启）；Web「定时任务」页做的是同一份文件的 CRUD。
 // 同目录兄弟文件（都由程序写，不要手改、也不用准备模板）：
 //   state.json  每个 job 上次触发的分钟键（防同一分钟重复触发）

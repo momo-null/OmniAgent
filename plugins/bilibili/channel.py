@@ -17,7 +17,7 @@
 - 归一：``chat_id = comment:<oid>:<type>:<root>:<parent>`` / ``dynamic``，
   共用网关 ``channel:chat_id`` 会话键语义（routes.yaml 把 ``bilibili:*`` 钉到项目）。
 - 出站参数取本通道 yaml 的 ``outbound`` 块（机械闸在 msg_send_*，归一见
-  gateway/outbound.py）；routes.yaml → project_id=bilibili 只是工作目录。
+  harness/outbound.py）；routes.yaml → project_id=bilibili 只是工作目录。
 
 配置文件 ``~/.omniagent/channels/bilibili.yaml``（模板 examples/channels/bilibili.yaml）::
 
@@ -62,7 +62,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from gateway.events.protocol import InboundMessage, OnMessage, ReplyChannel
+from harness.events.protocol import InboundMessage, OnMessage, ReplyChannel
 from utils import get_logger
 
 logger = get_logger("channels.bilibili")

@@ -4,7 +4,7 @@
   （四道闸），本插件永不注册任何发送/点赞/关注类工具——写纪律不靠自觉靠结构。
 - 数据源复用本插件自己的通道只读客户端（HTTP 客户端 + WBI 签名；cookie 来自本插件
   配置，未登录也能用其中免凭证的读接口；未配置时工具返回明确错误）。不 import 宿主
-  （``gateway/``）内部模块：插件只依赖自己目录内的实现 + 宿主公开能力。
+  （``harness/``）内部模块：插件只依赖自己目录内的实现 + 宿主公开能力。
 - 用途约定（写进 bilibili AGENTS.md）：觉醒时先 bili_hot / bili_search 找热点 →
   bili_video_info + bili_video_comments 先读再评；复盘时 bili_self_dynamics 看自己内容数据。
 

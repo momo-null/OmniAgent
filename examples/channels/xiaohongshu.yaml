@@ -5,7 +5,7 @@
 #   浏览器自动化、扫码登录、cookie 全由它承担，本适配器只翻译它的 MCP 端点。
 #   前置三步：① 本机跑起 xiaohongshu-mcp（二进制/docker，缺省端口 18060）；
 #   ② 用它自带浏览器扫码登录（**同一账号别再在其他网页端登录**，会被踢）；
-#   ③ python -m gateway.channels.xiaohongshu --login-status 确认后 enabled: true。
+#   ③ python -m plugins.xiaohongshu.channel --login-status 确认后 enabled: true。
 #
 # 安全定位：评论区任何人可触达 → allow_tools 缺省 false；平台写路径单点收口适配器
 #   （四道闸同 bilibili；小红书风控更凶 → 配额更低、暂停更长、小号先行爬坡）。

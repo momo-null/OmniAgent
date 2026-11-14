@@ -334,6 +334,6 @@ def test_dispatch_allowlist_contains_msg_sing():
     """外部通道 allowlist 必须含 msg_sing（工具面 = 注册 ∩ 通道门，漏了模型拿不到）。"""
     import inspect
 
-    from gateway import dispatch
+    from harness import dispatch
 
     assert "msg_sing" in inspect.getsource(dispatch)

@@ -1,6 +1,6 @@
 // 插件页容器（阶段 6）：宿主只画壳——标题 + 状态 + sandbox iframe。
 // 页面 100% 由插件服务自己出（不经主后端代管、不解析页面语义）；
-// 状态文字只来自 gateway 落盘的 sources 快照，不探测、不猜。
+// 状态文字只来自 harness 落盘的 sources 快照，不探测、不猜。
 import { useCallback, useRef, useState } from "react";
 import { Box, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import { RefreshCwIcon } from "../icons";
