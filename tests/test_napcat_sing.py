@@ -10,7 +10,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from gateway.channels.napcat import NapcatAdapter  # noqa: E402
+from plugins.napcat.channel import NapcatAdapter  # noqa: E402
 from omni_core.tools.base import TOOL_REGISTRY  # noqa: E402
 
 

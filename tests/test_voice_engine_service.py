@@ -1,4 +1,4 @@
-"""常驻语音服务（plugins/voice/engine_service.py）的零依赖单测。
+"""常驻语音服务（model_hub/servers/voice_engine.py）的零依赖单测。
 
 只测协议解析与默认值——不起 HTTP、不加载模型。
 """
@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from plugins.voice import engine_service as svc  # noqa: E402
+from model_hub.servers import voice_engine as svc  # noqa: E402
 
 
 def _multipart(boundary: str, name: str, payload: bytes) -> bytes:

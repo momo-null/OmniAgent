@@ -6,8 +6,8 @@
 
 /v1/audio/*（2026-11-04）：OpenAI 音频 API 兼容形状（POST /v1/audio/transcriptions
 multipart / POST /v1/audio/speech json），与 plugins/voice 的 provider=openai 客户端
-及 engine_service 独立服务同一形状——后端本体即可直接当外部客户端（手机壳等）的
-语音供应商，不必另起 engine_service。
+及 model_hub 拉起的 voice_engine 独立服务同一形状——后端本体即可直接当外部客户端
+（手机壳等）的语音供应商，不必另起引擎进程。
 """
 from __future__ import annotations
 

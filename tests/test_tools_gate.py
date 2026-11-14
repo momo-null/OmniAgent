@@ -9,7 +9,7 @@ import types
 
 import pytest
 
-from gateway.channels.base import InboundMessage
+from gateway.events.protocol import InboundMessage
 from omni_core.brain import sdk_loop as sl
 from omni_core.local.loop import ToolLoop
 
@@ -216,7 +216,7 @@ def test_inbound_message_defaults_to_no_tools():
 
 def test_napcat_allow_tools_defaults_false(monkeypatch):
     monkeypatch.delenv("NAPCAT_TOKEN", raising=False)
-    from gateway.channels.napcat import NapcatAdapter
+    from plugins.napcat.channel import NapcatAdapter
 
     assert NapcatAdapter({"enabled": True}).allow_tools is False
     assert NapcatAdapter({"enabled": True, "allow_tools": True}).allow_tools is True

@@ -1,7 +1,10 @@
 """嵌入 sidecar 服务（独立 venv 内运行；主 .venv 零改动）。
 
+由 ``model_hub.services.ServiceManager`` 按 ``~/.omniagent/model_hub.yaml`` 拉起
+（端口取清单里的 ``services.embed-svc.port``，spawn 时注入）。
+
 用法（venv 内）：
-    python scripts/embed_server.py --model-dir <model_hub/bge-m3> \
+    python -m model_hub.servers.embed_server --model-dir <models/bge-m3> \
         [--port 18743] [--device auto|gpu|cpu]
 
 - 设备降级链：auto = CUDA 可用且空闲显存 ≥2GB → GPU(fp16)，否则 CPU；

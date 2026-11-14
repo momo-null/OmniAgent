@@ -365,7 +365,7 @@ def test_readiness_ok_requires_caller_words():
 
 def test_channel_login_probe_cfg_judges_both_sides():
     """通道自持词表：否定优先、肯定判就绪；不再出现传空 cfg 恒判否。"""
-    from gateway.channels import xiaohongshu
+    from plugins.xiaohongshu import channel as xiaohongshu
 
     cfg = xiaohongshu._login_probe_cfg()
     assert mcp_state.readiness_ok("未登录，请先扫码", cfg)[0] is False

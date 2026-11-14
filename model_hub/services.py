@@ -70,7 +70,12 @@ class ServiceManager:
         args = spec.get("args") or []
         if isinstance(args, str):
             args = args.split()
-        return [py] + [str(self._sub(a)) for a in args]
+        cmd = [py] + [str(self._sub(a)) for a in args]
+        # 端口单源：``port`` 字段声明，spawn 时注入；args 里不得再写 --port 字面量
+        port = self._port(spec)
+        if port > 0 and "--port" not in cmd:
+            cmd += ["--port", str(port)]
+        return cmd
 
     def _cwd(self, spec: Dict[str, Any]) -> str:
         cwd = str(self._sub(spec.get("cwd") or "{repo}"))

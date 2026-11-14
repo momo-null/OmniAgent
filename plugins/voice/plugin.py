@@ -7,10 +7,11 @@ HTTP 端点触达（``/api/audio/transcribe`` / ``/api/audio/tts``，由
 
 **职责边界（M2.5a 服务化）**：本插件是**调用端**——``transcribe``/``tts`` 只把
 请求发到 OpenAI 音频兼容端点（本机常驻服务或在线厂商），端点地址/密钥在插件配置
-``~/.omniagent/plugins/voice.yaml``。引擎本身（模型路径/音色/空闲回收/端口）住在
-``engine_service.py`` 常驻进程 + 服务配置 ``~/.omniagent/voice_service.yaml``；
-``transcribe_local``/``tts_local`` 是引擎实现，只有服务进程会调（否则会把请求
-按端点配置再转发回自己）。
+``~/.omniagent/plugins/voice.yaml``。引擎本身（模型路径/音色/空闲回收/监听地址）住在
+``model_hub/servers/voice_engine.py`` 常驻进程 + 服务配置 ``~/.omniagent/voice_service.yaml``；
+端口唯一来源是 ``~/.omniagent/model_hub.yaml`` 的 ``services.voice.port``（进程由
+model_hub 的 ServiceManager 拉起）。``transcribe_local``/``tts_local`` 是引擎实现，
+只有服务进程会调（否则会把请求按端点配置再转发回自己）。
 
 
 能力（capability 注册制，插件未启用 = 能力不存在 = 端点 404）：
@@ -155,7 +156,7 @@ def _decode_wav_16k_mono(wav_bytes: bytes):
 #   base_url: http://127.0.0.1:18742/v1     # 本机常驻服务，或任意在线厂商
 #   api_key / stt_model / tts_model / voice
 # 引擎配置（模型路径/音色/空闲回收/端口）在 ~/.omniagent/voice_service.yaml，
-# 由 engine_service 与本文件的本机引擎段读取（见 service_config.py）。
+# 由 model_hub.servers.voice_engine 与本文件的本机引擎段读取（见 service_config.py）。
 
 
 def _client_cfg() -> Dict[str, Any]:
@@ -174,8 +175,18 @@ def _openai_audio_cfg() -> tuple:
     if not base:
         raise RuntimeError(
             "语音端点未配置（plugins/voice.yaml 的 base_url）——"
-            "本机服务填 http://127.0.0.1:<service_port>/v1，或填在线厂商地址")
+            "本机服务填 http://127.0.0.1:<model_hub 清单里的端口>/v1，或填在线厂商地址")
     return cfg, base
+
+
+def _endpoint_port(base: str) -> int:
+    """从端点的 base_url 取端口（仅状态展示用；端口唯一配置在 model_hub 清单）。"""
+    try:
+        from urllib.parse import urlparse
+
+        return int(urlparse(base).port or 0)
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def _service_root(base: str) -> str:
@@ -290,7 +301,7 @@ def _stt_monitor_loop() -> None:
 
 
 def transcribe_local(wav_bytes: bytes) -> str:
-    """本机引擎转写（进程内）。**只有 engine_service 调它**——插件侧只发 HTTP，
+    """本机引擎转写（进程内）。**只有 voice_engine 服务进程调它**——插件侧只发 HTTP，
     服务端调这个入口才不会把请求按端点配置转发回自己。"""
     global _STT_LAST_USED
     samples = _decode_wav_16k_mono(wav_bytes)
@@ -633,7 +644,7 @@ def _tts_dispatch(text: str, voice: str) -> bytes:
 
 
 def tts_local(text: str, voice: str = "") -> bytes:
-    """本机引擎合成（进程内）。只有 engine_service 调它（理由同 transcribe_local）。"""
+    """本机引擎合成（进程内）。只有 voice_engine 服务进程调它（理由同 transcribe_local）。"""
     return _tts_dispatch(text, voice)
 
 
@@ -683,7 +694,7 @@ def _voice_names() -> List[str]:
 
 
 def status() -> Dict[str, Any]:
-    """**引擎侧**快照（只读、零加载）——只有 engine_service 进程里才有意义。
+    """**引擎侧**快照（只读、零加载）——只有 voice_engine 服务进程里才有意义。
 
     它在服务进程内读 ``voice_service.yaml`` 与本进程的 STT/TTS 状态；后端进程
     用它没有意义（模型不在那个进程里），后端只调下面的 ``client_status``。
@@ -714,7 +725,7 @@ def status() -> Dict[str, Any]:
             "repo": _gs_repo_dir(),
         },
         "service": {
-            "port": int(cfg.get("service_port") or 18742),
+            "port": _endpoint_port(str(_client_cfg().get("base_url") or "")),
             "idle_sec": float(cfg.get("service_idle_sec") or 600),
         },
     }

@@ -190,7 +190,7 @@ def test_explicit_mode_plain_text_finish_fallback_sends(monkeypatch):
 
     def _fake_mst(text, channel="", target=""):
         called.append(text)
-        from gateway.channels import context as _ctx
+        from gateway.events import registry as _ctx
         _ctx.note_sent(text)  # 与真工具同款记账，extra.send 才能反映出来
         return {"ok": True, "message_id": 1}
 
@@ -204,7 +204,7 @@ def test_explicit_mode_plain_text_finish_fallback_sends(monkeypatch):
     assert rec["extra"]["send"]["count"] == 1
     assert rec["content"] == "这条不用回。"
     # 句柄用完即清，不泄漏到下一轮
-    from gateway.channels import context as _ctx
+    from gateway.events import registry as _ctx
     assert _ctx.get_current_reply() is None
 
 
@@ -294,7 +294,7 @@ class _LoopNoted(_FakeLoop):
         self.text = "记一笔"
 
     def run_task(self, spec):
-        from gateway.channels import context as ch_ctx
+        from gateway.events import registry as ch_ctx
 
         ch_ctx.note_sent(self.text)
         return {"success": True}
@@ -328,7 +328,7 @@ def test_extract_summary_ignores_reason_and_dump():
 
 def test_reply_context_visible_from_other_thread():
     """工具跑在 async_bridge 的事件循环线程 → 回发句柄必须跨线程可见。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     class _R:
         pass
@@ -349,7 +349,7 @@ def test_msg_send_target_resolved_across_threads():
     import importlib.util
     from pathlib import Path
 
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     path = Path(__file__).resolve().parents[1] / "plugins" / "messaging" / "plugin.py"
     spec = importlib.util.spec_from_file_location("_msg_plugin_ctx_test", path)
@@ -505,7 +505,7 @@ class _VoiceReply:
 
 def test_msg_send_voice_sends_voice_and_notes_sent():
     """支持语音的通道 → 真的走 send_voice，并记进「本轮已发出」。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_voice_ok")
     reply = _VoiceReply()
@@ -522,7 +522,7 @@ def test_msg_send_voice_sends_voice_and_notes_sent():
 
 def test_msg_send_voice_unsupported_channel_errors():
     """通道无 send_voice → 明确报错并指路 msg_send_text（不静默改发文字）。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_voice_unsupported")
     reply = _VoiceReply(support_voice=False)
@@ -534,7 +534,7 @@ def test_msg_send_voice_unsupported_channel_errors():
 
 def test_msg_send_text_no_longer_auto_switches_to_voice(monkeypatch):
     """msg_send_text 不再因为「入站是语音」偷偷改发语音（回归）。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_text_only")
     reply = _VoiceReply()
@@ -571,7 +571,7 @@ class _StickerReply:
 
 def test_msg_send_sticker_sends_and_notes_sent():
     """支持表情的通道 → 走 send_sticker 并记进「本轮已发出」（duplicate 不记）。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_sticker_ok")
     reply = _StickerReply()
@@ -590,7 +590,7 @@ def test_msg_send_sticker_sends_and_notes_sent():
 
 def test_msg_send_sticker_duplicate_and_error_not_recorded():
     """duplicate / 失败结果不记「已发出」；未知名错误原样透传给模型。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_sticker_dup")
     reply = _StickerReply()
@@ -611,7 +611,7 @@ def test_msg_send_sticker_duplicate_and_error_not_recorded():
 
 def test_msg_send_sticker_unsupported_channel_errors():
     """通道无 send_sticker → 明确报错（不静默改发文字）。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_sticker_unsupported")
     reply = _StickerReply(support_sticker=False)
@@ -624,7 +624,7 @@ def test_msg_send_sticker_unsupported_channel_errors():
 # ── msg_group_history：群上下文自助查询（A 自动带少量，B 由模型按需多拉） ──
 
 def test_msg_group_history_reads_adapter_history():
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_group_hist")
     reply = _VoiceReply()
@@ -647,7 +647,7 @@ def test_msg_group_history_reads_adapter_history():
 
 def test_msg_group_history_keyword_queries_l0_index(monkeypatch, tmp_path):
     """P2：带 keyword 的群历史改查本地 L0 索引（OneBot 实时历史只有最近几十条，翻旧事靠它）。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
     from omni_core import memory_brain
 
     monkeypatch.setattr(memory_brain, "_BRAIN_PATH", str(tmp_path / "brain.db"))
@@ -679,7 +679,7 @@ def test_msg_group_history_keyword_queries_l0_index(monkeypatch, tmp_path):
 
 def test_msg_group_history_needs_group_or_group_id():
     """私聊里不传 group_id → 明确报错（不猜群号）。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_group_hist_missing")
     reply = _VoiceReply()  # chat_id = private:777
@@ -704,7 +704,7 @@ def test_msg_group_history_unsupported_channel_errors():
 # ── msg_group_image：按需取群图（工具结果带 attachments → S9 注入主模型） ──
 
 def test_msg_group_image_returns_attachments():
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_group_image")
     reply = _VoiceReply()
@@ -730,7 +730,7 @@ def test_msg_group_image_returns_attachments():
 
 def test_msg_group_image_errors_surface():
     """取图失败（无图/跨群/下载失败）→ 通道侧错误原样上抛，不静默。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_group_image_err")
     reply = _VoiceReply()
@@ -793,7 +793,7 @@ class _RecAdapter:
 
 def test_external_source_locks_send_target():
     """外部来源（陌生人/群友）→ 忽略 channel/target，只发回来源会话。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_ext_lock")
     src = _RecAdapter("src_chan")
@@ -818,7 +818,7 @@ def test_external_source_locks_send_target():
 
 def test_external_source_limits_group_history():
     """外部来源只能查当前群；传别的群号一律拒绝。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_ext_group")
     ch_ctx.register(_RecAdapter("src_chan2"))
@@ -836,7 +836,7 @@ def test_external_source_limits_group_history():
 
 def test_trusted_source_keeps_explicit_target():
     """主人自己发起（外部=false）时，channel/target 参数照旧生效（不误伤正常用法）。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     plugin = _load_msg_plugin("_msg_plugin_trusted")
     src = _RecAdapter("src_chan3")
@@ -856,7 +856,7 @@ def test_trusted_source_keeps_explicit_target():
 
 def test_dispatch_marks_external_source_during_run(monkeypatch):
     """dispatch 跑任务期间打标（tools_enabled=False → external），结束后复位。"""
-    from gateway.channels import context as ch_ctx
+    from gateway.events import registry as ch_ctx
 
     seen = {}
 

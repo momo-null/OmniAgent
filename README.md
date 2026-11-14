@@ -185,7 +185,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | 前端 | TypeScript + React 18 + Vite + MUI + Tailwind（自研 store）、Lucide 图标 |
 | 桌面壳 | Electron（拉起后端 + 网关 + 语音服务，托盘常驻） |
 | 本地推理 | llama.cpp `llama-server`（多槽位、`--mmproj` 视觉） |
-| 语音 | 常驻服务 `plugins/voice/engine_service.py`（OpenAI 音频兼容、懒加载、空闲释放）；STT = SenseVoice（sherpa-onnx int8）；TTS = GPT-SoVITS v2 微调（`external/GPT-SoVITS` 独立 venv 的子进程） |
+| 语音 | 常驻引擎 `model_hub/servers/voice_engine.py`（由 model_hub ServiceManager 按 `~/.omniagent/model_hub.yaml` 拉起；OpenAI 音频兼容、懒加载、空闲释放）；STT = SenseVoice（sherpa-onnx int8）；TTS = GPT-SoVITS v2 微调（`external/GPT-SoVITS` 独立 venv 的子进程） |
 | 唱歌 | RVC SVC 常驻 worker + PyMSS BS-Roformer 分离（一次性子进程）+ ffprobe 时长筛查 |
 | 视觉 | RapidOCR（ONNX）；SoM 标注 |
 | 记忆存储 | SQLite（`brain.db`：atoms + `atoms_fts` + L0 逐字索引）+ JSONL 场景块 + Markdown 画像 / 关系卡 |
@@ -439,7 +439,7 @@ One line: **agent loop** (OpenAI Agents SDK `Runner`) → **tool layer** (plugin
 | Frontend | TypeScript + React 18 + Vite + MUI + Tailwind (hand-rolled store), Lucide icons |
 | Desktop shell | Electron (spawns backend + gateway + voice service, tray-resident) |
 | Local inference | llama.cpp `llama-server` (multi-slot, `--mmproj` vision) |
-| Voice | Resident service `plugins/voice/engine_service.py` (OpenAI-audio compatible, lazy load, idle release); STT = SenseVoice (sherpa-onnx int8); TTS = fine-tuned GPT-SoVITS v2 (subprocess in `external/GPT-SoVITS`'s own venv) |
+| Voice | Resident engine `model_hub/servers/voice_engine.py` (started by model_hub ServiceManager from `~/.omniagent/model_hub.yaml`; OpenAI-audio compatible, lazy load, idle release); STT = SenseVoice (sherpa-onnx int8); TTS = fine-tuned GPT-SoVITS v2 (subprocess in `external/GPT-SoVITS`'s own venv) |
 | Singing | Resident RVC SVC worker + PyMSS BS-Roformer separation (one-shot subprocess) + ffprobe duration screening |
 | Vision | RapidOCR (ONNX); SoM markup |
 | Memory storage | SQLite (`brain.db`: atoms + `atoms_fts` + L0 verbatim index) + JSONL scene blocks + Markdown profile / relation cards |

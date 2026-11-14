@@ -6,8 +6,8 @@ import time
 
 import pytest
 
-from gateway.channels import napcat as mod
-from gateway.channels.napcat import NapcatAdapter, NapcatReply
+from plugins.napcat import channel as mod
+from plugins.napcat.channel import NapcatAdapter, NapcatReply
 
 
 @pytest.fixture
@@ -717,7 +717,7 @@ def test_listen_cap_keeps_newest(monkeypatch):
 
 def test_wave_promotion_forgets_buffered(monkeypatch):
     """T1 去重边界：波次升格已入史的消息从留痕抹除，named 唤醒不再重复带。"""
-    from gateway.group_presence import GroupEvent
+    from plugins.napcat.presence import GroupEvent
 
     adapter = _non_t1_adapter(monkeypatch)
     monkeypatch.setattr(adapter, "group_name", lambda gid: "")

@@ -22,8 +22,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from .channels import context
-from .channels.base import ReplyChannel
+from .events import registry as context
+from .events.protocol import ReplyChannel
 
 
 @dataclass

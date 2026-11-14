@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from gateway.channels import xiaohongshu as mod
-from gateway.channels.xiaohongshu import XhsAdapter, build
+from plugins.xiaohongshu import channel as mod
+from plugins.xiaohongshu.channel import XhsAdapter, build
 
 
 @pytest.fixture

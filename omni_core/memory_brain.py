@@ -502,7 +502,7 @@ def index_l0_message(session_id: str, role: str, text: str, *, context_key: str 
     context_key = str(context_key or "").strip() or str(session_id)
     body = text[:_L0_TEXT_MAX]
     rid = _l0_id(str(session_id or ""), now, role, body)
-    # 她的回复不带对方 speaker：否则「按人查」会把她的回话算到别人头上。
+    # 助手回复不带对方 speaker：否则「按人查」会把助手的回话算到别人头上。
     if role == "assistant":
         speaker = ""
     payload = (rid, str(context_key or ""), str(session_id or ""), kind, role,

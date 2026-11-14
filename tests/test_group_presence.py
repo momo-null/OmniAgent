@@ -9,10 +9,10 @@ from collections import deque
 
 import pytest
 
-from gateway import group_presence as gp_mod
-from gateway.channels import napcat as mod
-from gateway.channels.napcat import NapcatAdapter
-from gateway.group_presence import GroupEvent, GroupPresence
+from plugins.napcat import presence as gp_mod
+from plugins.napcat import channel as mod
+from plugins.napcat.channel import NapcatAdapter
+from plugins.napcat.presence import GroupEvent, GroupPresence
 
 
 def _ev(ts, uid="u1", speaker="张三", text="hi", **kw):

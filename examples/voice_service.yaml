@@ -3,20 +3,21 @@
 # 用法：按同名路径复制到 ~/.omniagent/voice_service.yaml 后按需修改——
 #   Windows: copy examples\voice_service.yaml %USERPROFILE%\.omniagent\voice_service.yaml
 #   *nix:    cp examples/voice_service.yaml ~/.omniagent/voice_service.yaml
-# 也可以完全不用它：服务对每个键都有默认值，desktop 启动时按默认端口拉起。
+# 也可以完全不用它：服务对每个键都有默认值；进程由 model_hub 的 ServiceManager
+# 按 ~/.omniagent/model_hub.yaml 的 services.voice 清单拉起（端口也只在清单里配）。
 #
-# 读取方：plugins/voice/engine_service.py（监听 / 空闲释放）、本机引擎段
+# 读取方：model_hub/servers/voice_engine.py（监听地址 / 空闲释放）、本机引擎段
 #         （模型路径 / 音色 / 权重）、唱歌 SVC（sing_* 与曲库闸门）。
 # 调用端只配端点：~/.omniagent/plugins/voice.yaml（见 examples/plugins/voice.yaml）。
 #
-# 生效时机：service_host / service_port / service_token / service_idle_sec 在服务
-# 启动时读取（改完重启服务）；tts_voice / tts_eq / 各 idle / 路径在调用时读取。
+# 生效时机：service_host / service_token / service_idle_sec 在服务启动时读取
+# （改完重启服务）；tts_voice / tts_eq / 各 idle / 路径在调用时读取。
+# 端口不在这里——唯一来源是 ~/.omniagent/model_hub.yaml 的 services.voice.port。
 
 # ── 监听与空闲释放 ──
 # 默认只听回环。给局域网别的机器用改 0.0.0.0，**并务必设置 service_token**
 # （服务本身没有用户体系，开放到网络就是让任何人白嫖你的显卡）。
 service_host: 127.0.0.1
-service_port: 18742
 # 非空则校验 Authorization: Bearer <token>（默认空 = 不校验，仅回环场景够用）
 service_token: ""
 # 连续无请求多少秒释放全部模型：进程不退、监听常在，下次请求重新懒加载；

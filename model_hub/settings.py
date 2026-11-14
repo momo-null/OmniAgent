@@ -28,6 +28,8 @@ _SETTINGS_NAME = "model_hub.yaml"
 #: 出厂描述：三项都是「python 解释器 + 参数」的同一形状。
 #: ``python`` 留空 = 用当前进程的解释器（语音引擎跑在项目 .venv 里）。
 #: ``args`` 里的路径用占位符；``port`` 与 ``health`` 供探活和 Web 展示。
+#: **端口只在 ``port`` 字段声明一处**——ServiceManager 会以 ``--port <port>`` 注入，
+#: ``args`` 里不得再写端口字面量（2026-11-14 定稿：模型服务统一归 model_hub 管）。
 DEFAULT_SERVICES: Dict[str, Dict[str, Any]] = {
     "embed-svc": {
         "enabled": True,
@@ -36,7 +38,6 @@ DEFAULT_SERVICES: Dict[str, Dict[str, Any]] = {
         "args": [
             "-m", "model_hub.servers.embed_server",
             "--model-dir", "{models}/bge-m3",
-            "--port", "18743",
             "--device", "auto",
         ],
         "cwd": "{repo}",
@@ -47,7 +48,7 @@ DEFAULT_SERVICES: Dict[str, Dict[str, Any]] = {
         "enabled": True,
         "autostart": True,
         "python": "",
-        "args": ["-m", "model_hub.servers.voice_engine", "--port", "18742"],
+        "args": ["-m", "model_hub.servers.voice_engine"],
         "cwd": "{repo}",
         "port": 18742,
         "health": "/healthz",
@@ -56,7 +57,6 @@ DEFAULT_SERVICES: Dict[str, Dict[str, Any]] = {
         "enabled": True,
         "autostart": False,
         "kind": "gguf",
-        "models_dir": "D:\\AI\\Models",
     },
 }
 

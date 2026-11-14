@@ -160,7 +160,7 @@ def test_quota_enforced_within_run_scope(brain):
 def test_observability_row_schema(brain, monkeypatch, tmp_path):
     """§8.3 定稿字段：run_id / context_key / source_kind / by_tool / context_chars。"""
     import json as _json
-    import gateway.channels.context as ch
+    import gateway.events.registry as ch
 
     monkeypatch.setattr(ch, "_CURRENT_REPLY", None, raising=False)
     monkeypatch.setattr(ch, "_SOURCE_KIND", "chat", raising=False)

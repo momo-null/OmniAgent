@@ -89,7 +89,8 @@ def test_start_channels_enumerates_files(monkeypatch, _isolated_home):
 
 def test_channel_client_ignores_enabled_gate(monkeypatch):
     """只读客户端不受 enabled 门限：通道未自动拉起时插件工具仍可用。"""
-    from gateway.channels import bilibili, xiaohongshu
+    from plugins.bilibili import channel as bilibili
+    from plugins.xiaohongshu import channel as xiaohongshu
 
     class Dummy:
         def __init__(self, cfg):
@@ -107,7 +108,7 @@ def test_channel_client_ignores_enabled_gate(monkeypatch):
 def test_channel_client_resolves_by_name(monkeypatch):
     """宿主门面按名解析通道的 client(cfg)；非法名/未知名 fail-closed。"""
     from gateway import channel_gateway as gw
-    from gateway.channels import bilibili
+    from plugins.bilibili import channel as bilibili
 
     assert gw.channel_client("") is None
     assert gw.channel_client("not/valid") is None

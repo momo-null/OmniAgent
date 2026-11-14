@@ -8,8 +8,8 @@ import time
 
 import pytest
 
-from gateway.channels import bilibili as mod
-from gateway.channels.bilibili import BilibiliAdapter, build
+from plugins.bilibili import channel as mod
+from plugins.bilibili.channel import BilibiliAdapter, build
 
 
 @pytest.fixture
@@ -460,7 +460,7 @@ def test_send_without_login_rejects_for_real_modes(state_dir):
 
 
 def test_scheduler_channel_gate_skips_unready(monkeypatch, state_dir):
-    from gateway.channels import context as ctx
+    from gateway.events import registry as ctx
     from gateway import scheduler as sched
 
     job = {"id": "bili-awake", "notify_channel": "bilibili"}

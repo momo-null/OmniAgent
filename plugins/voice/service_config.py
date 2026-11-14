@@ -1,13 +1,16 @@
 """语音服务配置（**引擎侧**）：``~/.omniagent/voice_service.yaml``。
 
-为什么要和插件配置分开：语音引擎已经是一个独立常驻服务（``engine_service.py``），
-它的模型路径、音色、空闲回收、监听端口属于「服务」；插件只剩调用端点的职责
-（``~/.omniagent/plugins/voice.yaml``：enabled + base_url + api_key + 模型名）。
-混在一份文件里会让「换在线引擎」和「改本机权重路径」变成同一件事，也让服务进程
-必须去读插件目录。
+为什么要和插件配置分开：语音引擎是一个独立常驻服务（``model_hub/servers/voice_engine.py``，
+由 model_hub 的 ServiceManager 按清单拉起），它的模型路径、音色、空闲回收、监听地址
+属于「服务」；插件只剩调用端点的职责（``~/.omniagent/plugins/voice.yaml``：
+enabled + base_url + api_key + 模型名）。混在一份文件里会让「换在线引擎」和
+「改本机权重路径」变成同一件事，也让服务进程必须去读插件目录。
 
-读取方：``engine_service``（监听/回收参数）、``plugin`` 的本机引擎段（STT/TTS/SVC）、
-``sing_runtime`` / ``song_source``（唱歌引擎与在线曲库闸门）。
+端口不在这里——唯一来源是 ``~/.omniagent/model_hub.yaml`` 的 ``services.voice.port``
+（2026-11-14 定稿），由 ServiceManager spawn 时注入 ``--port``。
+
+读取方：``model_hub.servers.voice_engine``（监听/回收参数）、``plugin`` 的本机引擎段
+（STT/TTS/SVC）、``sing_runtime`` / ``song_source``（唱歌引擎与在线曲库闸门）。
 写入方：设置页经 ``PUT /api/runtime/tools/plugins/<name>/config?scope=service``
 （schema 由 ``plugin.json`` 的 ``service_config`` 自报，路径也由它声明）。
 """

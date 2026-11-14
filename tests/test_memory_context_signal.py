@@ -122,7 +122,7 @@ def test_napcat_group_objective_has_no_verbatim_history(monkeypatch):
     """F-4：通道只给结构——被 @ 的场合自述不再带「群里刚才的消息」原文块；
     「刚才聊了什么」由模型自调 msg_group_history（工具仍在）。"""
     monkeypatch.delenv("NAPCAT_TOKEN", raising=False)
-    from gateway.channels.napcat import NapcatAdapter
+    from plugins.napcat.channel import NapcatAdapter
 
     a = NapcatAdapter({"enabled": True,
                        "group_presence": {"enabled_groups": ["333"], "timers": False}})
@@ -150,7 +150,7 @@ def test_napcat_no_relation_card_injection(monkeypatch):
     """NP-2（D-2 / N-3）：关系卡自动注入物理删除——群聊与私聊场合自述都无印象卡正文；
     「因为记得这个人所以说话不同」改由 narrative_search 按需自取。"""
     monkeypatch.delenv("NAPCAT_TOKEN", raising=False)
-    from gateway.channels.napcat import NapcatAdapter
+    from plugins.napcat.channel import NapcatAdapter
     from omni_core.local import runtime_paths as rp
 
     a = NapcatAdapter({"enabled": True,

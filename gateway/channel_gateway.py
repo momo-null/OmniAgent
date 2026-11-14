@@ -17,7 +17,7 @@ import time
 from typing import Any, Dict, List
 
 from . import dispatch
-from .channels import context
+from .events import registry as context
 from .scheduler import Scheduler, submit_via_web
 
 _ADAPTER_FACTORIES = {}  # name -> build(cfg)  惰性注册（避免 import 不必要 SDK）
@@ -66,7 +66,11 @@ def _load_routes() -> Dict[str, Any]:
 
 
 def _register_factories() -> None:
-    from .channels import bilibili, feishu, napcat, wecom, xiaohongshu
+    from plugins.bilibili import channel as bilibili
+    from plugins.feishu import channel as feishu
+    from plugins.napcat import channel as napcat
+    from plugins.wecom import channel as wecom
+    from plugins.xiaohongshu import channel as xiaohongshu
     _ADAPTER_FACTORIES["bilibili"] = bilibili.build
     _ADAPTER_FACTORIES["feishu"] = feishu.build
     _ADAPTER_FACTORIES["wecom"] = wecom.build
@@ -109,7 +113,7 @@ def channel_client(name: str):
     try:
         from importlib import import_module
 
-        mod = import_module(f".channels.{name}", __package__)
+        mod = import_module(f"plugins.{name}.channel")
         factory = getattr(mod, "client", None)
         return factory(channel_config(name)) if callable(factory) else None
     except Exception:

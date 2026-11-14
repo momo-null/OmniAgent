@@ -42,7 +42,7 @@ def _resolve(channel: str, target: str):
     来源会话。否则群里的人可以让它 `channel="feishu"` 或 `target="private:别人"`
     —— 不碰任何高危工具也能把消息从别的通道发出去，绕过工具白名单做跳板。
     """
-    from gateway.channels import context
+    from gateway.events import registry as context
 
     cur = context.get_current_reply()
     if context.get_source_external():
@@ -91,7 +91,7 @@ def _external_note(result: Dict[str, Any]) -> Dict[str, Any]:
     让模型知道「我指定别的会话没生效」，避免它以为发出去了而实际发在来源群。
     """
     try:
-        from gateway.channels import context as _ctx
+        from gateway.events import registry as _ctx
 
         if isinstance(result, dict) and result.get("ok") and _ctx.get_source_external():
             extra = "外部来源：只能发回本会话，channel/target 参数已被忽略"
@@ -190,7 +190,7 @@ def msg_send_text(text: str, channel: str = "", target: str = "") -> Dict[str, A
     if err:
         return {"ok": False, "error": err}
     try:
-        from gateway.channels import context as _ctx
+        from gateway.events import registry as _ctx
     except Exception:  # 非网关进程/极端导入失败：不影响发送本身
         _ctx = None
     try:
@@ -245,7 +245,7 @@ def msg_send_voice(text: str, channel: str = "", target: str = "") -> Dict[str, 
             return {"ok": False, "error": f"语音发送返回异常: {result!r}"}
         if result.get("ok") and not result.get("duplicate"):
             try:
-                from gateway.channels import context as _ctx
+                from gateway.events import registry as _ctx
 
                 _ctx.note_sent(text)  # 记账：本轮真的发出去了（去重跳过不算）
             except Exception:  # 记账失败不影响已发出的消息
@@ -294,7 +294,7 @@ def msg_send_image(image_path: str, text: str = "", channel: str = "", target: s
             return {"ok": False, "error": f"图片发送返回异常: {result!r}"}
         if result.get("ok") and not result.get("duplicate") and not result.get("queued"):
             try:
-                from gateway.channels import context as _ctx
+                from gateway.events import registry as _ctx
 
                 _ctx.note_sent(f"[图片:{os.path.basename(path)}] {chunks[0] if chunks else ''}".strip())
             except Exception:
@@ -333,7 +333,7 @@ def msg_send_sticker(name: str = "", channel: str = "", target: str = "") -> Dic
             return {"ok": False, "error": f"表情发送返回异常: {result!r}"}
         if result.get("ok") and not result.get("duplicate"):
             try:
-                from gateway.channels import context as _ctx
+                from gateway.events import registry as _ctx
 
                 _ctx.note_sent(f"[表情:{result.get('sticker') or name}]")
             except Exception:  # 记账失败不影响已发出的消息
@@ -584,7 +584,7 @@ def msg_group_history(group_id: str = "", limit: int = 20, channel: str = "",
     adapter, chat_id, err = _resolve(channel, "")
     if err:
         return {"ok": False, "error": err}
-    from gateway.channels import context as _ctx
+    from gateway.events import registry as _ctx
 
     gid = str(group_id or "").strip()
     if _ctx.get_source_external():
@@ -667,7 +667,7 @@ def msg_group_image(message_id: str, group_id: str = "", channel: str = "") -> D
     adapter, chat_id, err = _resolve(channel, "")
     if err:
         return {"ok": False, "error": err}
-    from gateway.channels import context as _ctx
+    from gateway.events import registry as _ctx
 
     gid = str(group_id or "").strip()
     if _ctx.get_source_external():

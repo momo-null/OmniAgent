@@ -340,7 +340,7 @@ def _channel_gate(job: Dict[str, Any]) -> Optional[str]:
     if not ch:
         return None
     try:
-        from .channels import context as _ctx
+        from .events import registry as _ctx
 
         adapter = _ctx.get_adapter(ch)
     except Exception:
@@ -409,7 +409,7 @@ def _broadcast_result(notify_channel: str, source: str, task_id: str,
                       ok: bool, summary: str) -> None:
     """回发沿用网关进程的通道注册表；backend 进程内无适配器时静默跳过。"""
     try:
-        from .channels import context as _ctx
+        from .events import registry as _ctx
         adapter = _ctx.get_adapter(notify_channel)
         if adapter:
             body = f"{'✅' if ok else '⚠️'} [{source} {task_id[:8]}]\n" \

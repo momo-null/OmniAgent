@@ -126,7 +126,7 @@ def test_external_relation_reads_summary_only(brain, monkeypatch):
 
 def test_gateway_fills_speaker_from_user_id(monkeypatch):
     from gateway import channel_gateway as cgw
-    from gateway.channels.base import InboundMessage
+    from gateway.events.protocol import InboundMessage
 
     captured = {}
     monkeypatch.setattr(cgw.dispatch, "ensure_worker", lambda: None)

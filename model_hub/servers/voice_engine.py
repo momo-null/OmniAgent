@@ -15,9 +15,11 @@
   **进程不退**：监听一直在，下次请求重新懒加载。这和「空闲自杀」的区别很关键——
   自杀之后没人再拉起它，下一次请求就是 connection refused。
 
-配置分两份（服务化后的边界）：
-- 引擎（本文件）：``~/.omniagent/voice_service.yaml``——模型路径 / 音色 / 空闲回收 /
-  监听端口（``service_port`` / ``service_idle_sec`` / ``service_host`` / ``service_token``）。
+配置分层（服务化后的边界，2026-11-14 定稿）：
+- 端口与「起不起」：``~/.omniagent/model_hub.yaml`` 的 ``services.voice``
+  （``port`` / ``enabled`` / ``autostart``）——唯一来源，ServiceManager 注入 ``--port``。
+- 引擎参数（本文件）：``~/.omniagent/voice_service.yaml``——模型路径 / 音色 /
+  空闲回收 / 监听地址与令牌（``service_host`` / ``service_idle_sec`` / ``service_token``）。
 - 调用端（插件）：``~/.omniagent/plugins/voice.yaml``——只剩端点：
     base_url: http://127.0.0.1:18742/v1
     api_key: ""            # 本地服务不校验；启动时给了 --token 才校验
@@ -25,10 +27,10 @@
     tts_model: gpt-sovits
     voice: ""              # 空 = 用服务端 tts_voice 配置
 
-启动（由后端 ServiceManager 统一拉起；手动同一条命令）：
-    python -m model_hub.servers.voice_engine   # 端口读 voice_service.yaml 的 service_port
+启动（由后端 ServiceManager 按清单拉起；手动运行需显式给端口）：
+    python -m model_hub.servers.voice_engine --port 18742
     # 需要给局域网别的机器用时显式放开，并带 token（默认只听回环）
-    python -m model_hub.servers.voice_engine --host 0.0.0.0 --token <secret>
+    python -m model_hub.servers.voice_engine --port 18742 --host 0.0.0.0 --token <secret>
 """
 from __future__ import annotations
 
@@ -216,8 +218,8 @@ def _watchdog(plugin) -> None:
             print(f"[voice-engine] release failed: {type(e).__name__}: {e}", flush=True)
 
 
-def _defaults() -> Tuple[str, int, float, str]:
-    """从 ``voice_service.yaml`` 取缺省值（命令行显式给的就以命令行为准）。"""
+def _defaults() -> Tuple[str, float, str]:
+    """从 ``voice_service.yaml`` 取引擎侧缺省值（端口不在此列——由 model_hub 注入）。"""
     cfg: Dict[str, Any] = {}
     try:
         from plugins.voice.service_config import service_cfg
@@ -227,7 +229,6 @@ def _defaults() -> Tuple[str, int, float, str]:
         pass
     return (
         str(cfg.get("service_host") or "127.0.0.1"),
-        int(cfg.get("service_port") or 18742),
         float(cfg.get("service_idle_sec") or 600),
         str(cfg.get("service_token") or ""),
     )
@@ -235,15 +236,21 @@ def _defaults() -> Tuple[str, int, float, str]:
 
 def main() -> int:
     global _IDLE_RELEASE_SEC, _TOKEN
-    host_def, port_def, idle_def, token_def = _defaults()
+    host_def, idle_def, token_def = _defaults()
     ap = argparse.ArgumentParser(description="本机语音引擎常驻服务（OpenAI 音频兼容形状）")
-    ap.add_argument("--port", type=int, default=port_def)
+    ap.add_argument("--port", type=int, default=0,
+                    help="监听端口**必填**：由 model_hub.yaml 清单的 port 字段注入；手动运行请显式指定")
     ap.add_argument("--host", default=host_def,
                     help="默认只听回环；给局域网用需显式 --host 0.0.0.0 并配 --token")
     ap.add_argument("--idle-release-sec", type=float, default=idle_def,
                     help="连续无请求 N 秒后释放模型（不退出进程；0=常驻不释放）")
     ap.add_argument("--token", default=token_def, help="非空时校验 Authorization: Bearer")
     args = ap.parse_args()
+    if args.port <= 0 or args.port > 65535:
+        print("[voice-engine] 缺少有效 --port：端口只在 ~/.omniagent/model_hub.yaml "
+              "的 services.voice.port 声明，由 ServiceManager 注入；手动运行请显式 --port",
+              flush=True)
+        return 2
     _IDLE_RELEASE_SEC = args.idle_release_sec
     _TOKEN = args.token
 

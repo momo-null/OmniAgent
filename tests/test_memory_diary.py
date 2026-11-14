@@ -151,7 +151,7 @@ def test_catchup_backfills_within_window_only(monkeypatch, brain_cfg, tmp_path):
 
 def test_napcat_display_attribution(monkeypatch, tmp_path):
     monkeypatch.delenv("NAPCAT_TOKEN", raising=False)
-    from gateway.channels.napcat import NapcatAdapter
+    from plugins.napcat.channel import NapcatAdapter
 
     a = NapcatAdapter({"enabled": True,
                        "group_presence": {"enabled_groups": ["333"], "timers": False}})

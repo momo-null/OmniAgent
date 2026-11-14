@@ -246,7 +246,7 @@ class _Adapter:
 @pytest.fixture
 def stub_channel(monkeypatch):
     a = _Adapter()
-    from gateway.channels import context as ctx
+    from gateway.events import registry as ctx
 
     ctx.register(a)
     monkeypatch.setattr("gateway.channel_gateway.channel_config",
@@ -255,7 +255,7 @@ def stub_channel(monkeypatch):
                                                                              "max_sentences": 1}}}}
                                       if name == "stub" else {}))
     yield a
-    from gateway.channels import context as ctx2
+    from gateway.events import registry as ctx2
 
     ctx2._REGISTRY.pop("stub", None)
 
