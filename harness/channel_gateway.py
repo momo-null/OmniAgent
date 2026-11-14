@@ -13,6 +13,7 @@ events 面的插件。
 """
 from __future__ import annotations
 
+import os
 import signal
 import sys
 import time
@@ -21,6 +22,43 @@ from typing import Any, Dict, List, Optional
 from . import dispatch
 from .events import registry as context
 from .scheduler import Scheduler, submit_via_web
+
+_SINGLETON_HANDLE: Any = None
+
+
+def _acquire_singleton() -> bool:
+    """网关单实例锁：后端、桌面壳、人手启动都可能并发拉起，只能有一个调度器/通道集合。
+
+    Windows 用命名 mutex（进程死亡自动释放，无陈旧文件）；其它平台用文件锁。
+    """
+    global _SINGLETON_HANDLE
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\OmniAgentHarnessGateway")
+            if not handle:
+                return True  # 拿不到句柄不阻断（极少数受限环境）
+            if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+                return False
+            _SINGLETON_HANDLE = handle
+            return True
+        except Exception:  # noqa: BLE001 —— 锁失败不应让网关起不来
+            return True
+    try:
+        import fcntl
+
+        path = os.path.expanduser("~/.omniagent/runtime/harness.lock")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        f = open(path, "a+b")
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _SINGLETON_HANDLE = f
+        return True
+    except OSError:
+        return False
+    except Exception:  # noqa: BLE001
+        return True
+
 
 
 def channel_config(name: str) -> Dict[str, Any]:
@@ -251,6 +289,9 @@ def _ensure_plugins() -> None:
 
 
 def main() -> int:
+    if not _acquire_singleton():
+        print("[harness] 已有网关实例在运行，本进程退出")
+        return 0
     no_channels = "--no-channels" in sys.argv
     no_scheduler = "--no-scheduler" in sys.argv
     print("[harness] 启动（Ctrl+C 退出）")

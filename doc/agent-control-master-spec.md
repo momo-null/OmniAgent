@@ -212,7 +212,7 @@
 - **语音（M3，2026-10-29/30 落地）**：Web 会话页按住说话（对讲式）+ 免提（常开 VAD 自动判句 + 声学打断 + 回复自动朗读）+ 回复旁 🔊 播报；TTS = CosyVoice2 零样本克隆（音色 = `voices/<名字>.wav` 参考音频），STT = SenseVoice；`plugins/voice` 懒加载插件 + `/api/audio/transcribe|tts` 薄壳端点。见 `doc/plans/voice-m3-2026-10-29.md`。
 - **插件事件面（2026-11-14 起归一）**：`plugins/<name>/channel.py`（QQ=NapCat / 飞书 / 企业微信等事件源都由 manifest 声明）+ 群聊上下文注入 + 外部来源加固（外部可达通道跑任务时发送工具锁死来源会话、MCP 不连接）+ QQ 语音消息（入站转写保留媒介标记、出站 `msg_send_voice` 工具）。
 - **远程客户端契约（2026-10-30）**：任意外部 HTTP 客户端经内网/远程使用运行时——非回环 Bearer 鉴权（PC-0）+ 5 端点冻结契约（`memory/sync` 待实现）+ SSE `sub` 旁路多播。见 `doc/plans/implemented/remote-client-contract-2026-10-30.md`。
-- **桌面壳（v1.0.1+）**：Electron 同壳 spawn 后端与网关、Web UI 过期自动重建、右侧 artifacts dock（files/browser/git/terminal/debug 分页）。
+- **桌面壳（v1.0.1+）**：Electron 拉起后端；网关由后端 lifespan 托管（单实例、崩溃随后端树回收）、Web UI 过期自动重建、右侧 artifacts dock（files/browser/git/terminal/debug/插件页）。
 
 ---
 

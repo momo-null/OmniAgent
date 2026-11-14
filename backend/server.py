@@ -142,7 +142,26 @@ async def lifespan(app: FastAPI):
         logger.info("loop 组件池：MCP 启动预热已发起（后台线程）")
     except Exception as e:  # 预热失败不阻断启动
         logger.warning("MCP 启动预热失败（已忽略）: %s", e)
+    # 网关由后端托管（桌面壳不再 spawn）：Web 单独起后端也有事件源 + 定时任务。
+    # 网关仍是独立进程；已有实例则复用，测试环境/显式关闭时跳过。失败不阻断后端。
+    try:
+        from backend.services.harness_host import start_gateway
+
+        gw = start_gateway(PORT)
+        if gw is not None:
+            logger.info("网关已由后端托管（pid=%s）", gw.pid)
+        else:
+            logger.info("网关已在运行或本环境跳过托管")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("网关托管启动失败（已忽略）: %s", e)
     yield
+    # 只停后端自己拉起的网关；复用已有实例时不动它（可能是用户/桌面留下的）
+    try:
+        from backend.services.harness_host import stop_gateway
+
+        stop_gateway()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("网关托管收尾失败（已忽略）: %s", e)
     # P1 工具插件：进程退出前依次调用各插件 shutdown()（异常吞掉，不阻断退出）。
     try:
         from omni_core.tools.loader import shutdown_plugins

@@ -46,7 +46,7 @@ cd web && npm install && cd ..
 
 1. 装 [NapCat](https://github.com/NapNeko/NapCatQQ)，开启 HTTP（默认 `:3000`）与 WebSocket 服务（默认 `:3001`）；
 2. 抄 `examples/channels/napcat.yaml` 建 `~/.omniagent/channels/napcat.yaml`：`enabled` / `http_url` / `ws_url` / `token`，群聊闸门 `reply_groups` / `allow_groups` / `require_at`，私聊白名单 `allow_users`；
-3. 起网关：`python -m harness.channel_gateway`（桌面端会自动拉起，不用手动跑）；
+3. 网关：后端启动时自动托管 `harness.channel_gateway`（单实例；调试时可手动单独跑）；
 4. 私聊直接回；群聊**默认必须 @ 它**才响应。语音进来会转写成 `[语音] <内容>`，**要不要用语音回由模型决定**（`msg_send_voice` vs `msg_send_text`，通道不自动改发送形式），图片真的看懂。
 
 想让助手「像个人一样在群里待着」，就在同一份 yaml 里开 `group_presence`：`enabled_groups`（缺省全关）、`talk_value`（话痨度）、`thread_hot_min`（自己发过言后的跟进期）、`quiet_hours`（安静时段）、`aliases`（没打 @ 喊名字也算）。**回不回是通道侧算出来的**：一轮里助手没调发送工具就什么都不会发，内心独白不外泄，这类「静默轮」也不会再喂回下一轮上下文。
@@ -107,7 +107,7 @@ python -m venv .venv
 pip install -r requirements.txt
 cd web && npm install && cd ..
 .\start_all.bat                        # 后端 :8000 + 语音引擎 :18742 + 前端 :5173
-python -m harness.channel_gateway      # 可选：IM 通道 + 定时任务（另开一个窗口）
+python -m harness.channel_gateway      # 调试用：手动单独跑 IM + 定时任务（常规由后端托管）
 .\start_all.bat stop                   # 停掉 :8000 / :18742 / :5173
 ```
 
@@ -118,11 +118,11 @@ python -m harness.channel_gateway      # 可选：IM 通道 + 定时任务（另
 ```bash
 cd desktop
 npm install          # 首次；.npmrc 已配国内镜像
-npm run dev          # vite + 后端 + 网关 + 语音服务 + Electron 一键起
+npm run dev          # vite + 后端（含网关托管）+ 语音服务 + Electron 一键起
 npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 ```
 
-也可以回到仓库根目录跑 `pack_desktop.bat`（顺带先构建 `web/dist`）。桌面端会自动拉起后端、网关与语音引擎服务（崩溃会重启、退出把整棵进程树带走），关窗口缩到托盘（托盘可重启后端 / 看日志 / 退出）。打包产物是**壳**，后端与 `.venv` 仍指向本仓库（用 `OMNIAGENT_HOME` 或 `omniagent.home` 指定路径）。
+也可以回到仓库根目录跑 `pack_desktop.bat`（顺带先构建 `web/dist`）。桌面端拉起后端（后端再托管网关与插件服务），崩溃会重启、退出把整棵进程树带走，关窗口缩到托盘（托盘可重启后端 / 看日志 / 退出）。打包产物是**壳**，后端与 `.venv` 仍指向本仓库（用 `OMNIAGENT_HOME` 或 `omniagent.home` 指定路径）。
 
 ### 几个容易踩的坑
 
@@ -183,7 +183,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | 状态机编排 | LangGraph（`Send` 并发扇出、`update_state` 软注入） |
 | 后端 | Python + FastAPI / uvicorn |
 | 前端 | TypeScript + React 18 + Vite + MUI + Tailwind（自研 store）、Lucide 图标 |
-| 桌面壳 | Electron（拉起后端 + 网关 + 语音服务，托盘常驻） |
+| 桌面壳 | Electron（拉起后端；网关/语音由后端托管，托盘常驻） |
 | 本地推理 | llama.cpp `llama-server`（多槽位、`--mmproj` 视觉） |
 | 语音 | 常驻引擎 `model_hub/servers/voice_engine.py`（由 model_hub ServiceManager 按 `~/.omniagent/model_hub.yaml` 拉起；OpenAI 音频兼容、懒加载、空闲释放）；STT = SenseVoice（sherpa-onnx int8）；TTS = GPT-SoVITS v2 微调（`external/GPT-SoVITS` 独立 venv 的子进程） |
 | 唱歌 | RVC SVC 常驻 worker + PyMSS BS-Roformer 分离（一次性子进程）+ ffprobe 时长筛查 |
@@ -225,10 +225,10 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | `omni_core/tools/` | 工具运行时：策略 / 审批、capability 注册、MCP、shell、技能、工作区 |
 | `omni_core/orchestration/` | 多 agent 编排（LangGraph 扇出 + 子任务板） |
 | `plugins/` | 能力插件：`filesystem` `web` `messaging` `host` `emulator` `voice` `ocr` `vision`（一插件一份 `plugin.json` + 一份用户级 yaml） |
-| `harness/` | 常驻网关：`channels/`（napcat / feishu / wecom）、派发队列、群存在感、cron 调度 |
+| `harness/` | 常驻网关：事件契约/注册表、派发队列、cron 调度（通道实现随 `plugins/<name>/`，群存在感在 napcat 插件内） |
 | `backend/` | HTTP 服务与 API 路由；`web/dist` 存在时同源承载前端 |
 | `web/` | 前端单页（对话 / 定时任务 + 遮罩式设置与技能工具） |
-| `desktop/` | Electron 壳：自动拉起后端 + 网关 + 语音服务、托盘、打包 |
+| `desktop/` | Electron 壳：拉起后端（网关与语音服务由后端托管）、托盘、打包 |
 | `external/` | 上游引擎 clone（GPT-SoVITS 及其独立 venv），不进 git |
 | `model_hub/` `llm_runtime/` | 模型元数据与 llama-server 生命周期 / 推理后端 |
 | `scripts/` | 红线 lint、真机验证与基准脚本（`verify_memory_recall.py` 等） |
@@ -300,7 +300,7 @@ Prefer fewer windows? Use the desktop app (see [Quick Start](#quick-start)).
 
 1. Install [NapCat](https://github.com/NapNeko/NapCatQQ) with HTTP (`:3000`) and WebSocket (`:3001`) enabled;
 2. Copy `examples/channels/napcat.yaml` to `~/.omniagent/channels/napcat.yaml`: `enabled` / `http_url` / `ws_url` / `token`, group gates `reply_groups` / `allow_groups` / `require_at`, private allow-list `allow_users`;
-3. Start the harness: `python -m harness.channel_gateway` (the desktop app spawns it for you);
+3. Harness: the backend hosts `harness.channel_gateway` on startup (single instance; run it manually only for debugging);
 4. Private chats reply directly; group chats need an @ by default. Incoming voice is transcribed as `[voice] <content>`, and **the model decides** whether to answer with voice (`msg_send_voice`) or text — the channel never rewrites the medium. Images are genuinely understood.
 
 To let the assistant just hang out in a group, enable `group_presence` in the same yaml: `enabled_groups` (empty = off everywhere), `talk_value`, `thread_hot_min`, `quiet_hours`, `aliases` (its name counts as a mention). **Whether to speak is computed channel-side**: if no send tool is called nothing is sent, the inner monologue never leaks, and those silent runs are dropped from the next round's context.
@@ -361,7 +361,7 @@ python -m venv .venv
 pip install -r requirements.txt
 cd web && npm install && cd ..
 .\start_all.bat                        # backend :8000 + voice engine :18742 + frontend :5173
-python -m harness.channel_gateway      # optional: IM channels + cron (own window)
+python -m harness.channel_gateway      # debug only: run IM + cron standalone (normally backend-hosted)
 .\start_all.bat stop                   # stops :8000 / :18742 / :5173
 ```
 

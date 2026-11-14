@@ -20,11 +20,9 @@ import {
   logsDir,
   shellLog,
   startBackend,
-  startGateway,
   waitForHealth,
   type BackendHandle,
 } from "./backend";
-import type { ChildProcess } from "node:child_process";
 import { projectRootError, resolveProjectRoot, resolveProjectRootSafe } from "./project";
 import { ensureWebBuild } from "./webbuild";
 import { createTray, disposeTray, setTrayStatus } from "./tray";
@@ -76,8 +74,6 @@ let appView: WebContentsView | null = null;
 /** 侧栏收起态（导航条「收起侧边栏」按钮） */
 let sidebarCollapsed = false;
 let backend: BackendHandle | null = null;
-/** 网关进程（cron 调度 + 消息通道），随应用生命周期 */
-let harness: ChildProcess | null = null;
 let quitting = false;
 let restarts = 0;
 let cfg: DesktopConfig;
@@ -345,21 +341,6 @@ function showErrorState(err: Error): void {
 
 // ── 后端生命周期 ──────────────────────────────────────────
 
-/** 拉起网关并挂自愈链：每次重启的实例都要重新挂 exit 监听（链才不断） */
-function spawnGatewayWithRestart(root: string): void {
-  if (quitting) return;
-  // 后端端口可能是 findFreePort 拿到的非 8000，交给网关做事件通知的目标地址
-  const backendUrl = backend ? `http://127.0.0.1:${backend.port}` : "";
-  harness = startGateway(root, backendUrl);
-  harness.once("exit", (code) => {
-    if (quitting) return;
-    shellLog(`harness 退出(code=${code})，5s 后自动重启`);
-    setTimeout(() => {
-      if (!quitting && backend) spawnGatewayWithRestart(root);
-    }, 5000);
-  });
-}
-
 async function ensureBackend(): Promise<void> {
   try {
     const root = resolveProjectRoot();
@@ -382,11 +363,7 @@ async function ensureBackend(): Promise<void> {
     const handle = startBackend(root, port);
     backend = handle;
     handle.process.once("exit", onBackendExit);
-    // 网关与后端并列常驻：cron 定时触发 + 飞书通道（凭据缺失时网关自身降级为只跑调度器）。
-    // 守卫：手动「重启后端」/ 崩溃自愈重入时避免拉出第二个网关（scheduler 会双触发）。
-    if (!harness || harness.exitCode !== null) {
-      spawnGatewayWithRestart(root);
-    }
+    // 网关由后端 lifespan 托管（含单实例锁与已有实例复用）；壳不再并列 spawn。
     await waitForHealth(port, HEALTH_TIMEOUT_MS, (s) => setStatus(`正在启动后端… ${s}s`));
     setStatus("后端就绪，加载界面…");
     setTrayStatus(`运行中 :${port}`);
@@ -506,11 +483,6 @@ app.on("before-quit", (event) => {
             new Promise<void>((r) => setTimeout(r, 5000)),
           ]),
         );
-      }
-      if (harness) {
-        const gpid = harness.pid;
-        harness = null;
-        if (gpid) kills.push(killBackendTree(gpid));
       }
       await Promise.race([
         Promise.all(kills).then(() => undefined),

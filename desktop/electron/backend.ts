@@ -124,27 +124,9 @@ export function shellLog(msg: string, name = "harness.log"): void {
 }
 
 /**
- * 网关常驻（定时任务调度 + 飞书/企微通道）：桌面应用作为日常宿主一并拉起。
- * 凭据未配（如 FEISHU_APP_SECRET 缺失）时网关自身降级为只跑调度器，不影响使用；
- * 配好后重启应用即可连上通道。
+ * 网关常驻进程已改由后端 lifespan 托管（backend/services/gateway_host.py）。
+ * 壳不再 spawn 网关——桌面/Web/单独后端起法只有一条启动路径，避免双调度器。
  */
-export function startGateway(root: string, backendUrl = ""): ChildProcess {
-  // B0 事件桥：网关要知道后端实际端口（桌面端可能取到非 8000 的空闲端口），
-  // 才能在跑完一轮后通知前端刷新；未注入时网关回退 127.0.0.1:8000。
-  const env = cleanEnv();
-  if (backendUrl) env.OMNIAGENT_BACKEND_URL = backendUrl;
-  const child = spawn(projectPython(root), ["-m", "harness.channel_gateway"], {
-    cwd: root,
-    env,
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  appendLog(`\n[shell] ${new Date().toISOString()} spawn harness pid=${child.pid}\n`, "harness.log");
-  const pump = (chunk: Buffer) => appendLog(chunk.toString("utf8"), "harness.log");
-  child.stdout?.on("data", pump);
-  child.stderr?.on("data", pump);
-  return child;
-}
 
 
 
