@@ -3,7 +3,7 @@
 分工：
 - 页面本体 = ``page/index.html``（纯静态、零构建），由本进程出；
 - 数据 = 本进程反代到主后端（``/bilibili/outbox*``）。插件页只调自己的服务：
-  sandbox iframe 里跨源请求主后端会被 CORS 拦，反代是唯一干净通路；
+  ``/api/outbox*`` → ``/bilibili/outbox*``；反代是唯一干净通路；
 - 端口由宿主生命周期注入（manifest ``lifecycle.spawn`` → ServiceManager），
   本进程不读任何端口配置；``--port`` 缺失/<=0 直接报错退出（不做静态配置双源）。
 
@@ -27,7 +27,22 @@ PAGE_DIR = Path(__file__).resolve().parent / "page"
 BACKEND = (os.environ.get("OMNI_BACKEND_URL") or "http://127.0.0.1:8000").rstrip("/")
 
 #: 反代允许的路径前缀（只放审批面，其他一律 404）
-ALLOWED_PREFIX = "/bilibili/outbox"
+API_PREFIX = "/api/outbox"
+BACKEND_PREFIX = "/bilibili/outbox"
+
+
+def backend_path(path: str) -> Optional[str]:
+    """插件页公开路径 → 主后端路径。
+
+    只放 ``/api/outbox`` 这一棵子树，避免变成任意后端反代：
+    ``/api/outbox`` → ``/bilibili/outbox``，
+    ``/api/outbox/1/approve`` → ``/bilibili/outbox/1/approve``。
+    """
+    if path == API_PREFIX:
+        return BACKEND_PREFIX
+    if path.startswith(API_PREFIX + "/"):
+        return BACKEND_PREFIX + path[len(API_PREFIX):]
+    return None
 
 
 def _proxy(path: str, method: str, body: Optional[bytes] = None) -> tuple:
@@ -71,7 +86,11 @@ class Handler(BaseHTTPRequestHandler):
             self._static("index.html")
             return
         if path.startswith("/api/"):
-            status, payload, ctype = _proxy(ALLOWED_PREFIX + path[len("/api"):], "GET")
+            target = backend_path(path)
+            if target is None:
+                self._send(404, b'{"ok":false,"error":"not allowed"}')
+                return
+            status, payload, ctype = _proxy(target, "GET")
             self._send(status, payload, str(ctype or "application/json"))
             return
         self._send(404, b"not found", "text/plain")
@@ -79,9 +98,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         path = self.path.split("?", 1)[0]
         if path.startswith("/api/"):
+            target = backend_path(path)
+            if target is None:
+                self._send(404, b'{"ok":false,"error":"not allowed"}')
+                return
             length = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(length) if length else b""
-            status, payload, ctype = _proxy(ALLOWED_PREFIX + path[len("/api"):], "POST", body)
+            status, payload, ctype = _proxy(target, "POST", body)
             self._send(status, payload, str(ctype or "application/json"))
             return
         self._send(404, b"not found", "text/plain")

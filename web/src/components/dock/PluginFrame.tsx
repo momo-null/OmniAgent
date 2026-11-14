@@ -89,8 +89,10 @@ export default function PluginFrame({
             ref={frameRef}
             src={loadedAt ? `${url}${url.includes("?") ? "&" : "?"}_=${loadedAt}` : url}
             title={label}
-            // 不给自己装脚本的世界：页面跑在自己的源里，宿主只给脚本能力，不给宿主同源
-            sandbox="allow-scripts allow-forms allow-popups allow-downloads"
+            // 插件页的 API 就在它自己的源上（:18751）。不给 allow-same-origin 会让文档
+            // 变成 opaque origin，连自己的 /api/* 都算跨源 → 浏览器直接 Failed to fetch。
+            // 这个同源只覆盖插件服务本身，不等于把宿主的源交给它。
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
             referrerPolicy="no-referrer"
             sx={{ width: "100%", height: "100%", border: 0, display: "block", bgcolor: "background.paper" }}
           />
