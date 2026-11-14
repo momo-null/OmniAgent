@@ -35,8 +35,8 @@
 
 命令行（联调用；MCP 端点不需要网关在跑）::
 
-    python -m gateway.channels.xiaohongshu --login-status   # 检查登录态
-    python -m gateway.channels.xiaohongshu --poll-once      # 拉自己笔记的评论区
+    python -m plugins.xiaohongshu.channel --login-status   # 检查登录态
+    python -m plugins.xiaohongshu.channel --poll-once      # 拉自己笔记的评论区
 """
 from __future__ import annotations
 

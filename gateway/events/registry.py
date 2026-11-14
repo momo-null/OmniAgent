@@ -59,7 +59,7 @@ def get_current_reply() -> Optional[ReplyChannel]:
 # ── 本轮来源是否「外部可达」────────────────────────────────────────────────
 # 外部可达 = tools_enabled=False 的通道（QQ 群/陌生人私聊、任何他人能给账号发消息的
 # 入口）。发送类工具据此**锁死**目标：只准发回来源会话，忽略模型给的 channel/target。
-# 为什么必须锁：否则群里的人可以让它 `msg_send_text(channel="feishu", target=...)`，
+# 为什么必须锁：否则群里的人可以让它 `msg_send_text(channel="other", target=...)`，
 # 消息从别的通道发出去——绕过工具白名单做跨通道/跨会话外发（社会工程学跳板）。
 _SOURCE_EXTERNAL: bool = False
 

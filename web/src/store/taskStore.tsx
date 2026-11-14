@@ -15,10 +15,12 @@ export interface DebugLog {
 
 export type MainView = "chat" | "cron";
 
-// 右侧栏（RightDock）页签：文件/产物 · 浏览器 · git 变更 · 记忆 · 终端 · Debug · 出站审批
-export type DockTab = "files" | "browser" | "git" | "memory" | "terminal" | "debug" | "outbox";
-// dock 窗口内页签视图：home=主页（入口列表），其余为功能视图
-export type DockView = "home" | DockTab;
+// 右侧栏内置页签；插件页面用 `plugin:<plugin>:<view>` 动态键，菜单项来自注入 API
+// （宿主前端不写任何平台名/插件名，新增插件不改这里）。
+export type DockTab = "files" | "browser" | "git" | "memory" | "terminal" | "debug";
+export type PluginDockView = `plugin:${string}`;
+// dock 窗口内页签视图：home=主页（入口列表），其余为内置功能视图或插件页面
+export type DockView = "home" | DockTab | PluginDockView;
 // 浏览器式页签（每页签记住自己停在哪个视图）
 export interface DockTabItem { id: string; view: DockView; }
 
@@ -107,7 +109,7 @@ interface TaskStoreValue {
   newDockTab: () => void; // + 新建页签（主页）
   closeDockTab: (id: string) => void;
   activateDockTab: (id: string) => void;
-  navigateDockTab: (view: DockTab) => void; // 当前页签跳到某功能视图
+  navigateDockTab: (view: Exclude<DockView, "home">) => void; // 当前页签跳到某功能视图（含插件页）
   setDockPreviewPath: (path: string) => void;
   // 文件页产物清单版本号：结果卡点击「查看所有产物」等入口触发文件页刷新
   artifactsVersion: number;
@@ -184,7 +186,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const esRef = useRef<EventSource | null>(null);
-  // 常驻旁路订阅（sub=ui）：只听跨进程的 tasks_changed（网关跑 QQ/飞书 会话时，
+  // 常驻旁路订阅（sub=ui）：只听跨进程的 tasks_changed（网关跑 IM 会话时，
   // 事件不在本进程，主订阅收不到）。
   const globalEsRef = useRef<EventSource | null>(null);
   const runningRef = useRef(false);
@@ -434,7 +436,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     const es = new EventSource(runtimeApi.streamUrl(tid || undefined));
     esRef.current = es;
 
-    // 跨进程事件桥（B0）：QQ / 飞书 会话由网关进程处理，事件不进本进程 outbox；
+    // 跨进程事件桥（B0）：IM 会话由网关进程处理，事件不进本进程 outbox；
     // 后端在每轮开始/结束时把 tasks_changed 推进全局 outbox，这里用旁路订阅常驻收听。
     // 只做「刷新任务列表 + 必要时重拉当前会话历史」，不伪装流式过程。
     if (!globalEsRef.current) {
@@ -897,7 +899,7 @@ export function TaskStoreProvider({ children }: { children: React.ReactNode }) {
     if (dockOpen && dockWin.tabs.length === 0) setDockOpen(false);
   }, [dockOpen, dockWin.tabs.length]);
   // 主页点入口：当前页签原地跳转到功能视图
-  const navigateDockTab = useCallback((view: DockTab) => {
+  const navigateDockTab = useCallback((view: Exclude<DockView, "home">) => {
     setDockWin((w) => ({ ...w, tabs: w.tabs.map((t) => (t.id === w.activeId ? { ...t, view } : t)) }));
   }, []);
   const bumpArtifactsVersion = useCallback(() => setArtifactsVersion((v) => v + 1), []);

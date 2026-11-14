@@ -13,7 +13,7 @@ import { SvgIcon } from "@mui/material";
 import type { SvgIconProps } from "@mui/material/SvgIcon";
 import type { LucideIcon } from "lucide-react";
 import {
-  ArrowLeft, AudioLines, Brain, Bug, Check, ChevronDown, ChevronRight, ChevronUp,
+  ArrowLeft, AudioLines, Blocks, Brain, Bug, Check, ChevronDown, ChevronRight, ChevronUp,
   Circle, CircleAlert, CircleCheck, CircleDot, CircleStop, Clock, Copy, Cpu, Download,
   EllipsisVertical, Eraser, ExternalLink, FaceSlightlySmiling, File, FileText, Folder,
   FolderOpen, Globe, GitCompareArrows, House, Image, Info, Mic, MicOff, Network, Palette,
@@ -56,6 +56,8 @@ export const ChevronUpIcon = lu(ChevronUp);
 export const ChevronRightIcon = lu(ChevronRight);
 export const ArrowLeftIcon = lu(ArrowLeft);
 export const RefreshCwIcon = lu(RefreshCw);
+// 插件注入项的统一图标：宿主不认识具体插件，图标名只做小词表映射，缺省就用它
+export const BlocksIcon = lu(Blocks);
 
 // —— 会话与运行 ——
 export const SendIcon = lu(Send);

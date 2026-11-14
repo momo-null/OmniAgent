@@ -45,11 +45,11 @@
 
 命令行（联调与土法审批，不依赖网关进程；配置读 channels/bilibili.yaml）::
 
-    python -m gateway.channels.bilibili --login        # TV 扫码登录（推荐）
-    python -m gateway.channels.bilibili --whoami      # 校验 cookie，打印 uid/uname
-    python -m gateway.channels.bilibili --poll-once   # 拉一次通知并打印归一结果（不派发）
-    python -m gateway.channels.bilibili --outbox      # 列 draft 模式的待发草稿
-    python -m gateway.channels.bilibili --approve N   # 批准发送第 N 条草稿（仍过配额/黑名单）
+    python -m plugins.bilibili.channel --login        # TV 扫码登录（推荐）
+    python -m plugins.bilibili.channel --whoami      # 校验 cookie，打印 uid/uname
+    python -m plugins.bilibili.channel --poll-once   # 拉一次通知并打印归一结果（不派发）
+    python -m plugins.bilibili.channel --outbox      # 列 draft 模式的待发草稿
+    python -m plugins.bilibili.channel --approve N   # 批准发送第 N 条草稿（仍过配额/黑名单）
 """
 from __future__ import annotations
 
@@ -840,7 +840,7 @@ class BilibiliAdapter:
         if not self._cookies():
             # 未登录：通道照常注册（ready()=False 让调度闸跳过 her job），但不轮询。
             # 发送侧 draft/live 会拿到明确的「未登录」报错而不是 API 的 -101。
-            logger.warning("bilibili 通道未登录：先运行 python -m gateway.channels.bilibili --login，"
+            logger.warning("bilibili 通道未登录：先运行 python -m plugins.bilibili.channel --login，"
                            "登录后重启网关开始轮询")
             return
         if not self.self_uid:

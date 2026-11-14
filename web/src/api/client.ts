@@ -264,6 +264,30 @@ export const workspaceApi = {
     http.post<TerminalResp>("/api/runtime/terminal", body, { timeout: 320000 }),
 };
 
+// ── 插件注入面（阶段 6）：菜单项来自 manifest，宿主前端零平台名 ─────
+export interface PluginView {
+  plugin: string;
+  id: string;
+  label: string;
+  icon: string;
+  slot: "dock" | "tab";
+  url: string;
+  enabled: boolean;
+}
+export interface SourceState {
+  name: string;
+  transport?: string | null;
+  state: string;      // connected / disabled / failed / starting …
+  probe: string;      // ready / not_ready / unknown / error
+  error?: string;
+  checked_at?: number;
+}
+export const pluginApi = {
+  ui: () => http.get<{ views: PluginView[] }>("/api/plugins/ui"),
+  sources: () =>
+    http.get<{ sources: SourceState[]; updated_at?: number; note?: string }>("/api/plugins/sources"),
+};
+
 // ── 定时任务（GET/PUT /api/cron/jobs；jobs.json 热加载） ───────────
 export const cronApi = {
   list: () => http.get("/api/cron/jobs"),

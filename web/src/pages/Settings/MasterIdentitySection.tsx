@@ -4,7 +4,7 @@ import { AddLink, LinkOff, Search } from "@mui/icons-material";
 import { Group, Hint, StatusLine } from "../../components/SettingsKit";
 import { identityApi } from "../../api/client";
 
-// 主人身份（认领）：Web 控制台恒为主人（零配置）；通道侧（QQ/飞书/…）的标识
+// 主人身份（认领）：Web 控制台恒为主人（零配置）；通道侧（IM 通道）的标识
 // 在这里「认领」——点「这是我」即把该说话人并入主人卡（回填历史 + 收编旧卡 +
 // 宽窗重建）。解除认领同界面。设计见 doc/plans/implemented/memory-architecture.md §2.4。
 export default function MasterIdentitySection() {
@@ -75,7 +75,7 @@ export default function MasterIdentitySection() {
   return (
     <Group
       title="主人身份"
-      desc="Web 控制台恒为主人（admin，零配置）。在通道上（QQ / 飞书 / …）跟她说过话的标识，在这里点「这是我」认领——历史会并入主人卡。"
+      desc="Web 控制台恒为主人（admin，零配置）。在 IM 通道上跟她说过话的标识，在这里点「这是我」认领——历史会并入主人卡。"
     >
       <StatusLine saved={saved} error={error} />
       <Stack spacing={1}>

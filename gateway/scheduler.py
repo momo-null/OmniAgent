@@ -31,7 +31,7 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "done_when": "",  # 空：finish验证器感知不到MCP副作用，完成判据由objective内工具返回自证（勿填"已落盘"类条件，agent会耗尽步数自证）
         "max_steps": 40,
         "project_id": "etf-analysis",
-        "notify_channel": "feishu",
+        "notify_channel": "",  # 空=不发通知；启用时填目标通道名
         "enabled": False,   # 出厂默认关闭：jobs.json 是运行真源，装好后在 Web 定时任务页按需启用
         "miss_grace_minutes": 60,
         "note": "P0 三段之一；启用前确认 mcp.json 已注册 etf-analysis",
@@ -44,7 +44,7 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "done_when": "",  # 空：finish验证器感知不到MCP副作用，完成判据由objective内工具返回自证（勿填"已落盘"类条件，agent会耗尽步数自证）
         "max_steps": 30,
         "project_id": "etf-analysis",
-        "notify_channel": "feishu",
+        "notify_channel": "",  # 空=不发通知；启用时填目标通道名
         "enabled": False,
         "miss_grace_minutes": 45,
         "note": "",
@@ -57,7 +57,7 @@ DEFAULT_JOBS: List[Dict[str, Any]] = [
         "done_when": "",  # 空：finish验证器感知不到MCP副作用，完成判据由objective内工具返回自证（勿填"已落盘"类条件，agent会耗尽步数自证）
         "max_steps": 40,
         "project_id": "etf-analysis",
-        "notify_channel": "feishu",
+        "notify_channel": "",  # 空=不发通知；启用时填目标通道名
         "enabled": False,
         "miss_grace_minutes": 120,
         "note": "",
@@ -296,7 +296,7 @@ class Scheduler:
     def _fire(self, job: Dict[str, Any], fire_key: str, source: str) -> None:
         reason = _channel_gate(job)
         if reason:
-            # 通道就绪闸（机械侧）：目标通道自声明未就绪（如 bilibili 未登录）→
+            # 通道就绪闸（机械侧）：目标通道自声明未就绪（如某通道未登录）→
             # 本次不触发人设扮演；fire_key 照常记账防同一分钟重复判断。
             print(f"[scheduler] 跳过 {job.get('name', job['id'])}（{source}）：{reason}")
             try:
@@ -332,7 +332,7 @@ def _channel_gate(job: Dict[str, Any]) -> Optional[str]:
     跳过原因；否则 None 放行。
 
     - 判定走 duck-typing 的可选 ``ready()``（通道协议不变，base.py 零改动）：
-      bilibili 用它表达「未登录」（未登录时不派发该 job）；
+      通道用它表达「未登录」（未登录时不派发该 job）；
       其他通道没实现 ready() 一律放行（既有 cron 行为不变，不新增惊喜）。
     - 通道未注册（未启用/启动失败）也放行：配置问题让发送阶段显式报错，不在调度层猜。
     """

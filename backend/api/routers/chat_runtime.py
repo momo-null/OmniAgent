@@ -312,7 +312,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # M1（F-4）：Web 直连是「与主人对话」——进料道
         # 标 chat，context_signal 据此构造 <current-context>（与 QQ 通道同一套结构）。
         try:
-            from gateway.channels import context as _gwctx
+            from gateway.events import registry as _gwctx
             from omni_core.local.loop import context_signal as _cs
             from omni_core.local.task_store import TaskStore as _TS
             _sid = str((_TS.get(task_id) or {}).get("session_id") or "")
@@ -427,7 +427,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             rec.force_interrupted = False
         # M1：清掉本轮进料道标注（进程级单值，防残留串进下一轮）
         try:
-            from gateway.channels import context as _gwctx
+            from gateway.events import registry as _gwctx
             from omni_core.local.loop import context_signal as _cs
             _gwctx.set_source_kind("")
             _cs.set_boundary()

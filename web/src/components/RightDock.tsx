@@ -13,6 +13,7 @@ import {
   Typography,
 } from "@mui/material";
 import {
+  BlocksIcon,
   BrainIcon,
   BugIcon,
   ChevronDownIcon,
@@ -34,11 +35,11 @@ import FilesTab from "./dock/FilesTab.tsx";
 import BrowserTab from "./dock/BrowserTab.tsx";
 import GitTab from "./dock/GitTab.tsx";
 import TerminalTab from "./dock/TerminalTab.tsx";
-import OutboxTab from "./dock/OutboxTab.tsx";
+import PluginFrame from "./dock/PluginFrame.tsx";
 import DebugPanel from "./DebugPanel.tsx";
 import MemoryPanel from "./debug/MemoryPanel.tsx";
-import { useTaskStore, type DockTab, type DockView } from "../store/taskStore.tsx";
-import { workspaceApi } from "../api/client.ts";
+import { useTaskStore, type DockView } from "../store/taskStore.tsx";
+import { pluginApi, workspaceApi, type PluginView, type SourceState } from "../api/client.ts";
 import { fmtBytes } from "./dock/FilesTab.tsx";
 import type { ArtifactInfo } from "../types";
 
@@ -76,7 +77,8 @@ function saveWidth(w: number): void {
 
 const IMAGE_ART_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".svg"]);
 
-// 各视图定义（页签标题 + 主页入口；home 只作页签标题，不再列进主页入口）
+// 内置视图定义（页签标题 + 主页入口；home 只作页签标题，不再列进主页入口）。
+// 插件页面不在这里：它们由 GET /plugins/ui 注入，键 = `plugin:<plugin>:<view>`。
 const VIEWS: { key: DockView; label: string; icon: React.ReactNode }[] = [
   { key: "home", label: "主页", icon: <HouseIcon fontSize="small" /> },
   { key: "files", label: "查看产物", icon: <FolderIcon fontSize="small" /> },
@@ -85,11 +87,68 @@ const VIEWS: { key: DockView; label: string; icon: React.ReactNode }[] = [
   { key: "memory", label: "记忆", icon: <BrainIcon fontSize="small" /> },
   { key: "terminal", label: "打开终端", icon: <TerminalIcon fontSize="small" /> },
   { key: "debug", label: "Debug", icon: <BugIcon fontSize="small" /> },
-  { key: "outbox", label: "出站审批", icon: <ImageIcon fontSize="small" /> },
 ];
 
-function viewMeta(view: DockView) {
-  return VIEWS.find((v) => v.key === view) ?? VIEWS[0];
+const PLUGIN_KEY_PREFIX = "plugin:";
+
+// 图标名 → 字形的小词表；宿主不认识具体插件，缺省一律方块图标。
+const PLUGIN_ICONS: Record<string, React.ReactNode> = {
+  blocks: <BlocksIcon fontSize="small" />,
+  image: <ImageIcon fontSize="small" />,
+  file: <FileIcon fontSize="small" />,
+  terminal: <TerminalIcon fontSize="small" />,
+  brain: <BrainIcon fontSize="small" />,
+  globe: <GlobeIcon fontSize="small" />,
+};
+
+function pluginViewKey(v: PluginView): DockView {
+  return `${PLUGIN_KEY_PREFIX}${v.plugin}:${v.id}` as DockView;
+}
+
+function parsePluginView(view: DockView): { plugin: string; id: string } | null {
+  if (!view.startsWith(PLUGIN_KEY_PREFIX)) return null;
+  const rest = view.slice(PLUGIN_KEY_PREFIX.length);
+  const i = rest.indexOf(":");
+  if (i <= 0) return null;
+  return { plugin: rest.slice(0, i), id: rest.slice(i + 1) };
+}
+
+function viewMeta(view: DockView, plugins: PluginView[] = []) {
+  const builtin = VIEWS.find((v) => v.key === view);
+  if (builtin) return builtin;
+  const pv = plugins.find((v) => pluginViewKey(v) === view);
+  if (pv) {
+    return { key: view, label: pv.label, icon: PLUGIN_ICONS[pv.icon] ?? <BlocksIcon fontSize="small" /> };
+  }
+  const parsed = parsePluginView(view);
+  return { key: view, label: parsed ? parsed.plugin : String(view), icon: <BlocksIcon fontSize="small" /> };
+}
+
+// 注入的插件视图 + 事件源状态（30s 轮询 + 窗口聚焦时刷新；读不到就空表，不猜）
+function usePluginViews() {
+  const [views, setViews] = useState<PluginView[]>([]);
+  const [sources, setSources] = useState<Record<string, SourceState>>({});
+  const [note, setNote] = useState("");
+  const load = useCallback(() => {
+    pluginApi.ui()
+      .then((r) => setViews((r.data?.views || []).filter((v) => v.slot === "dock" && v.enabled)))
+      .catch(() => setViews([]));
+    pluginApi.sources()
+      .then((r) => {
+        const map: Record<string, SourceState> = {};
+        (r.data?.sources || []).forEach((s) => { map[s.name] = s; });
+        setSources(map);
+        setNote(r.data?.note || "");
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 30000);
+    window.addEventListener("focus", load);
+    return () => { clearInterval(t); window.removeEventListener("focus", load); };
+  }, [load]);
+  return { views, sources, note };
 }
 
 function artifactIcon(name: string) {
@@ -120,7 +179,9 @@ function useArtifacts() {
 }
 
 // ── 主页：入口顶部对齐，产物清单常驻底部 ────────────────────────────────
-function HomeView({ onNavigate }: { onNavigate: (view: DockTab) => void }) {
+function HomeView({ onNavigate, pluginViews, sources, note }:
+  { onNavigate: (view: Exclude<DockView, "home">) => void;
+    pluginViews: PluginView[]; sources: Record<string, SourceState>; note: string }) {
   const { arts, running, hasTask } = useArtifacts();
   const { openDock } = useTaskStore();
   const [listOpen, setListOpen] = useState(true);
@@ -129,20 +190,40 @@ function HomeView({ onNavigate }: { onNavigate: (view: DockTab) => void }) {
     cursor: "pointer", mx: 0.5, borderRadius: 1, color: "text.primary",
     "&:hover": { bgcolor: "action.hover", "& .dock-go": { opacity: 1 } },
   } as const;
+  const entries = [
+    ...VIEWS.filter((v) => v.key !== "home"),
+    ...pluginViews.map((v) => ({
+      key: pluginViewKey(v), label: v.label, icon: PLUGIN_ICONS[v.icon] ?? <BlocksIcon fontSize="small" />,
+      plugin: v.plugin,
+    })),
+  ];
   return (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column", py: 1 }}>
       <Typography variant="caption" sx={{ px: 2, pt: 0.5, pb: 0.5, color: "text.secondary", fontWeight: 500 }}>
         打开
       </Typography>
-      {VIEWS.filter((v) => v.key !== "home").map((t) => (
-        <Box key={t.key} role="button" tabIndex={0} onClick={() => onNavigate(t.key as DockTab)}
-             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNavigate(t.key as DockTab); } }}
-             sx={entrySx} title={t.label}>
-          {t.icon}
-          <Typography variant="body2" sx={{ fontSize: 13.5, flex: 1, minWidth: 0 }}>{t.label}</Typography>
-          <ChevronRightIcon className="dock-go" sx={{ fontSize: 16, color: "text.disabled", opacity: 0 }} />
-        </Box>
-      ))}
+      {entries.map((t) => {
+        const src = "plugin" in t ? sources[t.plugin] : undefined;
+        return (
+          <Box key={t.key} role="button" tabIndex={0} onClick={() => onNavigate(t.key as Exclude<DockView, "home">)}
+               onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNavigate(t.key as Exclude<DockView, "home">); } }}
+               sx={entrySx} title={t.label}>
+            {t.icon}
+            <Typography variant="body2" sx={{ fontSize: 13.5, flex: 1, minWidth: 0 }}>{t.label}</Typography>
+            {"plugin" in t && (
+              <Tooltip title={src ? `${src.state}${src.error ? `：${src.error}` : ""}` : (note || "网关未运行")} placement="left">
+                <Box sx={{
+                  width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                  bgcolor: !src ? "text.disabled" : src.state === "connected"
+                    ? (src.probe === "ready" || src.probe === "unknown" ? "success.main" : "warning.main")
+                    : src.state === "starting" ? "warning.main" : "error.main",
+                }} />
+              </Tooltip>
+            )}
+            <ChevronRightIcon className="dock-go" sx={{ fontSize: 16, color: "text.disabled", opacity: 0 }} />
+          </Box>
+        );
+      })}
       {/* 产物清单：贴住底部，面板拉高时不再把入口顶到中间 */}
       <Box
         role="button" tabIndex={0}
@@ -196,21 +277,30 @@ function HomeView({ onNavigate }: { onNavigate: (view: DockTab) => void }) {
   );
 }
 
-function DockBody({ view }: { view: DockTab }) {
+function DockBody({ view, pluginViews, sources, note }:
+  { view: DockView; pluginViews: PluginView[]; sources: Record<string, SourceState>; note: string }) {
   const { debugLogs, clearDebugLogs } = useTaskStore();
+  const parsed = parsePluginView(view);
+  if (parsed) {
+    const meta = viewMeta(view, pluginViews);
+    const pv = pluginViews.find((v) => pluginViewKey(v) === view);
+    return (
+      <PluginFrame label={meta.label} url={pv?.url || ""} source={sources[parsed.plugin]} note={note} />
+    );
+  }
   switch (view) {
     case "files": return <FilesTab />;
     case "browser": return <BrowserTab />;
     case "git": return <GitTab />;
     case "memory": return <MemoryPanel />;
     case "terminal": return <TerminalTab />;
-    case "outbox": return <OutboxTab />;
     case "debug":
     default: return <DebugPanel logs={debugLogs} onClear={clearDebugLogs} />;
   }
 }
 
 export default function RightDock() {
+  const plugins = usePluginViews();
   const {
     dockOpen, dockTabs, dockActiveId,
     closeDock, newDockTab, closeDockTab, activateDockTab, navigateDockTab,
@@ -307,7 +397,7 @@ export default function RightDock() {
             sx={{ px: 0.5, flexShrink: 0, minHeight: 36, borderBottom: "1px solid", borderColor: "divider" }}
           >
             {dockTabs.map((t) => {
-              const meta = viewMeta(t.view);
+              const meta = viewMeta(t.view, plugins.views);
               const isActive = t.id === dockActiveId;
               return (
                 <Stack
@@ -380,9 +470,11 @@ export default function RightDock() {
           {/* 内容区：主页 = 入口 list；其余视图渲染对应功能面板 */}
           <Box sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
             {!active || active.view === "home" ? (
-              <HomeView onNavigate={navigateDockTab} />
+              <HomeView onNavigate={navigateDockTab} pluginViews={plugins.views}
+                        sources={plugins.sources} note={plugins.note} />
             ) : (
-              <DockBody view={active.view} />
+              <DockBody view={active.view} pluginViews={plugins.views}
+                        sources={plugins.sources} note={plugins.note} />
             )}
           </Box>
         </Box>

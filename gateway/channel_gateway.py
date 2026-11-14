@@ -2,8 +2,8 @@
 
 用法（OmniAgent 仓库根）：
     python -m gateway.channel_gateway                # 全量（声明了 events 的插件）
-    python -m gateway.channel_gateway --no-channels  # 只跑调度器（无飞书时先跑 cron）
-    python -m gateway.channel_gateway --no-scheduler # 只跑通道（调飞书连通性）
+    python -m gateway.channel_gateway --no-channels  # 只跑调度器（不连任何通道时先跑 cron）
+    python -m gateway.channel_gateway --no-scheduler # 只跑通道（检查通道连通性）
 
 云端部署：systemd/任务计划程序托管本入口；本地调试直接跑。
 配置：``~/.omniagent/plugins/<name>.yaml``（每插件一文件，阶段 4 起为主源；
@@ -92,7 +92,7 @@ def build_adapter(name: str):
     网关进程里有实例。在 Web 后端进程里让 agent 主动发消息时，注册表是空的 → 工具返回
     "无可用通道"，模型只能绕去 shell 调 OneBot HTTP（实测发生过：绕了 9 步）。
 
-    这里只构造「会发消息」的句柄：napcat 的发送走 HTTP，不依赖 WS 长连接，所以
+    这里只构造「会发消息」的句柄：QQ 这类 explicit 通道的发送走 HTTP，不依赖 WS 长连接，所以
     **不 connect** 也能正常发；返回 None 表示插件不存在 / 能力层关闭 / 构造失败
     （fail-closed，门限口径与网关一致：``plugin.yaml`` > ``manifest.enabled``）。
     """
@@ -213,14 +213,14 @@ def _on_message(msg) -> None:
                     # 只该喂模型，不该进侧栏标题与会话气泡）
                     title=str(getattr(msg, "title", "") or ""),
                     display_text=str(getattr(msg, "display_text", "") or "") or msg.text,
-                    # 回发模式由通道自声明（QQ=explicit 显式发送；飞书/企微=auto 直连）
+                    # 回发模式由通道自声明（QQ=explicit 显式发送；IM 直连=auto）
                     reply_mode=str(getattr(msg, "reply_mode", "auto") or "auto"),
                     # 触发来源（named / wave）：named 轮才启用「该发没发」兜底代发
                     origin=str(getattr(msg, "origin", "named") or "named"),
                     tools_enabled=bool(getattr(msg, "allow_tools", False)),
                     # 多模态附件只作用于当轮（会话记录仍写文本投影，不落 base64）
                     attachments=list(getattr(msg, "attachments", None) or []),
-                    # 入站是语音：仅 auto 通道（Web/飞书直连）据此自动语音回发；
+                    # 入站是语音：仅 auto 通道（Web/IM 直连）据此自动语音回发；
                     # explicit 通道（QQ 等）不自动回发，发不发语音由模型调 msg_send_voice 决定。
                     voice_reply=bool(getattr(msg, "voice", False)))
 

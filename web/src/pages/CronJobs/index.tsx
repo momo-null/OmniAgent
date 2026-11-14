@@ -45,7 +45,7 @@ interface RunRec {
 
 const EMPTY_FORM: CronJob = {
   id: "", name: "", cron: "0 9 * * 1-5", objective: "", done_when: "",
-  max_steps: 40, project_id: "default", notify_channel: "feishu", enabled: false,
+  max_steps: 40, project_id: "default", notify_channel: "", enabled: false,
   miss_grace_minutes: 60, note: "",
 };
 
@@ -282,12 +282,9 @@ export default function CronJobs() {
               onChange={e => setEditing({ ...editing, project_id: e.target.value })}>
               {projects.map(p => <MenuItem key={p} value={p}>{p}</MenuItem>)}
             </TextField>
-            <TextField size="small" select label="结果通知通道" value={editing.notify_channel ?? ""}
-              onChange={e => setEditing({ ...editing, notify_channel: e.target.value })}>
-              <MenuItem value="">不推送</MenuItem>
-              <MenuItem value="feishu">feishu</MenuItem>
-              <MenuItem value="wecom">wecom（P1）</MenuItem>
-            </TextField>
+            <TextField size="small" label="结果通知通道（留空=不推送）" value={editing.notify_channel ?? ""}
+              placeholder="填插件名，如某通道插件"
+              onChange={e => setEditing({ ...editing, notify_channel: e.target.value })} />
             <TextField size="small" type="number" label="max_steps" value={editing.max_steps ?? 40}
               onChange={e => setEditing({ ...editing, max_steps: Number(e.target.value) || 40 })} />
             <TextField size="small" type="number" label="错过补偿窗口（分钟）" value={editing.miss_grace_minutes ?? 60}

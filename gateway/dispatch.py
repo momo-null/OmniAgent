@@ -280,7 +280,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         title = str(item.get("title") or "")
         # 回发模式（通道自声明，见 InboundMessage.reply_mode）：
         # - explicit（QQ 等 IM）：不自动发最终回答，只有模型调 msg_send_text 才发出；
-        # - auto（Web/飞书这类"直接对模型说话"）：最终回答自动回发（原行为）。
+        # - auto（Web/IM 这类"直接对模型说话"）：最终回答自动回发（原行为）。
         explicit = str(item.get("reply_mode") or "auto").strip().lower() == "explicit"
         # P2 L0 检索索引（brain.db.l0_messages）用的两个参数：
         # - context_key：通用场合键；IM 传 ``group:123`` / ``private:100``，
@@ -474,7 +474,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         # 当前任务回发句柄（线程绑定）→ msg_send_* 工具缺省发回来源会话。
         # 语音不再走隐式改写：发不发语音由模型调 msg_send_voice 决定。
         # 外部可达通道（tools_enabled=False）额外打标：发送工具只准回来源会话，
-        # 防止"群友让它往飞书/别的 QQ 发消息"这种绕过工具白名单的跨通道外发。
+        # 防止"群友让它往别的通道/别的 QQ 发消息"这种绕过工具白名单的跨通道外发。
         context.set_current_reply(reply)
         # 只有「他人发起的消息」才算外部来源；cron（reply=None）不是外部输入，
         # 不该被锁掉它主动发消息的能力。
@@ -603,7 +603,7 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
             _send(f"{'✅' if ok else '⚠️'} [{item.get('source', 'task')} {real_task_id[:8]}]\n"
                   f"{_body or '(这一轮没有产出内容)'}")
         elif not explicit and _body:
-            # 直连通道（Web / 飞书这类"直接对模型说话"）：最终回答自动回发（原行为）。
+            # 直连通道（Web / IM 这类"直接对模型说话"）：最终回答自动回发（原行为）。
             # 没有可外发文本就静默——绝不拿内部判定/占位语凑一句发给真人。
             _send_voice_reply(reply, _body, bool(item.get("voice_reply")))
         # explicit（QQ 等 IM）：不代发——模型已经自己调 msg_send_text 说话；

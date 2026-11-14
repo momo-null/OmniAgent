@@ -42,7 +42,7 @@ cd web && npm install && cd ..
 
 ### 2. 让它替你在 QQ 上说话
 
-**一通道一文件**：`~/.omniagent/channels/<name>.yaml`（主配置里的 `channels:` 段已不再读取），聊天路由表是同目录的 `routes.yaml`。
+**一插件一文件**：`~/.omniagent/plugins/<name>.yaml`（通道就是声明了 events 的插件，连接参数与工具/事件共用同一份配置）；聊天路由表是 `~/.omniagent/channels/routes.yaml`。
 
 1. 装 [NapCat](https://github.com/NapNeko/NapCatQQ)，开启 HTTP（默认 `:3000`）与 WebSocket 服务（默认 `:3001`）；
 2. 抄 `examples/channels/napcat.yaml` 建 `~/.omniagent/channels/napcat.yaml`：`enabled` / `http_url` / `ws_url` / `token`，群聊闸门 `reply_groups` / `allow_groups` / `require_at`，私聊白名单 `allow_users`；
@@ -94,7 +94,7 @@ copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
 | 技能库 | 手写技能按需加载，项目级 / 全局两级，可一键提升为全局 | 开箱 |
 | 模型自由 | 云端 API + 本地 llama.cpp；`models.json` 多槽位目录，子 agent 可用不同（含本地快模型） | 开箱 |
 | 纪律文件 | 三层 `AGENTS.md`（全局 / 项目 / 任务）注入 system prompt；全局那份由 `GET/PUT /api/runtime/instructions` 读写，改动自下一次运行生效 | 开箱 |
-| 扩展 | MCP server、插件（`plugins/`）、新 IM 通道（`gateway/channels/`） | 开箱 |
+| 扩展 | MCP server、插件（`plugins/`，新 IM 通道也是一份插件目录） | 开箱 |
 | 安全 | 敏感工具可要求人工审批（Web 弹窗，含审计日志）；外部通道默认无工具；每任务「完全访问」开关 | 开箱 |
 
 ## 快速开始
@@ -141,7 +141,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 |---|---|---|
 | `~/.omniagent/models.json` | **模型端点唯一真源**：provider 目录 + `defaults` 槽位（本地 GGUF、上下文、端口、视觉侧注） | 大脑 / 网关派发 / 记忆链路 |
 | `~/.omniagent/config.yaml` | `brain`（推理模式、长任务参数）、`runtime`（派发、历史窗口等）、`security`（审批策略） | core |
-| `~/.omniagent/channels/<name>.yaml` | 通道连接与闸门（NapCat 地址 / token、群 @ 规则、`group_presence`）；`routes.yaml` 是聊天路由表 | 网关 |
+| `~/.omniagent/plugins/<name>.yaml` | 插件/通道配置（连接地址、token、闸门、`group_presence` 都在这里，一插件一文件）；`channels/routes.yaml` 是聊天路由表 | 网关 |
 | `~/.omniagent/plugins/<name>.yaml` | 插件调用端配置（`enabled`、语音 `base_url` 等） | 插件 |
 | `~/.omniagent/voice_service.yaml` | 语音引擎服务：端口 / token / 空闲回收 / 模型路径 / 音色 / 唱歌闸门 | 语音引擎服务 |
 | `~/.omniagent/mcp.json` | MCP server 清单（stdio / streamable HTTP） | 工具运行时 |
@@ -296,7 +296,7 @@ Prefer fewer windows? Use the desktop app (see [Quick Start](#quick-start)).
 
 ### 2. Speak for you on QQ
 
-**One file per channel**: `~/.omniagent/channels/<name>.yaml` (the main config's `channels:` section is no longer read); the routing table is `routes.yaml` in the same directory.
+**One file per plugin**: `~/.omniagent/plugins/<name>.yaml` (a channel is just a plugin declaring `events`; connection params live in the same file as tools/events); the routing table is `~/.omniagent/channels/routes.yaml`.
 
 1. Install [NapCat](https://github.com/NapNeko/NapCatQQ) with HTTP (`:3000`) and WebSocket (`:3001`) enabled;
 2. Copy `examples/channels/napcat.yaml` to `~/.omniagent/channels/napcat.yaml`: `enabled` / `http_url` / `ws_url` / `token`, group gates `reply_groups` / `allow_groups` / `require_at`, private allow-list `allow_users`;
@@ -348,7 +348,7 @@ copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
 | Skills | Hand-written skills loaded on demand, project & global tiers, promote to global | On |
 | Model freedom | Cloud APIs + local llama.cpp; multi-slot `models.json`; per-sub-agent models | On |
 | Instruction files | Three-tier `AGENTS.md` (global / project / task) injected into the system prompt; the global one is read and written via `GET/PUT /api/runtime/instructions`, effective from the next run | On |
-| Extensibility | MCP servers, plugins (`plugins/`), new IM channel (`gateway/channels/`) | On |
+| Extensibility | MCP servers, plugins (`plugins/`; a new IM channel is just another plugin dir) | On |
 | Safety | Approval prompts for sensitive tools (with audit log), tool-less external channels, per-task full-access toggle | On |
 
 ## Quick Start
@@ -395,7 +395,7 @@ Or run `pack_desktop.bat` from the repo root (builds `web/dist` first). The shel
 |---|---|---|
 | `~/.omniagent/models.json` | **Single source of truth for model endpoints**: provider catalog + `defaults` slots (local GGUF, context, port, vision sidecar) | brain / gateway dispatch / memory |
 | `~/.omniagent/config.yaml` | `brain` (reasoning mode, long-task params), `runtime` (dispatch, history windows), `security` (approval policy) | core |
-| `~/.omniagent/channels/<name>.yaml` | Channel connection & gates (NapCat addr / token, @ rules, `group_presence`); `routes.yaml` is the routing table | gateway |
+| `~/.omniagent/plugins/<name>.yaml` | Plugin/channel config (addr, token, gates, `group_presence` — one file per plugin); `channels/routes.yaml` is the routing table | gateway |
 | `~/.omniagent/plugins/<name>.yaml` | Plugin client config (`enabled`, voice `base_url`, …) | plugins |
 | `~/.omniagent/voice_service.yaml` | Voice engine service: port / token / idle reaping / model paths / timbre / singing gate | voice service |
 | `~/.omniagent/mcp.json` | MCP server list (stdio / streamable HTTP) | tool runtime |

@@ -1,11 +1,11 @@
 """聊天路由：``channels/routes.yaml`` → (project_id, session_id)。
 
 为什么单独成模块：路由解析有两个消费方——网关派发（``channel_gateway``）与**通道自身**
-（如 napcat 要按会话所属项目去取最近的日记/场景块来拼场合自述）。规则只能有一份，
+（如某通道要按会话所属项目去取最近的日记/场景块来拼场合自述）。规则只能有一份，
 否则两边一旦不一致，就会出现「记忆按 A 项目写、自述按 B 项目读」的错配。
 
 规则（两级匹配，精确优先）：
-- ``"<channel>:<chat_id>"``（如 ``napcat:group:123``）→ 单个会话；
+- ``"<channel>:<chat_id>"``（如 ``qq:group:123``）→ 单个会话；
 - ``"<channel>:*"`` → 整条通道。
 命不中 → 空 project（由调用方决定退化为 ``default`` 或临时任务）。
 
@@ -51,7 +51,7 @@ def resolve(channel: str, chat_id: str) -> Tuple[str, str]:
         rule = {}
     project_id = str(rule.get("project_id") or "")
     h = hashlib.md5(key.encode("utf-8")).hexdigest()[:12]
-    prefix = "s_feishu_" if channel == "feishu" else f"s_{channel}_"
+    prefix = f"s_{channel}_"
     session_id = str(rule.get("session_id") or "") or f"{prefix}{h}"
     return project_id, session_id
 

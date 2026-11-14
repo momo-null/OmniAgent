@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>出站审批</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px 16px 32px;
+    font: 13px/1.55 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+    color: #1d1d1f; background: #fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { color: #e8e8ea; background: #1c1c1e; }
+    .card { border-color: #3a3a3c; }
+    .chip { border-color: #48484a; }
+    button.ghost { color: #e8e8ea; border-color: #48484a; }
+  }
+  header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  h1 { font-size: 14px; font-weight: 600; margin: 0; }
+  .chip { font-size: 11px; border: 1px solid #d0d0d4; border-radius: 999px; padding: 1px 8px; opacity: .85; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; border-radius: 6px; border: 1px solid transparent; padding: 4px 10px;
+    cursor: pointer; background: #0a84ff; color: #fff;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; color: #1d1d1f; border-color: #d0d0d4; }
+  button.danger { background: transparent; color: #d70015; border-color: #f0c0c4; }
+  .card { border: 1px solid #e3e3e6; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+  .meta { display: flex; gap: 8px; align-items: center; font-size: 11px; opacity: .7; margin-bottom: 6px; }
+  .text { white-space: pre-wrap; margin: 0 0 8px; }
+  .row { display: flex; gap: 8px; }
+  .empty, .err { font-size: 12px; opacity: .7; }
+  .err { color: #d70015; }
+  .hist { display: flex; gap: 8px; font-size: 11.5px; opacity: .7; margin: 2px 0; }
+  .hist .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>B站出站审批</h1>
+  <span id="state" class="chip">…</span>
+  <span id="quota" class="chip"></span>
+  <span class="spacer"></span>
+  <button class="ghost" id="refresh" type="button">刷新</button>
+</header>
+<div id="err" class="err" hidden></div>
+<div id="pending"></div>
+<div id="history"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const STATUS = { pending: "待批", sent: "已发", discarded: "已作废" };
+let busy = false;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+async function call(path, opts) {
+  const r = await fetch(path, opts);
+  let body = {};
+  try { body = await r.json(); } catch (e) { /* 非 JSON：下面统一报状态码 */ }
+  if (!r.ok) throw new Error(body.error || ("HTTP " + r.status));
+  return body;
+}
+
+async function act(no, action) {
+  if (busy) return;
+  busy = true;
+  try {
+    await call(`/api/outbox/${no}/${action}`, { method: "POST" });
+    await load();
+  } catch (e) {
+    showErr(String(e.message || e));
+  } finally {
+    busy = false;
+  }
+}
+
+function showErr(msg) {
+  const box = $("err");
+  box.hidden = !msg;
+  box.textContent = msg || "";
+}
+
+function renderCard(i) {
+  const card = el("div", "card");
+  const meta = el("div", "meta");
+  meta.append(el("span", "chip", STATUS[i.status] || i.status));
+  const kind = i.kind === "dynamic" ? "动态" : i.kind === "comment" ? "评论" : i.kind;
+  meta.append(el("span", null, `#${i.no} · ${kind} · ${i.chat_id || ""}`));
+  card.append(meta);
+  card.append(el("p", "text", i.text || ""));
+  const row = el("div", "row");
+  const ok = el("button", null, "批准发送");
+  ok.type = "button";
+  ok.disabled = busy;
+  ok.onclick = () => act(i.no, "approve");
+  const no = el("button", "danger", "作废");
+  no.type = "button";
+  no.disabled = busy;
+  no.onclick = () => act(i.no, "discard");
+  row.append(ok, no);
+  card.append(row);
+  return card;
+}
+
+async function load() {
+  try {
+    showErr("");
+    const r = await call("/api/outbox");
+    const items = r.items || [];
+    $("state").textContent = r.ready ? `已登录 · ${r.mode || ""}` : "未登录";
+    $("quota").textContent = `今日 ${(r.state || {}).comment ?? 0}/${(r.quotas || {}).comment ?? 0} 评 · ` +
+      `${(r.state || {}).dynamic ?? 0}/${(r.quotas || {}).dynamic ?? 0} 动`;
+    const pending = items.filter((i) => i.status === "pending");
+    const done = items.filter((i) => i.status !== "pending").slice(0, 20);
+    const box = $("pending");
+    box.replaceChildren();
+    if (!pending.length) box.append(el("div", "empty", "待发队列为空——助手产出的内容会先进这里等你批准。"));
+    pending.forEach((i) => box.append(renderCard(i)));
+    const hist = $("history");
+    hist.replaceChildren();
+    if (done.length) hist.append(el("div", "empty", "历史（已发/已作废）"));
+    done.forEach((i) => {
+      const row = el("div", "hist");
+      row.append(el("span", "chip", STATUS[i.status] || i.status));
+      row.append(el("span", "t", `#${i.no} ${i.text || ""}`));
+      hist.append(row);
+    });
+  } catch (e) {
+    showErr(String(e.message || e));
+    $("state").textContent = "后端不可达";
+  }
+}
+
+$("refresh").onclick = () => load();
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>

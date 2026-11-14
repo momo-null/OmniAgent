@@ -15,6 +15,15 @@
     "autostart": true,
     "health": {
       "probe": "ready"
+    },
+    "spawn": {
+      "args": [
+        "-m",
+        "plugins.bilibili.page_server"
+      ],
+      "cwd": "{repo}",
+      "port": 18751,
+      "health": "/healthz"
     }
   },
   "requires": {
@@ -24,5 +33,14 @@
       "config",
       "log"
     ]
-  }
+  },
+  "ui": [
+    {
+      "id": "outbox",
+      "label": "出站审批",
+      "icon": "blocks",
+      "slot": "dock",
+      "url": "http://127.0.0.1:18751/"
+    }
+  ]
 }
