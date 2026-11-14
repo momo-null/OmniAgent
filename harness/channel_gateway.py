@@ -276,6 +276,15 @@ def main() -> int:
     lifecycle.start_health_loop()
 
     n = 0 if no_channels else start_channels()
+    if no_channels:
+        # 不连通道也要落状态：否则 Web 端读不到快照，会把「网关在跑、只是没连通道」
+        # 误报成「网关未运行」，插件页也跟着被挡住。
+        from .events import discover
+
+        for name in discover.events_units():
+            meta = discover.manifests().get(name) or {}
+            lifecycle.mark_disabled(name, "以 --no-channels 启动（未连接事件源）", meta)
+        lifecycle.write_snapshot()
     if not no_channels and n == 0:
         print("[harness] ⚠ 无任何通道连接（检查 ~/.omniagent/channels/ 下的通道配置）")
 

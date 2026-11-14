@@ -49,13 +49,12 @@ export default function PluginFrame({
   }, [url]);
   const text = statusText(source, note);
   const color = STATE_COLOR[source?.state || "stopped"] || "text.secondary";
-  // 没有快照 = 网关没跑过，插件服务也不会被拉起；不给空白 iframe
-  const blocked = !url || !source || source.state !== "connected";
+  // 页面归插件服务，不归事件源状态：只要网关落过快照（说明宿主在跑）就渲染，
+  // 通道没连/未登录由状态文字如实展示，不能拿它当「页面不可用」。
+  const blocked = !url || !source;
   const reason = !url
     ? "该插件未在 manifest 里声明页面地址（ui.url）。"
-    : !source
-      ? "网关未运行，读不到事件源状态；启动网关后插件页会自动出现。"
-      : `插件服务${text}，页面暂不可用。${source.error ? "" : "启动网关后会自动拉起该服务。"}`;
+    : "网关未运行，读不到事件源状态；启动网关后插件页会自动出现。";
 
   return (
     <Box sx={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
