@@ -1,9 +1,10 @@
 """B站只读采集插件。
 
-- **零写操作**：全部工具只读。平台写路径单点收口在 gateway/channels/bilibili.py
+- **零写操作**：全部工具只读。平台写路径单点收口在 ``plugins/bilibili/channel.py``
   （四道闸），本插件永不注册任何发送/点赞/关注类工具——写纪律不靠自觉靠结构。
-- 数据源复用通道适配器的 HTTP 客户端与 WBI 签名（cookie 来自 bilibili 通道配置，
-  未登录也能用其中免凭证的读接口；未启用通道时工具返回明确错误）。
+- 数据源复用本插件自己的通道只读客户端（HTTP 客户端 + WBI 签名；cookie 来自本插件
+  配置，未登录也能用其中免凭证的读接口；未配置时工具返回明确错误）。不 import 宿主
+  （``gateway/``）内部模块：插件只依赖自己目录内的实现 + 宿主公开能力。
 - 用途约定（写进 bilibili AGENTS.md）：觉醒时先 bili_hot / bili_search 找热点 →
   bili_video_info + bili_video_comments 先读再评；复盘时 bili_self_dynamics 看自己内容数据。
 
@@ -23,19 +24,36 @@ from utils import get_logger
 
 logger = get_logger("plugins.bilibili")
 
-_ADAPTER = None  # 懒构造单例（随通道配置）
+_ADAPTER = None  # 懒构造单例（随本插件配置）
+
+
+def _plugin_cfg() -> Dict[str, Any]:
+    """本插件配置：``~/.omniagent/plugins/bilibili.yaml`` 优先，回落旧 ``channels/``。"""
+    try:
+        from omni_core.local.runtime_paths import channel_config_file, plugin_config_file
+
+        for path in (plugin_config_file("bilibili"), channel_config_file("bilibili")):
+            if path is not None and path.is_file():
+                import yaml
+
+                data = yaml.safe_load(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    return data
+    except Exception:
+        return {}
+    return {}
 
 
 def _adapter():
-    """取通道只读客户端：只依赖宿主能力，不 import 具体通道实现。"""
+    """取本插件的通道只读客户端（不 connect、不看 enabled 门限）。"""
     global _ADAPTER
     if _ADAPTER is None:
-        from gateway.channel_gateway import channel_client
+        try:
+            from plugins.bilibili.channel import client
 
-        client = channel_client("bilibili")
-        if client is None:
-            raise RuntimeError("bilibili 通道不可用（先配置 channels/bilibili.yaml）")
-        _ADAPTER = client
+            _ADAPTER = client(_plugin_cfg())
+        except Exception as e:
+            raise RuntimeError(f"bilibili 通道不可用（本插件配置缺失/损坏: {e}）")
     return _ADAPTER
 
 

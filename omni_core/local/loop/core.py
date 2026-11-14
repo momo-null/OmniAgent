@@ -182,12 +182,12 @@ class ToolLoop(
                 (_mcp_cfg or {}).get("servers"), self._log)
         else:
             self.mcp_lazy_cfgs, self.mcp_lazy_servers, self.mcp_slots = (None, None, None)
-        # 双轨收口（可选，默认关）：lazy server 接管某 unit 的工具集时，该 unit 的
-        # 插件工具不再进本轮清单，避免同一能力两份 schema。判定收口在 mcp_meta，
-        # 装配侧只消费结果；缺省空集 = 现有行为零变化。
+        # 双轨收口（默认由 manifest 声明驱动）：mcp 工具源的 unit 不再暴露插件版只读
+        # 工具，避免同一能力两份 schema。判定收口在 mcp_meta，装配侧只消费结果。
+        from omni_core.tools.loader import mcp_tool_units
         from omni_core.tools.mcp_meta import replaced_units
 
-        self.mcp_replaced_units = replaced_units(self.mcp_lazy_cfgs)
+        self.mcp_replaced_units = replaced_units(self.mcp_lazy_cfgs, mcp_tool_units(_cfg))
         # 插件装载：扫 plugin_dirs，按各插件 enabled 决定注册与否；单包失败只降级。
         from omni_core.tools.loader import PluginContext, load_plugins
         self.plugin_report = load_plugins(

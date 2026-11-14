@@ -255,30 +255,51 @@ class VisionRuntime:
         self._vision: Optional[LocalVision] = None
         # 注意：这里**不**持有 SoM marks（α 决策：状态归 vision 插件自持）
 
-    # --- 解析 server 地址（缺省走 model_hub 实际端口）------------------------
+    # --- 解析 server 地址（缺省按本地服务清单 + 端口探测）---------------------
     def _resolve_base_url(self) -> Optional[str]:
         if self.base_url:
             return self.base_url
-        # 1) 优先走 model_hub（同一 ModelManager 实例时有效）
-        try:
-            from model_hub.manager import ModelManager
-
-            mgr = ModelManager()
-            name = (self.model or mgr.get_default_model() or "").strip().lower()
-            for m in mgr.get_active_models():
-                if not (m.get("process_alive") and m.get("healthy")):
-                    continue
-                # 大小写不敏感匹配（config 写模型名，model_hub 可能返回不同大小写）
-                if not name or (m.get("name") or "").strip().lower() == name:
-                    return f"http://127.0.0.1:{m['port']}"
-        except Exception as e:
-            logger.warning("从 model_hub 解析 VLM 端口失败: %s", e)
-        # 2) 兜底：model_hub 仅维护进程内注册表，跨实例/跨进程启动的 server
-        #    读不到 -> 直接探测本地候选端口上的 OpenAI 兼容 /health 端点。
+        # 1) 本地服务清单里显式登记了端口的视觉条目（插件只读配置，不 import 资源层实现）
+        base = self._manifest_vlm()
+        if base:
+            return base
+        # 2) 兜底：GGUF 等进程的端口由资源层运行时分配，清单里没有；直接探测本地
+        #    候选端口上的 OpenAI 兼容 /health 端点。
         base = self._probe_local_vlm()
         if base:
             logger.info("探测到本地 VLM: %s", base)
             return base
+        return None
+
+    def _manifest_vlm(self) -> Optional[str]:
+        """按 ``~/.omniagent/model_hub.yaml`` 的 services 条目解析视觉服务地址。"""
+        try:
+            import yaml
+
+            from omni_core.local.runtime_paths import global_omni
+
+            path = global_omni() / "model_hub.yaml"
+            if not path.is_file():
+                return None
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            services = data.get("services") if isinstance(data, dict) else {}
+            name = (self.model or "").strip().lower()
+            for key, spec in (services or {}).items():
+                if not isinstance(spec, dict):
+                    continue
+                if str(spec.get("kind") or "python_service").strip().lower() == "gguf":
+                    continue  # 端口由进程启动时分配，清单里没有
+                model = str(spec.get("model") or key).strip().lower()
+                if name and model != name:
+                    continue
+                try:
+                    port = int(spec.get("port") or 0)
+                except Exception:
+                    port = 0
+                if port > 0:
+                    return f"http://127.0.0.1:{port}"
+        except Exception as e:
+            logger.warning("从本地服务清单解析视觉端口失败: %s", e)
         return None
 
     @staticmethod

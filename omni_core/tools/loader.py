@@ -34,6 +34,8 @@ __all__ = [
     "plugin_config",
     "plugin_manifest",
     "list_plugins",
+    "mcp_tool_units",
+    "mcp_declarations",
 ]
 
 logger = get_logger("tools.loader")
@@ -62,6 +64,8 @@ _loaded_modules: Dict[str, Any] = {}
 #: 首次装载时各包新增的工具（名字 -> 插件对象）。存**对象**而非名字：外部把注册表
 #: 清空后（如测试基线恢复），幂等路径能按对象重注册自愈，否则工具永久失踪。
 _loaded_tools: Dict[str, "List[Tuple[str, Any]]"] = {}
+#: 声明 ``tools.source=mcp`` 的插件（name → {server, include}）：只登记，不注册工具。
+_MCP_DECLARATIONS: Dict[str, Dict[str, Any]] = {}
 _last_report: Optional["LoadReport"] = None
 
 #: 默认插件根目录（相对仓库根，不受 cwd 影响）
@@ -166,10 +170,62 @@ def load_plugins(cfg: Optional[Dict[str, Any]] = None, ctx: Optional[PluginConte
             if not _enabled(name, plugin_cfg, manifest):
                 report.skip(name, "插件已停用（enabled=false）")
                 continue
+            # 工具面来源（manifest §2.3）：local = 插件代码里的 @function_tool；
+            # mcp = 工具由外部 MCP server 提供，宿主只登记「server + include 白名单」，
+            # 不 import plugin.py、不注册任何工具（注册交给 MCP 层）。
+            tools_face = manifest.get("tools") if isinstance(manifest.get("tools"), dict) else {}
+            if str(tools_face.get("source") or "local").strip().lower() == "mcp":
+                _declare_mcp_tools(name, tools_face, report)
+                continue
             _load_one(directory, name, manifest, plugin_cfg, ctx, report)
 
     _last_report = report
     return report
+
+
+def _declare_mcp_tools(name: str, tools_face: Dict[str, Any], report: LoadReport) -> None:
+    """登记 mcp 工具源声明（幂等）：宿主不从插件代码注册任何工具。"""
+    if name in _MCP_DECLARATIONS:
+        report.skip(name, "工具源声明已登记（幂等跳过）")
+        return
+    include = tools_face.get("include") or []
+    _MCP_DECLARATIONS[name] = {
+        "server": str(tools_face.get("server") or name),
+        "include": [str(t) for t in include if str(t or "").strip()],
+    }
+    report.loaded.append(name)
+
+
+def mcp_tool_units(cfg: Optional[Dict[str, Any]] = None) -> set:
+    """声明 ``tools.source=mcp`` 的插件名集合（工具双轨收口的判定输入）。
+
+    只读 manifest（不依赖装载状态），供 ToolLoop 在构造期算「哪些 unit 的工具
+    由 MCP 层提供」。
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    out = set()
+    for root in _plugin_dirs(cfg):
+        if not root.is_dir():
+            continue
+        for directory in sorted(root.iterdir(), key=lambda p: p.name):
+            if not directory.is_dir() or directory.name.startswith("."):
+                continue
+            name = directory.name
+            if not name.isidentifier():
+                continue
+            manifest = _read_manifest(directory, name)
+            if not isinstance(manifest, dict):
+                continue
+            tools_face = manifest.get("tools")
+            if isinstance(tools_face, dict) and \
+                    str(tools_face.get("source") or "").strip().lower() == "mcp":
+                out.add(name)
+    return out
+
+
+def mcp_declarations() -> Dict[str, Dict[str, Any]]:
+    """已登记的 mcp 工具源声明（测试/观测面用）。"""
+    return {k: dict(v) for k, v in _MCP_DECLARATIONS.items()}
 
 
 def plugin_manifest(name: str, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

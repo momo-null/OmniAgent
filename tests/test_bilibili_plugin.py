@@ -150,8 +150,8 @@ def test_bili_self_dynamics(fake):
 
 def test_tools_without_channel(monkeypatch):
     monkeypatch.setattr(bp, "_ADAPTER", None)
-    monkeypatch.setattr("gateway.channel_gateway.channel_config",
-                        lambda name: (_ for _ in ()).throw(RuntimeError("无配置")))
+    monkeypatch.setattr(bp, "_plugin_cfg",
+                        lambda: (_ for _ in ()).throw(RuntimeError("无配置")))
     ret = bili_hot()
     assert ret["ok"] is False and "通道不可用" in ret["error"]
 

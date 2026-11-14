@@ -1,105 +1,85 @@
-"""小红书只读采集插件离线测试（fake MCP transport，零网络）。
+"""小红书只读采集插件（阶段 5：工具源改成 MCP 声明）离线测试。
 
-红线守门：插件必须零写操作；MCP 返回结构漂移时宽容归一。
+契约变化：
+- 插件不再自带 3 个 ``@function_tool``：工具由外部 MCP server 提供；
+- manifest 的 ``tools.include`` 白名单**只含只读工具名**（零写操作靠结构表达）；
+- 宿主 loader 只登记声明，不 import plugin.py、不注册工具；
+- 双轨收口判定（``replaced_units``）认 manifest，不再依赖 mcp.json 的过渡字段。
 """
 import importlib.util
+import json
 import pathlib
 
-import pytest
-
-# 插件目录不是包，按 loader 同款方式装载；exec 后立即注销全局注册（防污染 loader 测试）
-_spec = importlib.util.spec_from_file_location(
-    "xiaohongshu_plugin_under_test",
-    pathlib.Path(__file__).resolve().parent.parent / "plugins" / "xiaohongshu" / "plugin.py")
-xp = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(xp)
-from omni_core.tools.base import TOOL_REGISTRY as _REG  # noqa: E402
-
-for _n in ("xhs_list_feeds", "xhs_search", "xhs_feed_detail"):
-    _REG.pop(_n, None)
-xhs_list_feeds = xp.xhs_list_feeds
-xhs_search = xp.xhs_search
-xhs_feed_detail = xp.xhs_feed_detail
+REPO = pathlib.Path(__file__).resolve().parents[1]
+PLUGIN_DIR = REPO / "plugins" / "xiaohongshu"
 
 
-class _FakeAdapter:
-    def __init__(self):
-        self.calls = []
+def _load_plugin_module():
+    """按 loader 同款方式装载插件模块（不污染全局注册表）。"""
+    from omni_core.tools.base import TOOL_REGISTRY
 
-    def _mcp_call(self, tool, args=None):
-        self.calls.append((tool, args))
-        if tool == "list_feeds":
-            return {"ok": True, "data": {"items": [
-                {"id": "feed1", "xsecToken": "t1",
-                 "noteCard": {"displayTitle": "推荐笔记", "desc": "描述",
-                              "user": {"nickname": "路人", "userId": "u1"},
-                              "interactInfo": {"likedCount": "1.2万", "collectedCount": "3000",
-                                               "commentCount": "456"}}}]}}
-        if tool == "search_feeds":
-            return {"ok": True, "data": {"items": [
-                {"id": "feed2", "xsecToken": "t2",
-                 "noteCard": {"displayTitle": "搜索结果", "type": "视频",
-                              "user": {"nickname": "作者"},
-                              "interactInfo": {"likedCount": "800"}}}]}}
-        if tool == "get_feed_detail":
-            return {"ok": True, "data": {
-                "id": "feed1", "noteCard": {"displayTitle": "推荐笔记"},
-                "comments": [
-                    {"comment_id": "c1", "nickname": "评论者",
-                     "content": "说得好", "likeCount": "12", "ipLocation": "上海"}]}}
-        return {"ok": False, "error": "unknown tool"}
+    spec = importlib.util.spec_from_file_location(
+        "xiaohongshu_plugin_under_test", PLUGIN_DIR / "plugin.py")
+    mod = importlib.util.module_from_spec(spec)
+    before = set(TOOL_REGISTRY)
+    spec.loader.exec_module(mod)
+    after = set(TOOL_REGISTRY)
+    for name in after - before:
+        TOOL_REGISTRY.pop(name, None)
+    return mod, after - before
 
 
-@pytest.fixture
-def fake(monkeypatch):
-    a = _FakeAdapter()
-    monkeypatch.setattr(xp, "_ADAPTER", a)
-    return a
+def test_manifest_declares_mcp_source_with_readonly_whitelist():
+    doc = json.loads((PLUGIN_DIR / "plugin.json").read_text(encoding="utf-8"))
+    tools = doc["tools"]
+    assert tools["source"] == "mcp"
+    assert tools["server"] == "xiaohongshu"
+    assert tools["include"] == ["list_feeds", "search_feeds", "get_feed_detail"]
+    # 零写操作红线：白名单里不允许出现发布/评论/点赞类动词
+    banned = ("publish", "comment", "like", "post", "send", "create")
+    assert not [t for t in tools["include"] if any(b in t.lower() for b in banned)]
 
 
-def test_xhs_list_feeds(fake):
-    ret = xhs_list_feeds(5)
-    assert ret["ok"] is True and ret["count"] == 1
-    note = ret["data"][0]
-    assert note["feed_id"] == "feed1" and note["xsec_token"] == "t1"
-    assert note["title"] == "推荐笔记" and note["liked"] == "1.2万"
+def test_plugin_module_registers_no_tools():
+    _mod, added = _load_plugin_module()
+    assert added == set(), f"插件不应再注册工具: {sorted(added)}"
 
 
-def test_xhs_search(fake):
-    ret = xhs_search("逛吃", 5)
-    assert ret["ok"] is True
-    assert ret["data"][0]["feed_id"] == "feed2"
-    assert fake.calls[0] == ("search_feeds", {"keyword": "逛吃"})
+def test_host_declares_but_does_not_import_mcp_plugin(tmp_path, monkeypatch):
+    """loader 对 tools.source=mcp：只登记 server/include，不 import plugin.py。"""
+    import sys
+    from omni_core.tools import loader
+
+    d = tmp_path / "demo_mcp"
+    d.mkdir()
+    (d / "plugin.json").write_text(json.dumps({
+        "name": "demo_mcp", "enabled": True,
+        "tools": {"source": "mcp", "server": "demo-server", "include": ["read_a"]},
+    }), encoding="utf-8")
+    (d / "plugin.py").write_text("raise RuntimeError('不该被 import')\n", encoding="utf-8")
+
+    monkeypatch.setattr(loader, "_MCP_DECLARATIONS", {})
+    cfg = {"runtime": {"tools": {"plugin_dirs": [str(tmp_path)]}}}
+    report = loader.load_plugins(cfg)
+    assert "demo_mcp" in report.loaded
+    assert loader.mcp_declarations()["demo_mcp"] == {
+        "server": "demo-server", "include": ["read_a"]}
+    assert "_omni_plugin_demo_mcp" not in sys.modules
 
 
-def test_xhs_search_requires_keyword():
-    ret = xhs_search("  ")
-    assert ret["ok"] is False and "关键词为空" in ret["error"]
+def test_replaced_units_accepts_manifest_units():
+    from omni_core.tools.mcp_meta import replaced_units
+
+    assert replaced_units(None) == set()
+    assert replaced_units([{"name": "u1"}]) == set()
+    assert replaced_units(None, {"xiaohongshu"}) == {"xiaohongshu"}
+    assert replaced_units([{"name": "legacy", "replace_plugin_tools": True}],
+                          {"xiaohongshu"}) == {"legacy", "xiaohongshu"}
 
 
-def test_xhs_feed_detail(fake):
-    ret = xhs_feed_detail("feed1", "t1")
-    assert ret["ok"] is True
-    assert ret["data"]["comment_count"] == 1
-    assert ret["data"]["comments"][0]["content"] == "说得好"
-    assert fake.calls[0] == ("get_feed_detail", {"feed_id": "feed1", "xsec_token": "t1"})
+def test_mcp_tool_units_reads_repo_manifests():
+    from omni_core.tools.loader import mcp_tool_units
 
-
-def test_mcp_unreachable_gives_clear_error(monkeypatch):
-    class _Broken:
-        def _mcp_call(self, tool, args=None):
-            return {"ok": False, "error": "MCP 端点不可达（http://127.0.0.1:18060/mcp）"}
-
-    monkeypatch.setattr(xp, "_ADAPTER", _Broken())
-    ret = xhs_list_feeds()
-    assert ret["ok"] is False and "MCP 端点不可达" in ret["error"]
-
-
-def test_plugin_registers_no_write_tools():
-    import inspect
-
-    names = [n for n, f in inspect.getmembers(xp, inspect.isfunction)
-             if getattr(f, "__name__", "").startswith("xhs_")]
-    assert set(names) <= {"xhs_list_feeds", "xhs_search", "xhs_feed_detail"}
-    for n in names:
-        assert not any(k in n for k in ("publish", "post", "comment_to", "like", "follow"))
+    units = mcp_tool_units()
+    assert "xiaohongshu" in units
+    assert "bilibili" not in units      # 本插件工具仍由自己注册

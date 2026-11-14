@@ -317,17 +317,22 @@ def _apply_transform(cfg: dict, tool: str, data: Any) -> Any:
         return data
 
 
-def replaced_units(lazy_cfgs: Optional[List[dict]]) -> set:
+def replaced_units(lazy_cfgs: Optional[List[dict]],
+                   manifest_units: Optional[set] = None) -> set:
     """被 lazy server 接管了工具集的 unit 名集合（工具双轨收口的唯一判定入口）。
 
-    只有显式声明 ``replace_plugin_tools`` 的 server 才接管；缺省空集 = 现有行为
-    零变化。集中在此，是为了工具来源改用 manifest 声明时只换本函数，装配侧不动。
+    两个来源取并集：
+    - 显式 ``replace_plugin_tools`` 的 server（过渡兼容，路径 5.3 后用户配置不再写）；
+    - manifest 声明 ``tools.source=mcp`` 的插件（2026-11-14 起的主源，见计划 §4 阶段 5）。
+    集中在此，装配侧只消费结果。
     """
-    return {
+    out = {
         str(cfg.get("name") or "")
         for cfg in (lazy_cfgs or [])
         if isinstance(cfg, dict) and cfg.get("replace_plugin_tools")
     }
+    out |= {str(n) for n in (manifest_units or set()) if str(n or "").strip()}
+    return out
 
 
 def build_lazy_bundle(servers_cfg: Optional[List[dict]], log=None) -> tuple:
