@@ -28,20 +28,13 @@ _ADAPTER = None  # 懒构造单例（随本插件配置）
 
 
 def _plugin_cfg() -> Dict[str, Any]:
-    """本插件配置：``~/.omniagent/plugins/bilibili.yaml`` 优先，回落旧 ``channels/``。"""
+    """本插件配置：``~/.omniagent/plugins/bilibili.yaml``（唯一事实源）。"""
     try:
-        from omni_core.local.runtime_paths import channel_config_file, plugin_config_file
+        from omni_core.tools.loader import plugin_config
 
-        for path in (plugin_config_file("bilibili"), channel_config_file("bilibili")):
-            if path is not None and path.is_file():
-                import yaml
-
-                data = yaml.safe_load(path.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    return data
+        return plugin_config("bilibili")
     except Exception:
         return {}
-    return {}
 
 
 def _adapter():

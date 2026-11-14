@@ -1,8 +1,8 @@
 # ============================================================================
-# 飞书通道模板 → 拷到 ~/.omniagent/channels/feishu.yaml
+# 飞书通道模板 → 拷到 ~/.omniagent/plugins/feishu.yaml
 #
-# 与 napcat.yaml 同构：文件名（feishu）= 通道名 = msg_send_* 的 channel 参数
-# = cron 的 notify_channel。谁来读：通道网关；改完重启网关生效。
+# 与 napcat.yaml 同构：文件名（feishu）= 插件名 = msg_send_* 的 channel 参数
+# = cron 的 notify_channel。谁来读：网关通过插件配置读取；改完重启网关生效。
 #
 # 与 QQ 的两点行为差异（不是配置项，是无法配掉的语义）：
 #   · 回发模式 auto：模型直接回答就是回复；QQ 侧是 explicit（必须调 msg_send_*）。

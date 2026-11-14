@@ -1,14 +1,15 @@
 # ============================================================================
-# QQ 通道（NapCat / OneBot 11）模板 → 拷到 ~/.omniagent/channels/napcat.yaml
+# QQ 通道（NapCat / OneBot 11）模板 → 拷到 ~/.omniagent/plugins/napcat.yaml
 #
-# 每通道一个文件，网关启动时扫 channels/ 目录逐个拉起；文件名（napcat）就是
-# 代码里的通道名，也是 msg_send_* 的 channel 参数、cron 的 notify_channel。
+# 每插件一个文件，网关启动时按 plugins/<name>.yaml 逐个拉起；文件名（napcat）就是
+# 代码里的插件名，也是 msg_send_* 的 channel 参数、cron 的 notify_channel。
 # routes.yaml 是唯一的例外：它是聊天路由表，不会被当通道拉起。
 #
 # 前置：装 NapCat（https://github.com/NapNeko/NapCatQQ），开启 HTTP（缺省 :3000）
 #   与 WebSocket（缺省 :3001）服务，并把 ws_url 指向它——本程序是 WS **客户端**。
-# 谁来读：通道网关（harness/channel_gateway.py）。适配器在网关启动时按这份文件构造，
-#   所以**改完要重启网关**（桌面端会自动拉起，不用手动跑）。Web 设置里没有通道页，纯手改。
+# 谁来读：网关（harness/channel_gateway.py）通过插件配置读取；适配器在网关启动时
+#   按这份文件构造，所以**改完要重启网关**（桌面端会自动拉起，不用手动跑）。
+#   Web 设置里没有通道页，纯手改。
 # 能力闸门的安全前提：QQ 上任何人都能给这个号发消息，所以缺省**纯对话**
 #   （allow_tools: false，模型侧连工具清单都没有）。除非确认只有你自己能发，
 #   不要把 allow_tools 置 true——那等于把文件/键鼠/shell 交给全体陌生人。

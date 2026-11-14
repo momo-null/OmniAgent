@@ -1,12 +1,17 @@
-"""插件配置（阶段 4）：``~/.omniagent/plugins/<name>.yaml`` 单源 + 旧 ``channels/`` 回落。
+"""插件配置（阶段 4 收口）：``~/.omniagent/plugins/<name>.yaml`` 单源。
 
 - channel_config / _channel_names / _load_routes：与 plugin_config 同构的加载器；
 - build_adapter / start_channels 全走 manifest discover + registry；
-- 配置合并后 ``channels/`` 只剩 routes.yaml，删新文件能靠旧文件启动（回落生效）。
+- 旧 ``channels/<name>.yaml`` 只由迁移脚本处理，运行时不回落、不读取。
 """
 import pytest
 
 from omni_core.local import runtime_paths as P
+
+
+def _legacy_config_file(name: str):
+    """测试专用：旧路径只在这里构造，生产运行时不认识它。"""
+    return P.channels_root() / f"{name}.yaml"
 
 
 # === 加载器 ===
@@ -21,27 +26,31 @@ def test_channel_config_reads_per_channel_file(_isolated_home):
 
 
 def test_channel_config_prefers_plugin_file(_isolated_home):
-    """新路径优先；旧路径还在时打 warning 但不再读它。"""
+    """新路径是唯一事实源；旧路径即使还在也不会被读取。"""
     from harness import channel_gateway as gw
 
     P.ensure_global_dirs()
     P.plugin_config_file("napcat").write_text("require_at: true\n", encoding="utf-8")
-    P.channel_config_file("napcat").write_text("require_at: false\n", encoding="utf-8")
+    _legacy_config_file("napcat").write_text("require_at: false\n", encoding="utf-8")
     assert gw.channel_config("napcat")["require_at"] is True
 
 
-def test_channel_config_falls_back_to_legacy(_isolated_home, capsys):
-    """新文件缺失时回落旧路径（三个月内仍能启动），并提示迁移。"""
+def test_channel_config_ignores_legacy_file(_isolated_home):
+    """旧路径只剩迁移材料：运行时不再回落，也不会把 enabled:false 改成 true。"""
     from harness import channel_gateway as gw
+    from harness.events import discover
 
     P.ensure_global_dirs()
-    P.channel_config_file("napcat").write_text("require_at: false\n", encoding="utf-8")
-    assert gw.channel_config("napcat")["require_at"] is False
-    assert "migrate_plugin_configs" in capsys.readouterr().out
+    _legacy_config_file("napcat").write_text(
+        "enabled: false\nrequire_at: false\n", encoding="utf-8")
+    assert gw.channel_config("napcat") == {}
+    meta = discover.manifests()["napcat"]
+    assert meta["configured"] is False
+    assert meta["enabled"] is True                  # manifest 缺省；旧 enabled 不参与
 
 
-def test_migrate_script_merges_and_drops_enabled(_isolated_home):
-    """迁移脚本：字段原样合并、只删 enabled、旧文件重命名带日期（可回退）。"""
+def test_migrate_script_preserves_enabled(_isolated_home):
+    """迁移脚本：字段原样合并，旧 enabled:false 必须保留；新路径同名键优先。"""
     import importlib.util
     from pathlib import Path
 
@@ -52,22 +61,27 @@ def test_migrate_script_merges_and_drops_enabled(_isolated_home):
     spec.loader.exec_module(mod)
 
     P.ensure_global_dirs()
-    P.channel_config_file("napcat").write_text(
-        "enabled: true\nrequire_at: false\nhttp_url: http://127.0.0.1:3000\n", encoding="utf-8")
+    _legacy_config_file("napcat").write_text(
+        "enabled: false\nrequire_at: false\nhttp_url: http://127.0.0.1:3000\n",
+        encoding="utf-8")
     P.plugin_config_file("napcat").write_text("timeout_sec: 10\n", encoding="utf-8")
     item = mod.plan_one("napcat")
-    assert item["dropped"] == ["enabled"]
-    assert "enabled" not in item["after"]
+    assert "enabled: false" in item["after"]
     assert "require_at: false" in item["after"]
     assert "timeout_sec: 10" in item["after"]        # 既有插件配置不丢
     assert "http://127.0.0.1:3000" in item["after"]
+
+    # 新路径已明确写了 enabled 时以新值为准，避免迁移覆盖用户当前选择。
+    P.plugin_config_file("napcat").write_text(
+        "enabled: true\ntimeout_sec: 10\n", encoding="utf-8")
+    assert "enabled: true" in mod.plan_one("napcat")["after"]
 
 
 def test_channel_config_missing_or_broken_returns_empty(_isolated_home):
     from harness import channel_gateway as gw
 
     assert gw.channel_config("nope") == {}
-    P.channel_config_file("bad").write_text("a: [1, 2\n", encoding="utf-8")
+    P.plugin_config_file("bad").write_text("a: [1, 2\n", encoding="utf-8")
     assert gw.channel_config("bad") == {}
 
 
@@ -104,7 +118,7 @@ def test_build_adapter_reads_manifest_factory(monkeypatch, _isolated_home):
     monkeypatch.setattr("harness.events.registry.build", fake_build)
     meta = {"enabled": True, "configured": True, "events": {"factory": "channel:build"}}
     monkeypatch.setattr(gw, "_discovered", lambda: {"napcat": meta})
-    P.channel_config_file("napcat").write_text("enabled: true\n", encoding="utf-8")
+    P.plugin_config_file("napcat").write_text("enabled: true\n", encoding="utf-8")
     gw.build_adapter("napcat")
     assert captured["args"] == ("napcat", {"enabled": True}, "channel:build")
     assert gw.build_adapter("unknown") is None          # 未知通道 fail-closed

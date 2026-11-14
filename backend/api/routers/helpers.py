@@ -554,7 +554,7 @@ def _session_records_to_model_messages(records: List[Dict[str, Any]]) -> List[Di
         role = r.get("role")
         if role == "user":
             # 空文本不入上下文：历史里存在 content="" 的合法记录（增量 partial 落盘
-            # 见 _maybe_flush_partial），原样喂给端点会被拒（空 user 消息），故跳过。
+            # 见 harness.run_pipeline.TurnRecorder.flush_partial），原样喂给端点会被拒。
             _uc = (r.get("content") or "").strip()
             if _uc:
                 out.append({"role": "user", "content": _uc})
@@ -588,30 +588,20 @@ def _session_records_to_model_messages(records: List[Dict[str, Any]]) -> List[Di
 def _merge_thinking_step(steps, block_id, model, content):
     """把流式推理链累积进 turn_steps（按 block_id 去重 upsert）。
 
-    修复：流式下 _on_thinking 不被调用，推理链只经 _on_llm_delta 推了实时卡片，
-    没写进 turn_steps；终态 AgentTurn 用 extra.steps 重建时 steps 里无 thinking →
-    思考卡消失。此处补齐流式路径，与非流式 _on_thinking 写入互斥、不重复。
+    实现已收敛到 ``harness.run_pipeline.merge_thinking_step``；此函数保留旧名。
     """
-    for s in steps:
-        if s.get("type") == "thinking" and s.get("id") == block_id:
-            s["content"] = content
-            s["model"] = model
-            return
-    steps.append({"type": "thinking", "id": block_id, "model": model, "content": content})
+    from harness.run_pipeline import merge_thinking_step
+
+    return merge_thinking_step(steps, block_id, model, content)
 
 def _merge_message_step(steps, block_id, model, content):
     """把流式口播（message）累积进 turn_steps（按 block_id 去重 upsert），与 thinking 对称。
 
-    修复：流式下口播只经 _on_llm_delta 推了实时气泡，没写进 turn_steps；终态
-    AgentTurn 用 extra.steps 重建时 steps 里无 message → 结论退化成 m.text 一体气泡
-    （无打字机）。此处补齐，使结果也像深度思考一样终态持久且可流式重建。
+    实现已收敛到 ``harness.run_pipeline.merge_message_step``；此函数保留旧名。
     """
-    for s in steps:
-        if s.get("type") == "message" and s.get("id") == block_id:
-            s["content"] = content
-            s["model"] = model
-            return
-    steps.append({"type": "message", "id": block_id, "model": model, "content": content})
+    from harness.run_pipeline import merge_message_step
+
+    return merge_message_step(steps, block_id, model, content)
 
 _EXEC_TOOLS = {"tap_text", "tap_text_region", "collect_list", "press_keycode",
                "ocr_screenshot", "screenshot", "tap_by_id"}

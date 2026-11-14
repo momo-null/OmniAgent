@@ -6,8 +6,9 @@
     python -m harness.channel_gateway --no-scheduler # 只跑通道（检查通道连通性）
 
 云端部署：systemd/任务计划程序托管本入口；本地调试直接跑。
-配置：``~/.omniagent/plugins/<name>.yaml``（每插件一文件，阶段 4 起为主源；
-过渡期回落 ``~/.omniagent/channels/<name>.yaml``）+ ``channels/routes.yaml``（聊天路由）。
+配置：``~/.omniagent/plugins/<name>.yaml``（每插件一文件，唯一事实源）
++ ``channels/routes.yaml``（聊天路由）。旧 ``channels/<name>.yaml`` 已由
+``scripts/migrate_plugin_configs.py`` 一次性迁移，运行时不再读取。
 不再读主配置的 channels:/chat_routes: 段，也不再有“通道”专属注册表——通道 = 声明了
 events 面的插件。
 """
@@ -62,36 +63,22 @@ def _acquire_singleton() -> bool:
 
 
 def channel_config(name: str) -> Dict[str, Any]:
-    """插件配置（阶段 4 起单源）：``~/.omniagent/plugins/<name>.yaml`` 优先，
-    缺失回落旧路径 ``~/.omniagent/channels/<name>.yaml`` 并打 warning（三个月后删回落）。
+    """插件配置（唯一事实源）：``~/.omniagent/plugins/<name>.yaml``。
 
-    与 ``plugin_config``（omni_core/tools/loader.py）同一布局：一插件一文件。通道连接
-    信息（token/ws_url 等）是部署事实，不该和 brain/runtime 等 core 配置挤在主配置里。
+    与 ``plugin_config``（omni_core/tools/loader.py）共用同一解析入口；通道连接信息
+    （token/ws_url 等）是部署事实，不该和 brain/runtime 等 core 配置挤在主配置里。
+    能力层 ``enabled`` 由 ``discover`` 统一合并（plugin.yaml > manifest.enabled），
+    本函数不再自己读第二份文件。
     """
-    plugin_file = None
-    legacy_file = None
     try:
-        from omni_core.local.runtime_paths import channel_config_file, plugin_config_file
+        from omni_core.tools.loader import plugin_config
 
-        plugin_file = plugin_config_file(name)
-        legacy_file = channel_config_file(name)
+        cfg = plugin_config(name)
     except Exception:
         return {}
-    path = plugin_file if plugin_file is not None and plugin_file.is_file() else legacy_file
-    if path is None or not path.is_file():
+    if not cfg:
         return {}
-    if path is legacy_file and plugin_file is not None:
-        print(f"[harness] 通道 {name} 仍在用旧配置 {path.name}（建议运行 scripts/migrate_plugin_configs.py）")
-    try:
-        import yaml
-
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception as e:
-        print(f"[harness] 通道 {name} 配置读取失败（忽略）: {e}")
-        return {}
-    cfg = data if isinstance(data, dict) else {}
     # 能力层开关单源（§0.6-A3）：plugin.yaml > manifest.enabled。
-    # 旧 ``channels/<name>.yaml`` 里的 enabled 阶段 4 起忽略（合并时会删掉该字段）。
     try:
         from .events import discover
 
@@ -327,7 +314,7 @@ def main() -> int:
             lifecycle.mark_disabled(name, "以 --no-channels 启动（未连接事件源）", meta)
         lifecycle.write_snapshot()
     if not no_channels and n == 0:
-        print("[harness] ⚠ 无任何通道连接（检查 ~/.omniagent/channels/ 下的通道配置）")
+        print("[harness] ⚠ 无任何通道连接（检查 ~/.omniagent/plugins/<name>.yaml 是否已配置并启用）")
 
     sched = None
     if not no_scheduler:

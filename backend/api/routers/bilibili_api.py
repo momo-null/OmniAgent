@@ -18,7 +18,7 @@ def _adapter():
 
     client = channel_client("bilibili")
     if client is None:
-        raise RuntimeError("bilibili 通道不可用（先配置 channels/bilibili.yaml）")
+        raise RuntimeError("bilibili 通道不可用（先配置 plugins/bilibili.yaml）")
     return client
 
 

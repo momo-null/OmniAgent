@@ -2,7 +2,7 @@
 # OmniAgent 主配置模板 → 拷到 ~/.omniagent/config.yaml
 #
 # 这份文件管「引擎怎么跑」，不管「连哪个模型」——端点/密钥/模型清单在
-# ~/.omniagent/models.json（见 examples/models.json），通道在 channels/，
+# ~/.omniagent/models.json（见 examples/models.json），插件/通道配置在 plugins/，
 # 插件调用端在 plugins/，MCP 在 mcp.json。职责分开是刻意的：换模型不碰这里。
 #
 # 取值优先级（从高到低）：

@@ -19,7 +19,7 @@
 - 出站参数取本通道 yaml 的 ``outbound`` 块（机械闸在 msg_send_*，归一见
   harness/outbound.py）；routes.yaml → project_id=bilibili 只是工作目录。
 
-配置文件 ``~/.omniagent/channels/bilibili.yaml``（模板 examples/channels/bilibili.yaml）::
+配置文件 ``~/.omniagent/plugins/bilibili.yaml``（模板 examples/plugins/bilibili.yaml）::
 
     enabled: false             # 出厂关
     mode: dry_run              # dry_run=只演练不真发 | draft=入待发队列 | live=真发
@@ -43,7 +43,7 @@
     timeout_sec: 10
     state_dir: ""              # 留空 = ~/.omniagent；测试/多号可另指目录
 
-命令行（联调与土法审批，不依赖网关进程；配置读 channels/bilibili.yaml）::
+命令行（联调与土法审批，不依赖网关进程；配置读 plugins/bilibili.yaml）::
 
     python -m plugins.bilibili.channel --login        # TV 扫码登录（推荐）
     python -m plugins.bilibili.channel --whoami      # 校验 cookie，打印 uid/uname
@@ -899,15 +899,19 @@ def _main() -> int:
     ap.add_argument("--config-dir", default="", help="覆盖状态目录（默认按 yaml 的 state_dir）")
     args = ap.parse_args()
 
-    from ..channel_gateway import channel_config
-    cfg = channel_config("bilibili")
+    from omni_core.tools.loader import plugin_config
+
+    cfg = plugin_config("bilibili")
+    if not cfg:
+        print("提示：~/.omniagent/plugins/bilibili.yaml 缺失——登录/联调照常继续；"
+              "要让网关拉起本通道请按 examples/plugins/bilibili.yaml 建配置并置 enabled: true")
     if args.config_dir:
         cfg["state_dir"] = args.config_dir
-    if not cfg.get("enabled", False):
+    if cfg and not cfg.get("enabled", True):
         # CLI 是联调/审批工具，不依赖通道在网关里跑：enabled 只管网关自动拉起，
         # 这里降级为提醒继续执行（无配置文件时按缺省 dry_run + ~/.omniagent 状态目录跑）
-        print("提示：channels/bilibili.yaml 未启用（enabled: false 或文件缺失）——"
-              "登录/联调照常继续；要让网关拉起本通道请置 enabled: true 并重启网关")
+        print("提示：plugins/bilibili.yaml 的 enabled=false——登录/联调照常继续；"
+              "要让网关拉起本通道请置 enabled: true 并重启网关")
     adapter = BilibiliAdapter(cfg)
     if args.login:
         return adapter.login_interactive()

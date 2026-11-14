@@ -45,7 +45,8 @@ cd web && npm install && cd ..
 **一插件一文件**：`~/.omniagent/plugins/<name>.yaml`（通道就是声明了 events 的插件，连接参数与工具/事件共用同一份配置）；聊天路由表是 `~/.omniagent/channels/routes.yaml`。
 
 1. 装 [NapCat](https://github.com/NapNeko/NapCatQQ)，开启 HTTP（默认 `:3000`）与 WebSocket 服务（默认 `:3001`）；
-2. 抄 `examples/channels/napcat.yaml` 建 `~/.omniagent/channels/napcat.yaml`：`enabled` / `http_url` / `ws_url` / `token`，群聊闸门 `reply_groups` / `allow_groups` / `require_at`，私聊白名单 `allow_users`；
+2. 抄 `examples/plugins/napcat.yaml` 建 `~/.omniagent/plugins/napcat.yaml`：`enabled` / `http_url` / `ws_url` / `token`，群聊闸门 `reply_groups` / `allow_groups` / `require_at`，私聊白名单 `allow_users`；
+   从旧版升级的用户先跑 `python scripts/migrate_plugin_configs.py`：运行时已不再读取 `channels/<name>.yaml`，脚本会保留 `enabled` 并备份旧文件；
 3. 网关：后端启动时自动托管 `harness.channel_gateway`（单实例；调试时可手动单独跑）；
 4. 私聊直接回；群聊**默认必须 @ 它**才响应。语音进来会转写成 `[语音] <内容>`，**要不要用语音回由模型决定**（`msg_send_voice` vs `msg_send_text`，通道不自动改发送形式），图片真的看懂。
 
@@ -141,9 +142,8 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 |---|---|---|
 | `~/.omniagent/models.json` | **模型端点唯一真源**：provider 目录 + `defaults` 槽位（本地 GGUF、上下文、端口、视觉侧注） | 大脑 / 网关派发 / 记忆链路 |
 | `~/.omniagent/config.yaml` | `brain`（推理模式、长任务参数）、`runtime`（派发、历史窗口等）、`security`（审批策略） | core |
-| `~/.omniagent/plugins/<name>.yaml` | 插件/通道配置（连接地址、token、闸门、`group_presence` 都在这里，一插件一文件）；`channels/routes.yaml` 是聊天路由表 | 网关 |
-| `~/.omniagent/plugins/<name>.yaml` | 插件调用端配置（`enabled`、语音 `base_url` 等） | 插件 |
-| `~/.omniagent/voice_service.yaml` | 语音引擎服务：端口 / token / 空闲回收 / 模型路径 / 音色 / 唱歌闸门 | 语音引擎服务 |
+| `~/.omniagent/plugins/<name>.yaml` | 插件/通道配置（连接地址、token、闸门、`group_presence`、语音 `base_url` 等，一插件一文件）；`channels/routes.yaml` 是聊天路由表 | 网关 / 插件 |
+| `~/.omniagent/voice_service.yaml` | 语音引擎服务：token / 空闲回收 / 模型路径 / 音色 / 唱歌闸门（端口在 `model_hub.yaml` 的 `services.voice.port`） | 语音引擎服务 |
 | `~/.omniagent/mcp.json` | MCP server 清单（stdio / streamable HTTP） | 工具运行时 |
 | `~/.omniagent/cron/jobs.json` | 定时任务（改文件即时生效） | 网关调度器 |
 | `~/.omniagent/character.md` | 助手角色卡（人格，随 system prompt 注入，设置页可改） | 注入层 |
@@ -154,7 +154,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 | `~/.omniagent/projects/<project>/` | 会话历史 `*.jsonl`、场景块（含 `diary-*` / 月记）、技能、项目级 `AGENTS.md` | 知识层 |
 | `~/.omniagent/tasks/<task>/` | 单次任务的轨迹、世界模型、收集结果、任务级技能 | 运行态 |
 
-上表前七行的每份配置，在仓库根 [`examples/`](examples/README.md) 里都有一份**逐键带注释的同名模板**（`examples/models.json`、`examples/config.yaml`、`examples/channels/*.yaml`、`examples/plugins/voice.yaml`、`examples/voice_service.yaml`、`examples/mcp.json`、`examples/cron/jobs.json`）：按同名路径抄进 `~/.omniagent/` 就是一份可读的初始配置，里面写清了每个键谁读、取值范围、改了要不要重启。示例不含明文密钥与本机绝对路径；`*.json` 三份容忍 `//` 注释，但 Web 面板保存会整体重写把它们抹掉——所以注释的家在 `examples/`，不在运行文件里。
+上表前七行的每份配置，在仓库根 [`examples/`](examples/README.md) 里都有一份**逐键带注释的同名模板**（`examples/models.json`、`examples/config.yaml`、`examples/plugins/*.yaml`、`examples/channels/routes.yaml`、`examples/voice_service.yaml`、`examples/mcp.json`、`examples/cron/jobs.json`）：按同名路径抄进 `~/.omniagent/` 就是一份可读的初始配置，里面写清了每个键谁读、取值范围、改了要不要重启。示例不含明文密钥与本机绝对路径；`*.json` 三份容忍 `//` 注释，但 Web 面板保存会整体重写把它们抹掉——所以注释的家在 `examples/`，不在运行文件里。
 
 界面上：项目右键可**重命名**（只改显示名，不动目录与归属）/ 删除（级联删任务）；任务右键可改名、保存到项目、打开文件夹、删除。
 
@@ -287,7 +287,7 @@ python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
 cd web && npm install && cd ..
-.\start_all.bat      # three windows: backend :8000 + voice engine :18742 + frontend :5173
+.\start_all.bat      # two windows: backend :8000 (hosts gateway + model services) + frontend :5173
 ```
 
 Open `http://localhost:5173` → **Settings → Models**, add your provider and key (or pick a local GGUF), then chat. The settings page writes `~/.omniagent/models.json`; the repo ships no plaintext secrets — every config has a fully commented template in [`examples/`](examples/README.md).
@@ -299,7 +299,8 @@ Prefer fewer windows? Use the desktop app (see [Quick Start](#quick-start)).
 **One file per plugin**: `~/.omniagent/plugins/<name>.yaml` (a channel is just a plugin declaring `events`; connection params live in the same file as tools/events); the routing table is `~/.omniagent/channels/routes.yaml`.
 
 1. Install [NapCat](https://github.com/NapNeko/NapCatQQ) with HTTP (`:3000`) and WebSocket (`:3001`) enabled;
-2. Copy `examples/channels/napcat.yaml` to `~/.omniagent/channels/napcat.yaml`: `enabled` / `http_url` / `ws_url` / `token`, group gates `reply_groups` / `allow_groups` / `require_at`, private allow-list `allow_users`;
+2. Copy `examples/plugins/napcat.yaml` to `~/.omniagent/plugins/napcat.yaml`: `enabled` / `http_url` / `ws_url` / `token`, group gates `reply_groups` / `allow_groups` / `require_at`, private allow-list `allow_users`;
+   Upgrading from the old layout? Run `python scripts/migrate_plugin_configs.py` first — the runtime no longer reads `channels/<name>.yaml`, and the script keeps `enabled` while backing up old files;
 3. Harness: the backend hosts `harness.channel_gateway` on startup (single instance; run it manually only for debugging);
 4. Private chats reply directly; group chats need an @ by default. Incoming voice is transcribed as `[voice] <content>`, and **the model decides** whether to answer with voice (`msg_send_voice`) or text — the channel never rewrites the medium. Images are genuinely understood.
 
@@ -372,16 +373,16 @@ Configure the provider and default model in Settings before the first conversati
 ```bash
 cd desktop
 npm install          # first run; China CDN mirror preconfigured
-npm run dev          # vite + backend + harness + voice service + Electron
+npm run dev          # vite + Electron (Electron starts backend; backend hosts harness + model services)
 npm run dist         # NSIS installer + portable exe (desktop/dist/)
 ```
 
-Or run `pack_desktop.bat` from the repo root (builds `web/dist` first). The shell spawns backend, harness and the voice engine service, restarts them on crash, and kills the whole process tree on quit; closing the window minimizes to the tray (restart backend / view logs / quit). Packages ship the **shell only**; backend code and `.venv` still point at this repo (`OMNIAGENT_HOME` or an `omniagent.home` file overrides the path).
+Or run `pack_desktop.bat` from the repo root (builds `web/dist` first). The shell starts the backend; the backend hosts harness and the model services (including the voice engine), restarts them on crash, and kills the whole process tree on quit; closing the window minimizes to the tray (restart backend / view logs / quit). Packages ship the **shell only**; backend code and `.venv` still point at this repo (`OMNIAGENT_HOME` or an `omniagent.home` file overrides the path).
 
 ### Gotchas
 
 - The dev server listens on IPv6 `::1` — use `http://localhost:5173` (`127.0.0.1` may fail).
-- `start_all.bat` opens **three visible windows** (Backend / Voice / Web) so output sits right there; the desktop shell runs them headless with file logs. **Do not add `--reload` to uvicorn** (the reloader double-binds the port on Windows and hangs).
+- `start_all.bat` opens **two visible windows** (Backend / Web); the backend hosts the gateway and model services headless, the desktop shell runs them headless with file logs. **Do not add `--reload` to uvicorn** (the reloader double-binds the port on Windows and hangs).
 - Endpoints come only from `~/.omniagent/models.json`; legacy endpoint keys in the main config are no longer read, so editing `config.yaml` will not switch models.
 - The voice service is decoupled from the main process: if it is down, voice calls fail loudly while the text chain keeps working. GPT-SoVITS runs in its own venv under `external/GPT-SoVITS`, not the main venv.
 - Machine and Android control need explicit plugin files (`~/.omniagent/plugins/host.yaml`, …); Android needs your own `adb_serial`.
@@ -395,9 +396,8 @@ Or run `pack_desktop.bat` from the repo root (builds `web/dist` first). The shel
 |---|---|---|
 | `~/.omniagent/models.json` | **Single source of truth for model endpoints**: provider catalog + `defaults` slots (local GGUF, context, port, vision sidecar) | brain / harness dispatch / memory |
 | `~/.omniagent/config.yaml` | `brain` (reasoning mode, long-task params), `runtime` (dispatch, history windows), `security` (approval policy) | core |
-| `~/.omniagent/plugins/<name>.yaml` | Plugin/channel config (addr, token, gates, `group_presence` — one file per plugin); `channels/routes.yaml` is the routing table | harness |
-| `~/.omniagent/plugins/<name>.yaml` | Plugin client config (`enabled`, voice `base_url`, …) | plugins |
-| `~/.omniagent/voice_service.yaml` | Voice engine service: port / token / idle reaping / model paths / timbre / singing gate | voice service |
+| `~/.omniagent/plugins/<name>.yaml` | Plugin/channel config (addr, token, gates, `group_presence`, voice `base_url` — one file per plugin); `channels/routes.yaml` is the routing table | harness / plugins |
+| `~/.omniagent/voice_service.yaml` | Voice engine service: token / idle reaping / model paths / timbre / singing gate (port lives in `model_hub.yaml` under `services.voice.port`) | voice service |
 | `~/.omniagent/mcp.json` | MCP server list (stdio / streamable HTTP) | tool runtime |
 | `~/.omniagent/cron/jobs.json` | Cron jobs (hot-reloaded) | harness scheduler |
 | `~/.omniagent/character.md` | Assistant character card (injected with the system prompt, editable in Settings) | injection layer |
@@ -408,7 +408,7 @@ Or run `pack_desktop.bat` from the repo root (builds `web/dist` first). The shel
 | `~/.omniagent/projects/<project>/` | Session `*.jsonl`, scene blocks (incl. `diary-*` and monthly notes), skills, project `AGENTS.md` | knowledge layer |
 | `~/.omniagent/tasks/<task>/` | Trajectory, world model, collected results, task-level skills | runtime state |
 
-The first seven rows each have a **fully commented template with the same name** under [`examples/`](examples/README.md) in the repo root (`examples/models.json`, `examples/config.yaml`, `examples/channels/*.yaml`, `examples/plugins/voice.yaml`, `examples/voice_service.yaml`, `examples/mcp.json`, `examples/cron/jobs.json`): copy them into `~/.omniagent/` at the same relative paths and you start from a readable config, with every key documented — who reads it, its range, and whether a change needs a restart. Templates carry no secrets and no machine-specific absolute paths. The three `*.json` files tolerate `//` comments, but the web UI rewrites them wholesale, so commentary lives in `examples/`, not in the live files.
+The first seven rows each have a **fully commented template with the same name** under [`examples/`](examples/README.md) in the repo root (`examples/models.json`, `examples/config.yaml`, `examples/plugins/*.yaml`, `examples/channels/routes.yaml`, `examples/voice_service.yaml`, `examples/mcp.json`, `examples/cron/jobs.json`): copy them into `~/.omniagent/` at the same relative paths and you start from a readable config, with every key documented — who reads it, its range, and whether a change needs a restart. Templates carry no secrets and no machine-specific absolute paths. The three `*.json` files tolerate `//` comments, but the web UI rewrites them wholesale, so commentary lives in `examples/`, not in the live files.
 
 In the UI: right-click a project to rename (display name only) or delete (cascades to its tasks); right-click a task to rename, save to project, open folder, or delete.
 
@@ -437,7 +437,7 @@ One line: **agent loop** (OpenAI Agents SDK `Runner`) → **tool layer** (plugin
 | Orchestration | LangGraph (`Send` fan-out, `update_state` soft injection) |
 | Backend | Python + FastAPI / uvicorn |
 | Frontend | TypeScript + React 18 + Vite + MUI + Tailwind (hand-rolled store), Lucide icons |
-| Desktop shell | Electron (spawns backend + harness + voice service, tray-resident) |
+| Desktop shell | Electron (starts the backend; backend hosts the gateway and model services; tray-resident) |
 | Local inference | llama.cpp `llama-server` (multi-slot, `--mmproj` vision) |
 | Voice | Resident engine `model_hub/servers/voice_engine.py` (started by model_hub ServiceManager from `~/.omniagent/model_hub.yaml`; OpenAI-audio compatible, lazy load, idle release); STT = SenseVoice (sherpa-onnx int8); TTS = fine-tuned GPT-SoVITS v2 (subprocess in `external/GPT-SoVITS`'s own venv) |
 | Singing | Resident RVC SVC worker + PyMSS BS-Roformer separation (one-shot subprocess) + ffprobe duration screening |
@@ -474,10 +474,10 @@ The conclusion was **not to swap approaches and not to embed upstream wholesale*
 | `omni_core/tools/` | Tool runtime: policy / approvals, capability registry, MCP, shell, skills, workspace |
 | `omni_core/orchestration/` | Multi-agent orchestration (LangGraph fan-out + subtask board) |
 | `plugins/` | Capability plugins: `filesystem` `web` `messaging` `host` `emulator` `voice` `ocr` `vision` (one `plugin.json` + one user yaml each) |
-| `harness/` | Always-on harness: `channels/` (napcat / feishu / wecom), dispatch queue, group presence, cron scheduler |
+| `harness/` | Always-on harness: plugin/event discovery, dispatch queue, group presence, cron scheduler (`channels/routes.yaml` is the only channel-dir config) |
 | `backend/` | HTTP service and API routes; serves `web/dist` same-origin when present |
 | `web/` | Single-page frontend (chat / cron + overlay-style settings & skills/tools) |
-| `desktop/` | Electron shell: spawns backend + harness + voice service, tray, packaging |
+| `desktop/` | Electron shell: starts the backend (backend hosts the gateway and model services), tray, packaging |
 | `external/` | Upstream engine clones (GPT-SoVITS and its own venv), not tracked by git |
 | `model_hub/` `llm_runtime/` | Model metadata and llama-server lifecycle / inference backends |
 | `scripts/` | Red-line lint, real-device verification and benchmarks (`verify_memory_recall.py`, …) |

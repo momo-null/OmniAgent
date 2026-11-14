@@ -1,8 +1,8 @@
 # ============================================================================
-# B站通道模板 → 拷到 ~/.omniagent/channels/bilibili.yaml
+# B站通道模板 → 拷到 ~/.omniagent/plugins/bilibili.yaml
 #
-# 每通道一个文件，网关启动时扫 channels/ 目录逐个拉起；文件名（bilibili）就是
-# 代码里的通道名，也是 msg_send_* 的 channel 参数、cron 的 notify_channel。
+# 每插件一个文件，网关启动时按 plugins/<name>.yaml 逐个拉起；文件名（bilibili）就是
+# 代码里的插件名，也是 msg_send_* 的 channel 参数、cron 的 notify_channel。
 #
 # ⚠ 本通道与 napcat/feishu 的本质差异：入站不是「别人找她聊天」，而是「评论区的
 #   回复通知」——回不回、回什么由她按运营纪律（projects/bilibili/AGENTS.md）决定，

@@ -1,5 +1,5 @@
 # ============================================================================
-# 小红书通道模板 → 拷到 ~/.omniagent/channels/xiaohongshu.yaml
+# 小红书通道模板 → 拷到 ~/.omniagent/plugins/xiaohongshu.yaml
 #
 # ⚠ 传输=xiaohongshu-mcp（https://github.com/xpzouying/xiaohongshu-mcp）：
 #   浏览器自动化、扫码登录、cookie 全由它承担，本适配器只翻译它的 MCP 端点。

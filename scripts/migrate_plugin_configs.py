@@ -1,9 +1,9 @@
-"""一次性迁移：把通道配置并进插件配置（阶段 4）。
+"""一次性迁移：把通道配置并进插件配置（阶段 4 收口）。
 
 背景：通道从来不是独立实体，只是「声明了 events 面的插件」。配置也该只有一份：
 ``~/.omniagent/plugins/<name>.yaml``。本脚本把旧 ``~/.omniagent/channels/<name>.yaml``
-的字段原样并过去，**只删 ``enabled``**（能力层开关改由 ``plugin.yaml`` / manifest 表达，
-不再在连接配置里重复一份）。
+的字段原样并过去，**包括 ``enabled``**——旧文件若明确关闭该通道，迁移后必须仍关闭；
+新路径已有同名字段时以新值为准（新源优先）。
 
 用法（仓库根）：
     python scripts/migrate_plugin_configs.py --dry-run   # 只打印 diff
@@ -19,9 +19,10 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import difflib
+import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
@@ -29,7 +30,14 @@ if str(_REPO_ROOT) not in sys.path:
 
 from omni_core.local import runtime_paths as P  # noqa: E402
 
-DROP_KEYS = {"enabled"}
+_LEGACY_NAME = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
+def _legacy_channel_config_file(name: str) -> Path:
+    """旧通道配置路径解析只留在迁移脚本里；运行时不再认识这个路径。"""
+    if not _LEGACY_NAME.fullmatch(name):
+        raise ValueError(f"通道名不合法: {name!r}")
+    return P.channels_root() / f"{name}.yaml"
 
 
 def _load(path: Path) -> Dict[str, Any]:
@@ -51,25 +59,17 @@ def _diff(name: str, before: str, after: str) -> str:
         fromfile=f"{name}.yaml(旧)", tofile=f"{name}.yaml(新)"))
 
 
-def _strip(doc: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
-    out = {k: v for k, v in doc.items() if k not in DROP_KEYS}
-    dropped = [k for k in doc if k in DROP_KEYS]
-    return out, dropped
-
-
 def plan_one(name: str) -> Dict[str, Any]:
-    legacy = P.channel_config_file(name)
+    legacy = _legacy_channel_config_file(name)
     target = P.plugin_config_file(name)
     old_doc = _load(legacy)
-    incoming, dropped = _strip(old_doc)
-    merged: Dict[str, Any] = {}
+    merged: Dict[str, Any] = dict(old_doc)
     if target.is_file():
-        merged.update(_load(target))
-    merged.update(incoming)
+        merged.update(_load(target))                 # 新源优先，避免覆盖用户已改的值
     before = target.read_text(encoding="utf-8") if target.is_file() else ""
     after = _dump(merged)
     return {"name": name, "legacy": legacy, "target": target,
-            "before": before, "after": after, "dropped": dropped}
+            "before": before, "after": after}
 
 
 def main() -> int:
@@ -91,7 +91,7 @@ def main() -> int:
     for name in names:
         item = plan_one(name)
         diff = _diff(name, item["before"], item["after"])
-        print(f"\n=== {name}（删除字段: {', '.join(item['dropped']) or '无'}）")
+        print(f"\n=== {name}（保留 enabled，新路径优先）")
         print(diff or "(无差异：目标文件已是合并后内容)")
         if args.dry_run:
             continue

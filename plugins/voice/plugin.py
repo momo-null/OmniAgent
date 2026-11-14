@@ -155,7 +155,8 @@ def _decode_wav_16k_mono(wav_bytes: bytes):
 # 配置（~/.omniagent/plugins/voice.yaml，纯客户端配置）：
 #   base_url: http://127.0.0.1:18742/v1     # 本机常驻服务，或任意在线厂商
 #   api_key / stt_model / tts_model / voice
-# 引擎配置（模型路径/音色/空闲回收/端口）在 ~/.omniagent/voice_service.yaml，
+# 引擎配置（模型路径/音色/空闲回收/监听地址）在 ~/.omniagent/voice_service.yaml；
+# 端口唯一来源是 ~/.omniagent/model_hub.yaml 的 services.voice.port。
 # 由 model_hub.servers.voice_engine 与本文件的本机引擎段读取（见 service_config.py）。
 
 
@@ -203,7 +204,7 @@ def _openai_request(req, base: str, tail: str) -> bytes:
         raise RuntimeError(
             f"语音端点不可用（{base}{tail}）: {e}。"
             "本地服务请确认语音引擎已由后端服务管理器拉起；"
-            "手动：python -m model_hub.servers.voice_engine）") from e
+            "手动调试：python -m model_hub.servers.voice_engine --port <model_hub 清单端口>）") from e
 
 
 def _openai_transcribe(wav_bytes: bytes) -> str:

@@ -13,7 +13,7 @@ class ChatMessage(BaseModel):
 
     role: Literal["system", "user", "assistant", "agent"]
     # 允许空 content：会话历史中存在「只有工具步骤、无口播文本」的合法记录
-    # （增量 partial 落盘 content=""，见 chat_runtime._maybe_flush_partial）。
+    # （增量 partial 落盘 content=""，见 harness.run_pipeline.TurnRecorder.flush_partial）。
     # 空文本在注入模型历史时会被过滤（run_subtask_sdk 的 `if _c`），对模型无害；
     # 此处若强制 min_length=1 会让携带该类历史的会话请求整体 422。
     content: str = Field(default="", max_length=16000)

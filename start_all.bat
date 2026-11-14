@@ -29,8 +29,6 @@ if not exist "%PROJECT_DIR%web\node_modules" (
 if /i "%MODE%"=="backend" (
     echo starting backend window ...
     start "OmniAgent Backend" cmd /k "set NO_PROXY=127.0.0.1,localhost && "%PY%" -m uvicorn backend.server:app --host 127.0.0.1 --port 8000"
-    echo starting voice engine window ...
-    start "OmniAgent Voice" cmd /k "set NO_PROXY=127.0.0.1,localhost && "%PY%" -m model_hub.servers.voice_engine"
     goto :done
 )
 if /i "%MODE%"=="web" (
@@ -41,9 +39,8 @@ if /i "%MODE%"=="web" (
 
 echo starting backend + frontend ...
 start "OmniAgent Backend" cmd /k "set NO_PROXY=127.0.0.1,localhost && "%PY%" -m uvicorn backend.server:app --host 127.0.0.1 --port 8000"
-start "OmniAgent Voice" cmd /k "set NO_PROXY=127.0.0.1,localhost && "%PY%" -m model_hub.servers.voice_engine"
 start "OmniAgent Web" cmd /k "set HTTP_PROXY= && set HTTPS_PROXY= && set ALL_PROXY= && set NO_PROXY=127.0.0.1,localhost && cd /d web && npm run dev"
-echo three windows opened: [OmniAgent Backend] [OmniAgent Voice] [OmniAgent Web]
+echo two windows opened: [OmniAgent Backend] [OmniAgent Web]
 echo stop: start_all.bat stop
 
 :done

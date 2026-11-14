@@ -222,24 +222,12 @@ def plugin_config_file(name: str) -> Path:
     return _child(plugins_root(), name, "plugin_name").with_suffix(".yaml")
 
 
-def environments_root() -> Path:
-    """环境自有配置根 ``~/.omniagent/environments/``。"""
-    return _GLOBAL / "environments"
-
-
-def env_config_file(kind: str) -> Path:
-    """环境自有配置文件 ``environments/<kind>.yaml``（内置路径安全校验）。"""
-    return _child(environments_root(), kind, "env_kind").with_suffix(".yaml")
-
-
 def channels_root() -> Path:
-    """通道自有配置根 ``~/.omniagent/channels/``（每通道一个 ``<name>.yaml``）。"""
+    """通道路由根 ``~/.omniagent/channels/``（只放 ``routes.yaml``）。
+
+    通道自身的配置已并入 ``plugins/<name>.yaml``；这里不再放通道配置。
+    """
     return _GLOBAL / "channels"
-
-
-def channel_config_file(name: str) -> Path:
-    """通道自有配置文件 ``channels/<name>.yaml``（内置路径安全校验）。"""
-    return _child(channels_root(), name, "channel_name").with_suffix(".yaml")
 
 
 def channel_routes_file() -> Path:
@@ -264,7 +252,6 @@ def ensure_global_dirs() -> None:
         projects_root(),
         tasks_root(),
         plugins_root(),
-        environments_root(),
         channels_root(),
         models_root(),
     ):

@@ -4,6 +4,14 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from omni_core.tools.base import TOOL_REGISTRY
+from harness.run_pipeline import (
+    TurnRecorder,
+    append_outbound_note,
+    build_history,
+    clear_run_boundary,
+    enqueue_memory,
+    set_run_boundary,
+)
 
 from backend.api.routers.helpers import (
     AGENT_MAIN,
@@ -19,8 +27,6 @@ from backend.api.routers.helpers import (
     _is_task_running,
     _running_task_ids,
     _make_brain_cfg,
-    _merge_message_step,
-    _merge_thinking_step,
     _paths,
     _project_store,
     _read_latest_collected,
@@ -140,7 +146,6 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
     # 增量落库（2026-10-04）：过程记录每 ~20 步刷一条 partial 到会话 jsonl，
     # 崩溃/被杀不再整轮蒸发；终态 final 收口，重放时按 run_key 并回单轮（coalesce）。
     run_key = f"rk_{int(time.time() * 1000)}"
-    _flushed = 0
     _PARTIAL_FLUSH_EVERY = 20
     _MAX_STEPS_IN_RECORD = 300  # 超过则 final 省略 steps（重放走 partial 拼接），防巨型单行
     # 新的一轮：清空实时过程快照，避免 GET /live 把上一轮的残留过程回放给前端
@@ -163,9 +168,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         def _on_thinking(role: str, content: str, model: str):
             # 对话区实时「深度思考」块 -> SSE `thinking` 事件 -> 前端对话框
             push_thinking(role, content, model, task_id=task_id)
-            if content:
-                turn_steps.append({"type": "thinking", "model": model, "content": content})
-            _maybe_flush_partial()
+            recorder.add_thinking(role, content, model)
 
         def _on_tool_call(role: str, name: str, arguments: str, result: str, model: str):
             # 后端校验（verify / verify_done）属内核门控，不进用户对话区（理由仍走 debug 面板）
@@ -173,9 +176,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                 return
             # 对话区实时「工具调用」卡片 -> SSE `toolcall` 事件 -> 前端对话框
             push_tool_call(role, name, arguments, result, model, task_id=task_id)
-            turn_steps.append({"type": "tool_call", "model": model, "name": name,
-                               "arguments": arguments or "", "result": result or ""})
-            _maybe_flush_partial()
+            recorder.add_tool_call(role, name, arguments, result, model)
 
         def _on_llm_delta(role: str, kind: str, block_id: str, text: str, model: str):
             # 真流式增量（问题3-B）：推理链 -> thinking 块，口播 -> message 气泡（问题1）
@@ -185,15 +186,12 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                 _last_answer = text
             if kind == "message":
                 push_message_stream(role, model, block_id, text, task_id=task_id)
-                # 修复：流式口播也累积进 turn_steps，使终态 AgentTurn 能重建「结论」气泡
-                # （与 thinking 对称；非流式路径由 _on_thinking 外的 message 写入互斥）
-                _merge_message_step(turn_steps, block_id, model, text)
+                # 流式口播也累积进 turn_steps，使终态 AgentTurn 能重建「结论」气泡
+                recorder.add_message_delta(block_id, model, text)
             else:
                 push_thinking_stream(role, model, block_id, text, task_id=task_id)
-                # 修复：流式推理链也累积进 turn_steps，使终态 AgentTurn 能重建「深度思考」卡片
-                # （非流式路径由 _on_thinking 写入，此处补齐流式路径，二者互斥）
-                _merge_thinking_step(turn_steps, block_id, model, text)
-            _maybe_flush_partial()
+                # 流式推理链也累积进 turn_steps，使终态 AgentTurn 能重建「深度思考」卡片
+                recorder.add_thinking(role, text, model, block_id=block_id)
 
         loop = ToolLoop(brain_cfg, executor_cfg=executor_cfg, verbose=True,
                         full_access=full_access,
@@ -221,6 +219,11 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         _meta = TaskStore.get(task_id)
         _pid = _meta.get("project_id", "") if _meta else ""
         _sid = _meta.get("session_id", "") if _meta else ""
+        recorder = TurnRecorder(
+            turn_steps, project_id=_pid, session_id=_sid,
+            task_id=task_id, run_key=run_key,
+            flush_every=_PARTIAL_FLUSH_EVERY,
+        )
 
         # 阶段 1：把运行级配置快照哈希、project_id、工具 registry、已装载插件
         # 写入 context，使「每个 run 可完整导出运行配置」成立（阶段 1 验收项 + 目标 3）。
@@ -246,32 +249,10 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                 pass
         if not _session_records:
             _session_records = list(history)  # 兜底：用前端回传的扁平历史
-        model_messages = _session_records_to_model_messages(_session_records)
-
-        def _append_assistant(text: str, extra: Optional[dict] = None):
-            if _pid and _sid:
-                try:
-                    ProjectStore.append_message(_pid, _sid, "assistant", text,
-                                                task_id=task_id, extra=extra)
-                except Exception:
-                    pass
-
-        def _maybe_flush_partial(force: bool = False):
-            """把新增过程步增量落一条 partial agent 记录（崩溃不丢、终态防巨型单行）。"""
-            nonlocal _flushed
-            if not _pid or not _sid:
-                return
-            if not (force or len(turn_steps) - _flushed >= _PARTIAL_FLUSH_EVERY):
-                return
-            if len(turn_steps) <= _flushed:
-                return
-            try:
-                ProjectStore.append_message(
-                    _pid, _sid, "assistant", "", task_id=task_id,
-                    extra={"steps": turn_steps[_flushed:], "partial": True, "run_key": run_key})
-                _flushed = len(turn_steps)
-            except Exception:
-                pass
+        # roles=None：保留 system 记录；converter 继续管任务卡/12 轮窗口/折叠提示
+        model_messages = build_history(
+            _session_records, roles=None,
+            converter=_session_records_to_model_messages)
 
         def _push(role: str, text: str, extra: Optional[dict] = None, debug: bool = False):
             push_chat(role, text, extra=extra, debug=debug, task_id=task_id)
@@ -291,19 +272,11 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # F2.2：收尾语义来自 task.json（task_mode，缺省 oneshot；缺省行为不变）。
         # 闲聊/文本型任务的纯文本收尾判 success 是正常语义，不强制 daemon。
         _task_mode = str((_meta or {}).get("task_mode", "oneshot") or "oneshot")
-        # 出站守则：Web 入口同构归一——读 channels/web.yaml 的
-        # outbound 块（缺省无此文件 → 全空零影响）；场合自述只喂模型，历史仍用
-        # last_user 原文。Web 是多并发请求，不走进程级上下文；发送闸按
-        # (通道, 会话) 在 msg_send_* 现解析。
+        # 出站守则：Web 入口同构归一——读 plugins/web.yaml 的 outbound 块
+        # （缺省无此文件 → 全空零影响）；场合自述只喂模型，历史仍用 last_user 原文。
+        # Web 是多并发请求，不走进程级上下文；发送闸按 (通道, 会话) 在 msg_send_* 现解析。
         _web_objective = last_user
-        try:
-            from harness.outbound import note as _ob_note, resolve as _ob_resolve
-
-            _ob_text = _ob_note(_ob_resolve("web", f"chat:{task_id}"))
-            if _ob_text:
-                _web_objective = f"{last_user}\n{_ob_text}"
-        except Exception:
-            pass  # 守则是增强项：无配置/解析失败不阻断本轮
+        _web_objective = append_outbound_note(_web_objective, "web", f"chat:{task_id}")
         spec = TaskSpec(objective=_web_objective, done_when="",
                         task_id=task_id, project_id=None, max_steps=max_steps,
                         history=list(model_messages),
@@ -312,13 +285,10 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # M1（F-4）：Web 直连是「与主人对话」——进料道
         # 标 chat，context_signal 据此构造 <current-context>（与 QQ 通道同一套结构）。
         try:
-            from harness.events import registry as _gwctx
-            from omni_core.local.loop import context_signal as _cs
             from omni_core.local.task_store import TaskStore as _TS
             _sid = str((_TS.get(task_id) or {}).get("session_id") or "")
-            _gwctx.set_source_kind(source_kind)
-            _cs.set_boundary(context_key=f"web:{_sid}", source_kind=source_kind,
-                             session_id=_sid, sent_count=_gwctx.sent_count)
+            set_run_boundary(context_key=f"web:{_sid}", source_kind=source_kind,
+                             session_id=_sid)
         except Exception:
             pass
         _debug_push("task_init", {
@@ -348,9 +318,8 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                 from omni_core import memory_writer
                 _pid = TaskStore.project_of(task_id)
                 _dw = _did_work(turn_steps, result)
-                memory_writer.enqueue(
-                    _pid, brain_cfg, source_task=task_id,
-                    did_work=_dw,
+                enqueue_memory(
+                    _pid, brain_cfg, source_task=task_id, did_work=_dw,
                     on_done=lambda _st: _debug_push(
                         "memory_flush", {"title": "记忆沉淀(异步)", **_st}),
                 )
@@ -393,7 +362,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # 终态记录：步数超上限则省略 steps（重放由 partial 拼接），防巨型单行 jsonl
         _steps_omitted = len(turn_steps) > _MAX_STEPS_IN_RECORD
         if _steps_omitted:
-            _maybe_flush_partial(force=True)
+            recorder.flush_partial(force=True)
         # 本轮新增产物（登记表按 ts 过滤；tmp 已在 run_task 终态被抢救到持久 artifacts/）
         _turn_artifacts: List[Dict[str, Any]] = []
         try:
@@ -414,7 +383,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
         # 机器状态收进 meta，作为 agent turn 的小字脚注），自然沉在对话最末。
         if conclusion or turn_steps:
             _push("agent", conclusion, extra=_extra)
-            _append_assistant(conclusion, extra=_extra)
+            recorder.record_final(conclusion, extra=_extra)
     except Exception as e:
         tb = traceback.format_exc()
         push_chat("agent", f"❌ 对话循环失败：{type(e).__name__}: {e}",
@@ -426,13 +395,7 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
             # force 标记兜底清除（异常路径可能未走到消费点，防下一轮误跳沉淀）
             rec.force_interrupted = False
         # M1：清掉本轮进料道标注（进程级单值，防残留串进下一轮）
-        try:
-            from harness.events import registry as _gwctx
-            from omni_core.local.loop import context_signal as _cs
-            _gwctx.set_source_kind("")
-            _cs.set_boundary()
-        except Exception:
-            pass
+        clear_run_boundary()
         _finish_task(task_id, agent_id)
         # daemon 纯文本汇报后 paused：本轮结束但任务保持活跃，等用户下条消息续跑，
         # 不标 done（否则 chat 多轮会话被误判结束、无法续跑）。仅当 run_task 正常返回

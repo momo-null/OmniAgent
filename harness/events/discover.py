@@ -37,34 +37,20 @@ def _plugin_config_file(name: str) -> Optional[Path]:
         return None
 
 
-def _legacy_channel_file(name: str) -> Optional[Path]:
-    """过渡期旧路径 ``~/.omniagent/channels/<name>.yaml``（阶段 4 合并后主要靠它判配置）。"""
-    try:
-        from omni_core.local.runtime_paths import channel_config_file
-
-        return channel_config_file(name)
-    except Exception:
-        return None
-
-
 def configured(name: str) -> bool:
-    """用户是否配置过这个插件（plugins/<name>.yaml 或旧 channels/<name>.yaml 存在）。"""
-    for p in (_plugin_config_file(name), _legacy_channel_file(name)):
-        if p is not None and p.is_file():
-            return True
-    return False
+    """用户是否配置过这个插件（唯一事实源：``plugins/<name>.yaml`` 存在）。"""
+    p = _plugin_config_file(name)
+    return p is not None and p.is_file()
 
 
-def _read_yaml(path: Optional[Path]) -> Dict[str, Any]:
-    if path is None or not path.is_file():
-        return {}
+def _plugin_config(name: str) -> Dict[str, Any]:
+    """读插件配置；复用 loader 的唯一解析入口，避免第二份 YAML 读取实现。"""
     try:
-        import yaml
+        from omni_core.tools.loader import plugin_config
 
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return plugin_config(name)
     except Exception:
         return {}
-    return data if isinstance(data, dict) else {}
 
 
 def _enabled(name: str, manifest: Dict[str, Any], cfg: Dict[str, Any]) -> bool:
@@ -105,7 +91,7 @@ def _normalize(name: str, manifest: Dict[str, Any], cfg: Dict[str, Any],
         "name": name,
         "version": manifest.get("version"),
         "enabled": _enabled(name, manifest, cfg),
-        # 没配置过的事件源不自动连（旧语义：channels/*.yaml 存在才启动，等价迁移）
+        # 没配置过的事件源不自动连（唯一配置是 ``plugins/<name>.yaml``）
         "configured": configured(name),
         "events": events,
         "tools": tools,
@@ -135,7 +121,7 @@ def manifests(root: Optional[Path] = None) -> Dict[str, Dict[str, Any]]:
             continue
         if not isinstance(doc, dict) or str(doc.get("name") or "") != d.name:
             continue
-        out[d.name] = _normalize(d.name, doc, _read_yaml(_plugin_config_file(d.name)), mf)
+        out[d.name] = _normalize(d.name, doc, _plugin_config(d.name), mf)
     return out
 
 

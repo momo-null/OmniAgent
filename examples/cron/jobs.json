@@ -31,7 +31,7 @@
       // 关联项目：决定用哪个项目目录 + 哪份项目级 AGENTS.md（纪律文件），
       // 轨迹也按项目落盘。留空 = 临时任务，跑完即清理。
       "project_id": "demo-project",
-      // 结果推送到哪条通道（channels/<name>.yaml 的文件名，如 napcat / feishu）。
+      // 结果推送到哪条通道（plugins/<name>.yaml 的文件名，如 napcat / feishu）。
       // 投递目标是该通道配置里的 default_chat_id 广播；留空 = 只落运行记录不外发。
       // 想发到指定会话就在对应通道 yaml 里设 default_chat_id，而不是在这里写会话号。
       "notify_channel": "napcat",

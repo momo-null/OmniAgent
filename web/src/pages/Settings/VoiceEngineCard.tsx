@@ -22,15 +22,13 @@ import type { PluginConfigField, PluginConfigResponse, VoiceStatus } from "../..
  * 服务化之后这里有两份配置，边界要分清：
  * - **调用端点（插件）**：`~/.omniagent/plugins/voice.yaml`——base_url / 密钥 / 模型名，
  *   换在线引擎只动这一块；
- * - **语音服务（引擎）**：`~/.omniagent/voice_service.yaml`——端口 / 空闲回收 / 音色 / 路径，
- *   属于独立服务，不属于插件目录。
+ * - **语音服务（引擎）**：`~/.omniagent/voice_service.yaml`——空闲回收 / 音色 / 路径，
+ *   属于独立服务，不属于插件目录；端口由 `~/.omniagent/model_hub.yaml` 的
+ *   `services.voice.port` 管，不在语音服务配置里。
  *
  * 字段全部来自插件自报 schema（`plugin.json` 的 `config` / `service_config`），
  * 本组件只按 type 渲染；唯一的语音知识是「音色下拉用 /healthz 报的 voices」。
  */
-
-const isLocalUrl = (url: string) =>
-  /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i.test(url.trim());
 
 interface Bag {
   fields: PluginConfigField[];
@@ -91,18 +89,6 @@ export default function VoiceEngineCard() {
     setMsg("");
     try {
       await runtimeApi.savePluginConfig("voice", bag.values, scope);
-      // 服务端口改了而端点仍指向本机 → 同步端点，避免「改了端口却没生效」
-      if (scope === "service") {
-        const port = Number(bag.values.service_port);
-        const base = String(pluginBag.values.base_url || "");
-        if (Number.isFinite(port) && isLocalUrl(base)) {
-          const fixed = `http://127.0.0.1:${port}/v1`;
-          if (fixed !== base) {
-            await runtimeApi.savePluginConfig("voice", { base_url: fixed }, "plugin");
-            setPluginBag((b) => ({ ...b, values: { ...b.values, base_url: fixed } }));
-          }
-        }
-      }
       setMsg(scope === "service" ? "服务配置已保存（重启服务后生效）" : "端点配置已保存（下次调用即生效）");
       await load();
     } catch (e) {
@@ -237,10 +223,9 @@ export default function VoiceEngineCard() {
           <Divider sx={{ my: 1.5 }} />
           <Typography variant="body2" sx={{ fontWeight: 500 }}>语音服务（引擎）</Typography>
           <Typography variant="caption" color="text.secondary">
-            独立常驻服务：没有请求时释放模型，进程不退；desktop 启动时按端口拉起。
+            独立常驻服务：没有请求时释放模型，进程不退；由后端按 model_hub 清单拉起。
           </Typography>
           <Box sx={{ maxWidth: 560, display: "flex", flexDirection: "column", gap: 1.5, mt: 1 }}>
-            {control(serviceBag, "service_port", patchOf(setServiceBag))}
             {control(serviceBag, "tts_voice", patchOf(setServiceBag), voices)}
             {control(serviceBag, "service_idle_sec", patchOf(setServiceBag))}
             {control(serviceBag, "stt_idle_sec", patchOf(setServiceBag))}

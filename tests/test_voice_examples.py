@@ -45,6 +45,21 @@ def test_service_example_covers_schema():
     assert node["path"] == "~/.omniagent/voice_service.yaml"
 
 
+def test_voice_port_lives_only_in_model_hub():
+    """语音端口只归 model_hub；语音服务配置和插件 schema 都不得再声明。"""
+    node = _manifest()["service_config"]
+    keys = {f["key"] for f in node["fields"]}
+    assert "service_port" not in keys and "port" not in keys
+
+    for rel in ("voice_service.yaml", "plugins/voice.yaml"):
+        text = (EXAMPLES / rel).read_text(encoding="utf-8")
+        assert "service_port" not in text, f"{rel} 仍声明 service_port"
+        assert "port:" not in text, f"{rel} 仍声明协议端口"
+
+    card = (VOICE.parents[1] / "web" / "src" / "pages" / "Settings" / "VoiceEngineCard.tsx")
+    assert "service_port" not in card.read_text(encoding="utf-8")
+
+
 def test_examples_have_no_real_secrets_or_paths():
     for rel in ("plugins/voice.yaml", "voice_service.yaml"):
         text = (EXAMPLES / rel).read_text(encoding="utf-8")

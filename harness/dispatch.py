@@ -24,6 +24,14 @@ from typing import Any, Dict, List, Optional
 
 from .events import registry as context
 from .events.protocol import ReplyChannel
+from .run_pipeline import (
+    TurnRecorder,
+    append_outbound_note,
+    build_history,
+    clear_run_boundary,
+    enqueue_memory,
+    set_run_boundary,
+)
 
 
 @dataclass
@@ -99,40 +107,19 @@ def _explicit_committed(steps: Any) -> bool:
 
 def _build_history_items(records: List[Dict[str, Any]], explicit: bool,
                          now_ts: Optional[float] = None) -> List[Dict[str, Any]]:
-    """会话记录 → TaskSpec.history（群上下文种子组装，2026-11-03 杠杆 1/2/3）。
+    """会话记录 → TaskSpec.history（群上下文种子组装）。
 
-    - 杠杆1：静默 run（零 msg_send_*，``extra.silent`` 打标）的叙述不进历史——
-      「这轮没人点我」的零信息叙述此前灌满 40 条窗，还被后续每个 run 复读一遍；
-    - 杠杆2：时间上限 ``_im_history_minutes`` 分钟——条数 ∩ 时间双约束，
-      「指代」是分钟级的事，跨窗旧话走 conversation_search 现查；
-    - 杠杆3：思考全文与工具名都**不进历史**——思考全文已持久化进会话记录（Web 端
-      展示用）；工具名后缀 ``[上轮执行] 工具: ...`` 已于 2026-11-04 移除：模型会把这行
-      当成"说话格式"模仿，写出正文+假执行标记却不派发工具（实测 8 条），是「未发送」
-      的诱因之一。历史只留真正发出过的文本；
-    - 条数上限维持 12（explicit）/ 40（ambient），压缩归大脑（超 150k 才触发，
-      群 run 恒不触发——本函数是群 run 上下文的唯一塑形处）。
+    规则与 Web 共享骨架（``harness.run_pipeline.build_history``），差异参数化：
+    显式触发 12 条 / ambient 40 条；``harness.im_history_minutes`` 时间窗；
+    静默 run（extra.silent）整条跳过。思考全文与工具名不进历史（杠杆3）。
     """
-    from datetime import datetime
-
-    cut = (now_ts if now_ts is not None else time.time()) - _im_history_minutes() * 60
-    items: List[Dict[str, Any]] = []
-    for r in records or []:
-        role = r.get("role")
-        if role not in ("user", "assistant"):
-            continue
-        if role == "assistant" and (r.get("extra") or {}).get("silent"):
-            continue                                    # 杠杆1：静默叙述不留
-        ts = str(r.get("ts") or "")
-        if ts:
-            try:
-                if datetime.fromisoformat(ts).timestamp() < cut:
-                    continue                            # 杠杆2：出窗的旧话不留
-            except ValueError:
-                pass                                    # 异常时间戳按在窗内处理（fail-open）
-        content = str(r.get("content") or "")
-        if content:
-            items.append({"role": role, "content": content})
-    return items[-(12 if explicit else 40):]
+    return build_history(
+        records,
+        max_items=12 if explicit else 40,
+        time_minutes=_im_history_minutes(),
+        drop_silent=True,
+        now_ts=now_ts,
+    )
 
 
 def _history_fold_note(records: List[Dict[str, Any]],
@@ -320,82 +307,41 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         sid = meta.get("session_id") or ""
         run_key = f"rk_{int(time.time() * 1000)}"
         turn_steps: list = []
-        _flushed = 0
         _last_answer = ""
-        _think_acc: Dict[str, Dict[str, Any]] = {}
         # 显式模式：本轮到底发出去了什么（前端据此标「已发送 / 未发送」）
         send_info: Dict[str, Any] = {}
-
-        def _flush_partial(force: bool = False) -> None:
-            nonlocal _flushed
-            if not (pid and sid):
-                return
-            if not (force or len(turn_steps) - _flushed >= 20):
-                return
-            if len(turn_steps) <= _flushed:
-                return
-            try:
-                ProjectStore.append_message(
-                    pid, sid, "assistant", "", task_id=real_task_id,
-                    extra={"steps": turn_steps[_flushed:], "partial": True, "run_key": run_key},
-                    context_key=_l0_context_key, l0_kind=_l0_kind,
-                    speaker=str(item.get("speaker") or ""))
-                _flushed = len(turn_steps)
-            except Exception:
-                pass
+        recorder = TurnRecorder(
+            turn_steps, project_id=pid, session_id=sid,
+            task_id=real_task_id, run_key=run_key,
+            append_extra={"context_key": _l0_context_key, "l0_kind": _l0_kind,
+                          "speaker": str(item.get("speaker") or "")},
+            allow_empty_thinking=True,
+        )
 
         def _on_thinking(role: str, content: str, model: str) -> None:
             if role == "brain":
-                turn_steps.append({"type": "thinking", "model": model, "content": content})
-                _flush_partial()
+                recorder.add_thinking(role, content, model)
 
         def _on_tool_call(role: str, name: str, arguments: str, result: str, model: str) -> None:
-            if name in ("verify", "verify_done"):
-                return
-            turn_steps.append({"type": "tool_call", "model": model, "name": name,
-                               "arguments": arguments or "", "result": result or ""})
-            _flush_partial()
+            recorder.add_tool_call(role, name, arguments, result, model)
 
         def _on_llm_delta(role: str, kind: str, block_id: str, text: str, model: str) -> None:
             nonlocal _last_answer
             if kind == "reasoning" and role == "brain":
-                # 思考链持久化（2026-11-03）：此前这里只认 message、思考全被丢弃——
-                # 会话记录里 197 条 assistant 仅 3 条带 thinking step 的根因。
-                # 按 block_id 收成 thinking step 进 turn_steps，Web 端 ThinkBlock 由此渲染；
-                # partial 快照由 final 收口覆盖，历史组装不带思考要点（杠杆3），无上下文成本。
-                #
-                # 契约（emitter.py `_delta`/`_emit`）：同一 block_id 的回调携带的是
-                # 「截至当前的**完整快照**」，消费端按 id upsert（Web 侧
-                # `helpers._merge_thinking_step` 就是 `s["content"] = content`）。
-                # 2026-11-04 修复：此处曾写成 `+=` 把快照当增量，O(n²) 前缀爆炸
-                # （`回复回复命回复命苦…`，单条最长 3.2MB，qq 会话文件 93% 体积）。
-                st = _think_acc.get(block_id)
-                if st is None:
-                    st = {"type": "thinking", "id": block_id, "model": model, "content": ""}
-                    _think_acc[block_id] = st
-                    turn_steps.append(st)
-                st["content"] = text
-                _flush_partial()
+                # 同一 block_id 的回调是「截至当前的完整快照」，recorder 按 id upsert
+                recorder.add_thinking(role, text, model, block_id=block_id)
             elif kind == "message" and role == "brain":
                 _last_answer = text
 
-        def _record_final(content: str) -> None:
-            if not (pid and sid):
-                return
-            extra: Dict[str, Any] = {"steps": turn_steps, "run_key": run_key}
+        def _record_final(content: str, extra: Optional[Dict[str, Any]] = None) -> None:
+            payload: Dict[str, Any] = dict(extra or {})
             # 杠杆1（2026-11-03）：零发言 run 打 silent 标——历史组装时整条跳过。
             if _is_silent_run(turn_steps):
-                extra["silent"] = True
+                payload["silent"] = True
             if explicit:
                 # 显式模式：标记这一轮到底发出去没有（前端画「已发送 / 未发送」）
-                extra["send"] = dict(send_info)
-            try:
-                ProjectStore.append_message(
-                    pid, sid, "assistant", content, task_id=real_task_id, extra=extra,
-                    context_key=_l0_context_key, l0_kind=_l0_kind,
-                    speaker=str(item.get("speaker") or ""))
-            except Exception:
-                pass
+                payload["send"] = dict(send_info)
+            recorder.record_final(content, payload)
 
         if pid and sid:
             try:
@@ -452,15 +398,11 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         if _fold:
             run_objective = f"{run_objective}\n{_fold}"
         if reply is not None:
-            try:
-                from harness.outbound import note as _ob_note, resolve as _ob_resolve
-
-                _ob_text = _ob_note(_ob_resolve(str(getattr(reply, "channel_name", "") or ""),
-                                                str(getattr(reply, "chat_id", "") or "")))
-                if _ob_text:
-                    run_objective = f"{run_objective}\n{_ob_text}"
-            except Exception:
-                pass  # 守则是增强项：配置缺失/解析失败不阻断派发
+            run_objective = append_outbound_note(
+                run_objective,
+                str(getattr(reply, "channel_name", "") or ""),
+                str(getattr(reply, "chat_id", "") or ""),
+            )
         spec = TaskSpec(
             objective=run_objective,
             done_when=item.get("done_when", ""),
@@ -481,31 +423,22 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         context.set_source_external(
             reply is not None and not bool(item.get("tools_enabled", True)))
         # 进料道结构标注（F-4）：context_signal 与观测行的 source_kind 同源
-        context.set_source_kind(_l0_kind)
         context.reset_sent()  # 清空上一轮的「已发出」记账
         # H-8：场合键等结构在边界层归一后写入内核信号，内核不再反向读通道句柄。
-        try:
-            from omni_core.local.loop import context_signal as _cs
-            _cs.set_boundary(
-                context_key=_l0_context_key or f"web:{sid}",
-                source_kind=_l0_kind,
-                source_external=reply is not None and not bool(item.get("tools_enabled", True)),
-                peer=str(item.get("speaker") or ""),
-                session_id=sid,
-                sent_count=context.sent_count)
-        except Exception:
-            pass
+        set_run_boundary(
+            context_key=_l0_context_key or f"web:{sid}",
+            source_kind=_l0_kind,
+            source_external=reply is not None and not bool(item.get("tools_enabled", True)),
+            peer=str(item.get("speaker") or ""),
+            session_id=sid,
+            sent_count=context.sent_count,
+        )
         try:
             result = loop.run_task(spec)
         finally:
             context.set_current_reply(None)
             context.set_source_external(False)
-            context.set_source_kind("")
-            try:
-                from omni_core.local.loop import context_signal as _cs
-                _cs.set_boundary()
-            except Exception:
-                pass
+            clear_run_boundary()
 
         summary = _extract_summary(result)
         # 最终口播（真实回答）；内部判定文案只进任务详情/日志，绝不外发
@@ -551,22 +484,10 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         _record_final("\n\n".join(sent_texts) if sent_texts else answer)
         # ── 记忆写链：chat 与 task 只差**工程节流**（chat 高频合并入队），无记忆语义分支
         # ──（2026-11-10「事件 → 助手的取舍 → 记忆」：L1 由助手的显式动作与巩固期内化决定）。
-        try:
-            from omni_core import memory_writer
-
-            if pid:
-                # 写链按进料道只差**工程节流**（chat 高频合并入队），无记忆语义分支：
-                # L1 生长由助手的显式动作与巩固期内化决定（2026-11-10，allow_atoms 退场）。
-                if _l0_kind == "chat":
-                    memory_writer.enqueue_throttled(
-                        pid, brain_cfg, source_task=real_task_id,
-                        did_work=True)
-                else:
-                    memory_writer.enqueue(
-                        pid, brain_cfg, source_task=real_task_id,
-                        did_work=True)
-        except Exception as e:  # noqa: BLE001 —— 写链是增强项，失败不影响本轮
-            print(f"[dispatch] 记忆入队失败（忽略）: {type(e).__name__}: {e}")
+        if pid:
+            enqueue_memory(
+                pid, brain_cfg, source_task=real_task_id,
+                did_work=True, throttled=(_l0_kind == "chat"))
         # run_task 真实返回：success / escalated / steps / trajectory_file …
         # （ok 已在上方兜底代发判定处先行计算，此处复用同一值）
         try:

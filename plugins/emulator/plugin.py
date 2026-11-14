@@ -4,8 +4,7 @@
 默认关闭的能力开关。startup 构造后端并 bind 给工具面；关闭时（enabled=false）
 loader 不装载本包，注册表里没有任何 Android 工具。
 
-配置：``~/.omniagent/plugins/emulator.yaml``（缺省读 plugin.json 的 ``enabled``）；
-兼容旧路径 ``~/.omniagent/environments/emulator.yaml``（一个版本期）。
+配置：``~/.omniagent/plugins/emulator.yaml``（唯一事实源；缺省读 plugin.json 的 ``enabled``）。
 """
 from __future__ import annotations
 
@@ -17,23 +16,8 @@ from plugins.emulator import tools as emulator_tools
 
 
 def _read_own_config() -> Dict[str, Any]:
-    """插件自有配置：优先 plugins/emulator.yaml，空则回退旧 environments/emulator.yaml。"""
-    cfg = plugin_config("emulator")
-    if cfg:
-        return cfg
-    try:
-        from omni_core.local.runtime_paths import env_config_file
-
-        path = env_config_file("emulator")
-        if path.is_file():
-            import yaml
-
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-    except Exception:
-        pass
-    return {}
+    """插件自有配置 ``~/.omniagent/plugins/emulator.yaml``（缺失返回空 dict）。"""
+    return plugin_config("emulator")
 
 
 def startup(ctx) -> None:

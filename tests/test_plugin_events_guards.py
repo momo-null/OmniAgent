@@ -71,6 +71,12 @@ def test_web_has_no_platform_specifics():
     assert not hits, "web/src 不得出现平台名：\n" + "\n".join(hits)
 
 
+def test_relative_host_import_is_detected():
+    """守卫必须能看见 ``from ..channel_gateway``，不能只匹配绝对 harness import。"""
+    assert _imports("from ..channel_gateway import channel_config") == ["..channel_gateway"]
+    assert _imports("from .backend import HostBackend") == [".backend"]
+
+
 def test_plugins_do_not_import_host_internals():
     """插件只通过 manifest 能力 + harness.events 契约与宿主交互，不 import 宿主实现模块。"""
     bad = []
@@ -81,6 +87,9 @@ def test_plugins_do_not_import_host_internals():
         if any(parts[:len(d)] == d for d in PLUGIN_HOST_EXEMPT_DIRS):
             continue
         for mod in _imports(_read(p)):
+            if mod.startswith(".."):
+                bad.append(f"{_rel(p)}: {mod}（相对导入越过 plugins/<name>，会反向依赖宿主）")
+                continue
             allowed = mod == "harness.events" or mod.startswith("harness.events.")
             if mod == "harness" or (mod.startswith("harness.") and not allowed):
                 bad.append(f"{_rel(p)}: {mod}")
@@ -125,6 +134,17 @@ def test_no_legacy_host_package():
     assert not bad, "\n".join(bad)
 
 
+def test_no_runtime_legacy_channel_config_reads():
+    """运行时只认 plugins/<name>.yaml；旧路径解析只允许留在迁移脚本里。"""
+    bad = []
+    for p in PY:
+        if "channel_config_file" in _read(p):
+            bad.append(f"{_rel(p)}: 仍在读旧 channels/<name>.yaml")
+    assert not bad, (
+        "旧通道配置只允许 scripts/migrate_plugin_configs.py 离线处理：\n" + "\n".join(bad)
+    )
+
+
 def test_no_platform_names_in_kernel_modules():
     """omni_core/ 与 model_hub/server 层不得反向认识某个具体平台或宿主实现。"""
     bad = []
@@ -139,3 +159,20 @@ def test_no_platform_names_in_kernel_modules():
                 if mod == "harness" or mod.startswith("harness."):
                     bad.append(f"{_rel(p)}: {mod}")
     assert not bad, "内核不得反向依赖具体平台/宿主实现：\n" + "\n".join(bad)
+
+
+def test_run_pipeline_is_shared_by_both_entries():
+    """历史塑形 / partial / thinking upsert 只准有一份实现，两入口不得再各自长回来。"""
+    entries = [REPO / "harness" / "dispatch.py",
+               REPO / "backend" / "api" / "routers" / "chat_runtime.py"]
+    forbidden = ("def _flush_partial", "def _maybe_flush_partial",
+                 "def _append_assistant", "_think_acc")
+    bad = []
+    for p in entries:
+        src = _read(p)
+        for token in forbidden:
+            if token in src:
+                bad.append(f"{_rel(p)}: {token} 应走 harness.run_pipeline.TurnRecorder")
+        if "harness.run_pipeline" not in src:
+            bad.append(f"{_rel(p)}: 未接入 harness.run_pipeline")
+    assert not bad, "\n".join(bad)

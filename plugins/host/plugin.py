@@ -5,8 +5,7 @@
 时注册，loader 统一归 unit/source）；关闭时（enabled=false）loader 不装载本包，
 注册表里没有任何本机操作工具。
 
-配置：``~/.omniagent/plugins/host.yaml``（缺省读 plugin.json 的 ``enabled``）；
-兼容旧路径 ``~/.omniagent/environments/host.yaml``（一个版本期，命中即迁移语义）。
+配置：``~/.omniagent/plugins/host.yaml``（唯一事实源；缺省读 plugin.json 的 ``enabled``）。
 """
 from __future__ import annotations
 
@@ -18,23 +17,8 @@ from plugins.host import tools as host_tools
 
 
 def _read_own_config() -> Dict[str, Any]:
-    """插件自有配置：优先 plugins/host.yaml，空则回退旧 environments/host.yaml。"""
-    cfg = plugin_config("host")
-    if cfg:
-        return cfg
-    try:
-        from omni_core.local.runtime_paths import env_config_file
-
-        path = env_config_file("host")
-        if path.is_file():
-            import yaml
-
-            data = yaml.safe_load(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-    except Exception:
-        pass
-    return {}
+    """插件自有配置 ``~/.omniagent/plugins/host.yaml``（缺失返回空 dict）。"""
+    return plugin_config("host")
 
 
 def startup(ctx) -> None:

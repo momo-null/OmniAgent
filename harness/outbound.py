@@ -1,12 +1,12 @@
 """通道出站参数的归一与机械闸。
 
-- **键统一**：所有 ``channels/<name>.yaml`` 用同一套 ``outbound`` 通用键，
+- **键统一**：所有 ``plugins/<name>.yaml`` 用同一套 ``outbound`` 通用键，
   禁止平台专属键——平台差异只是值。
 - **归一**：``resolve(channel, chat_id)`` 是唯一的配置读取+拍平入口，
   三个消费方共用本模块：
     · ``harness/dispatch.py``   —— 网关入站：拍平结果作「本轮场合自述」附到模型输入
                                   （display_text 保留原话，会话历史不污染）；
-    · ``chat_runtime.py``       —— Web 入口：同构（channels/web.yaml 缺省不存在 → 全空零影响）；
+    · ``chat_runtime.py``       —— Web 入口：同构（plugins/web.yaml 缺省不存在 → 全空零影响）；
     · ``plugins/messaging``     —— 机械闸（唯一执行点）：发送时按 (通道, 会话) 解析，
                                   空行分条 / 超限续拆 / 拒发。
 - **发送时解析**：Web 后端多并发请求，进程级单值上下文会串轮；cron 又无入站来源、
@@ -14,7 +14,7 @@
 - **作用面**：run 级，不常驻、不进记忆；场合键只选择参数不过滤记忆。
 - **require_review**：schema 预留，机械执行（通用待发队列）属第二期，本版本不读取不执行。
 
-配置 schema（所有通道同构，模板见 examples/channels/*.yaml）::
+配置 schema（所有通道同构，模板见 examples/plugins/*.yaml）::
 
     outbound:
       identity: ""            # 对外自称（可选；不写人格覆盖声明）
@@ -61,7 +61,7 @@ def context_key_of(chat_id: str) -> str:
 
 
 def load_outbound(channel: str) -> Dict[str, Any]:
-    """读 ``channels/<channel>.yaml`` 的 outbound 块；通道无配置/文件缺失 → {}。"""
+    """读 ``plugins/<channel>.yaml`` 的 outbound 块；通道无配置/文件缺失 → {}。"""
     if not channel:
         return {}
     try:

@@ -19,7 +19,7 @@
   InboundMessage。TODO_XHS_LIVE：publish 的返回结构以实盘为准。
 - 出站参数 = 通道 yaml 的 outbound 块。
 
-配置 ``~/.omniagent/channels/xiaohongshu.yaml``（模板 examples/channels/xiaohongshu.yaml）::
+配置 ``~/.omniagent/plugins/xiaohongshu.yaml``（模板 examples/plugins/xiaohongshu.yaml）::
 
     enabled: false             # 出厂关：xiaohongshu-mcp 跑起来并登录后再开
     mode: dry_run              # dry_run | draft | live（与 bilibili 同语义）
@@ -529,12 +529,16 @@ def _main() -> int:
     ap.add_argument("--config-dir", default="", help="覆盖状态目录")
     args = ap.parse_args()
 
-    from ..channel_gateway import channel_config
-    cfg = channel_config("xiaohongshu")
+    from omni_core.tools.loader import plugin_config
+
+    cfg = plugin_config("xiaohongshu")
+    if not cfg:
+        print("提示：~/.omniagent/plugins/xiaohongshu.yaml 缺失——登录/联调照常继续；"
+              "要让网关拉起本通道请按 examples/plugins/xiaohongshu.yaml 建配置并置 enabled: true")
     if args.config_dir:
         cfg["state_dir"] = args.config_dir
-    if not cfg.get("enabled", False):
-        print("提示：channels/xiaohongshu.yaml 未启用——登录/联调照常继续；"
+    if cfg and not cfg.get("enabled", True):
+        print("提示：plugins/xiaohongshu.yaml 的 enabled=false——登录/联调照常继续；"
               "要让网关拉起本通道请置 enabled: true 并重启网关")
     a = XhsAdapter(cfg)
     if args.login_status:

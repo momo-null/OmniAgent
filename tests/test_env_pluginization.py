@@ -75,6 +75,14 @@ def test_env_plugins_listed_and_disabled_by_default():
 
 
 # === ② config 兼容：runtime.backend 残留键无消费方 =============================
+def test_legacy_environment_path_helpers_removed():
+    """环境概念退场后，不再保留 environments/ 的路径 helper 或创建项。"""
+    from omni_core.local import runtime_paths as rp
+
+    assert not hasattr(rp, "environments_root")
+    assert not hasattr(rp, "env_config_file")
+
+
 def test_runtime_backend_key_unused_in_kernel():
     import importlib
 

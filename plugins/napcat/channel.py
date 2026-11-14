@@ -13,7 +13,7 @@
 - 硬性细节：忽略 ``post_type=message_sent``（否则本机发出的消息经 WS 回流
   变成新输入，形成自激循环）；``message_id`` 去重；长文本按 1200 字符分条。
 
-配置文件 ``~/.omniagent/channels/napcat.yaml``（每通道一文件，与 plugins/ 同构）::
+配置文件 ``~/.omniagent/plugins/napcat.yaml``（每通道一文件，与 plugins/ 同构）::
 
     enabled: true
     http_url: http://127.0.0.1:3000
@@ -44,7 +44,7 @@
       quiet_hours: "01-08"    #   安静时段（不主动，被点名仍回）
       timers: true              # false = 关掉 wave 批量定时器（仅测试手动 _evaluate 时用）
 
-逐键取值范围与「改了要不要重启」见 ``examples/channels/napcat.yaml``（本块只留最小对照）。
+逐键取值范围与「改了要不要重启」见 ``examples/plugins/napcat.yaml``（本块只留最小对照）。
 
 回不回语音由**模型**决定：语音段转写成 `[语音] <内容>`（保留媒介标记），模型要发语音
 就调 ``msg_send_voice``，否则用 ``msg_send_text``。通道不再按入站形式自动改发送形式。

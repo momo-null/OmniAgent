@@ -10,11 +10,13 @@ examples/                                  →  ~/.omniagent/
 ├── mcp.json               MCP server 清单
 ├── voice_service.yaml     语音引擎服务（独立进程，不是插件配置）
 ├── channels/
+│   └── routes.yaml        聊天路由表：哪个群/会话属于哪个项目
+├── plugins/
 │   ├── napcat.yaml        QQ 通道（NapCat / OneBot）
 │   ├── feishu.yaml        飞书通道
 │   ├── wecom.yaml         企微通道（骨架，尚未实现）
-│   └── routes.yaml        聊天路由表：哪个群/会话属于哪个项目
-├── plugins/
+│   ├── bilibili.yaml      B站通道
+│   ├── xiaohongshu.yaml   小红书通道
 │   └── voice.yaml         语音插件的调用端（只描述「请求发到哪」）
 └── cron/
     └── jobs.json          定时任务清单
@@ -29,7 +31,7 @@ if not exist "%USERPROFILE%\.omniagent\cron"     mkdir "%USERPROFILE%\.omniagent
 copy examples\*.json          %USERPROFILE%\.omniagent\
 copy examples\config.yaml     %USERPROFILE%\.omniagent\
 copy examples\voice_service.yaml %USERPROFILE%\.omniagent\
-copy examples\channels\*.yaml %USERPROFILE%\.omniagent\channels\
+copy examples\channels\routes.yaml %USERPROFILE%\.omniagent\channels\
 copy examples\plugins\*.yaml  %USERPROFILE%\.omniagent\plugins\
 copy examples\cron\jobs.json  %USERPROFILE%\.omniagent\cron\
 ```
@@ -39,7 +41,7 @@ copy examples\cron\jobs.json  %USERPROFILE%\.omniagent\cron\
 ```sh
 mkdir -p ~/.omniagent/{channels,plugins,cron}
 cp examples/{models.json,config.yaml,mcp.json,voice_service.yaml} ~/.omniagent/
-cp examples/channels/*.yaml ~/.omniagent/channels/
+cp examples/channels/routes.yaml ~/.omniagent/channels/
 cp examples/plugins/*.yaml  ~/.omniagent/plugins/
 cp examples/cron/jobs.json  ~/.omniagent/cron/
 ```
@@ -55,10 +57,13 @@ cp examples/cron/jobs.json  ~/.omniagent/cron/
 | `config.yaml` | `~/.omniagent/config.yaml` | core 引擎旋钮 | 下一次运行生效（运行级快照，当前这轮不受影响） | 设置 → 通用 / 安全 / 模型 / 编排 / 伙伴（记忆开关） |
 | `mcp.json` | `~/.omniagent/mcp.json` | 工具运行时（MCP server 启停） | Web 保存即时；**手改要重启** | 技能与工具 |
 | `voice_service.yaml` | `~/.omniagent/voice_service.yaml` | 语音引擎服务（**独立进程**） | 监听/令牌/空闲秒数在**服务启动**时读，音色与路径在调用时读 | 设置 → 模型 → 语音引擎 |
-| `channels/napcat.yaml`<br>`channels/feishu.yaml`<br>`channels/wecom.yaml` | `~/.omniagent/channels/<同名>.yaml` | 网关通道适配器 | 重启网关（适配器在启动时按文件构造） | 无，纯手改 |
+| `plugins/napcat.yaml`<br>`plugins/feishu.yaml`<br>`plugins/wecom.yaml`<br>`plugins/bilibili.yaml`<br>`plugins/xiaohongshu.yaml` | `~/.omniagent/plugins/<同名>.yaml` | 网关/插件加载器 | 重启网关（适配器在启动时按文件构造） | 无，纯手改 |
 | `channels/routes.yaml` | `~/.omniagent/channels/routes.yaml` | 网关聊天路由 | 每条消息重读，**改完即生效** | 无，纯手改 |
 | `plugins/voice.yaml` | `~/.omniagent/plugins/voice.yaml` | 语音插件调用端 | 端点类键调用时读；`enabled` 开关重启生效 | 技能与工具（开关） |
 | `cron/jobs.json` | `~/.omniagent/cron/jobs.json` | 调度器 | 每 tick 重读，**改文件即生效** | 定时任务 |
+
+> 旧版 `~/.omniagent/channels/<name>.yaml` 不再被运行时读取；已有旧配置先运行
+> `python scripts/migrate_plugin_configs.py`（会保留 `enabled` 并备份旧文件）。
 
 ## 三条约定
 
