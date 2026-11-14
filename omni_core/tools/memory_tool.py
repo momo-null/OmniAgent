@@ -56,15 +56,41 @@ def take_recall_stats() -> Dict[str, Any]:
     return st
 
 
+_TASK_FETCH_QUOTA = 12    # task 档：cron/beat/手动派发，批量记忆维护的余量
+_TASK_NARRATIVE_QUOTA = 4
+
+
+def _run_source_kind() -> str:
+    """本轮 source_kind（边界层写入的 run 级结构信号；取不到为空 → 按 chat 档）。"""
+    try:
+        from omni_core.local.loop import context_signal
+        return str((context_signal.boundary() or {}).get("source_kind") or "")
+    except Exception:
+        return ""
+
+
 def _quota_cfg() -> Dict[str, int]:
-    """读侧自取配额（走配置；缺省 3 / 2，行为与旧常量一致）。"""
+    """读侧自取配额（走配置；chat 档缺省 3 / 2，行为与旧常量一致）。
+
+    2026-11-14 分档：task（cron/beat/手动派发）走 ``task_total`` / ``task_narrative``
+    单独档——批量记忆维护（一次修多条/自查补漏）是任务轮的正当形态，与查询型
+    聊天共用一个数会把维护拦腰斩断；消息轮（chat）原档不动。
+    """
     try:
         import config
+        p = "runtime.knowledge.memory.read_quota."
+        if _run_source_kind() == "task":
+            return {
+                "total": max(1, int(config.get_config(
+                    p + "task_total", _TASK_FETCH_QUOTA) or _TASK_FETCH_QUOTA)),
+                "narrative": max(0, int(config.get_config(
+                    p + "task_narrative", _TASK_NARRATIVE_QUOTA) or 0)),
+            }
         return {
             "total": max(1, int(config.get_config(
-                "runtime.knowledge.memory.read_quota.total", _FETCH_QUOTA) or _FETCH_QUOTA)),
+                p + "total", _FETCH_QUOTA) or _FETCH_QUOTA)),
             "narrative": max(0, int(config.get_config(
-                "runtime.knowledge.memory.read_quota.narrative", _NARRATIVE_QUOTA) or 0)),
+                p + "narrative", _NARRATIVE_QUOTA) or 0)),
         }
     except Exception:
         return {"total": _FETCH_QUOTA, "narrative": _NARRATIVE_QUOTA}
