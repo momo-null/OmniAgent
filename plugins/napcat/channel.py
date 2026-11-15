@@ -1371,6 +1371,14 @@ class NapcatAdapter:
                                         name="napcat-ws", daemon=True)
         self._thread.start()
 
+    def ready(self) -> bool:
+        """探针（manifest lifecycle.health.probe）：入站 WS 当前是否在线。
+
+        `_run` 的连接/断开路径会维护 ``self._ws``，这里只读；体检循环拿它
+        写进 sources.json 的 probe，Web 端「QQ 登录」页头部状态因此真实化。
+        """
+        return self._ws is not None
+
     def reply_to(self, chat_id: str) -> ReplyChannel:
         return NapcatReply(self, chat_id)
 
@@ -1594,6 +1602,15 @@ class NapcatAdapter:
                 data_url = fetch_image_data_url(url)
                 if data_url:
                     attachments.append({"type": "image", "data_url": data_url})
+            if self._has_image(raw) and not attachments:
+                # 直发图下载失败（CDN 链接失效/超限/无直链）→ 占位注明「拉取失败」，
+                # 不让模型把 [图片] 当成看得见的图空手连环查（2026-11-15 私聊 404
+                # 案例：图没进上下文，模型查遍记忆工具，收尾轮流损坏的残片被兜底代发）。
+                # 只改喂模型的 text——plain 已在上面存好，用户可见历史仍是干净占位。
+                if "[图片]" in text:
+                    text = text.replace("[图片]", "[图片]（拉取失败，看不到内容）", 1)
+                else:
+                    text = f"{text}[图片]（拉取失败，看不到内容）"
 
         display = f"「{nickname}」({user_id})" if nickname else f"QQ {user_id}"
         if message_type == "group":

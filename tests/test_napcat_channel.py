@@ -538,6 +538,26 @@ def test_image_message_carries_single_data_url(adapter, monkeypatch):
     assert "[图片]" in got[0].text  # 文本投影保留占位（会话历史只存这个）
 
 
+def test_image_download_failure_annotates_placeholder(adapter, monkeypatch):
+    """直发图下载失败（404/超限/无直链）→ 占位注明拉取失败，模型不再把 [图片]
+    当成看得见的图空手连环查；display_text（用户可见历史）仍是干净占位。"""
+    monkeypatch.setattr(mod, "fetch_image_data_url", lambda url: "")
+    got, emit = _collector()
+    adapter._handle_event({
+        "post_type": "message", "message_type": "private", "self_id": 111,
+        "user_id": 222, "message_id": 504,
+        "message": [
+            {"type": "image", "data": {"url": "http://x/broken.jpg"}},
+            {"type": "text", "data": {"text": "我给你做了一个身体"}},
+        ],
+    }, emit)
+    assert len(got) == 1
+    assert got[0].attachments == []
+    assert "[图片]（拉取失败，看不到内容）" in got[0].text
+    assert "我给你做了一个身体" in got[0].text
+    assert "拉取失败" not in got[0].display_text  # 注记只喂模型，不进用户可见历史
+
+
 def test_group_image_without_at_is_not_downloaded(adapter, monkeypatch):
     """群聊没 @ 助手 → 直接丢弃，连图都不下载（群聊刷图不白白耗流量与 token）。"""
     calls = []
