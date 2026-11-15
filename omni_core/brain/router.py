@@ -106,6 +106,10 @@ def _endpoint_of(pid: str, prov: Dict[str, Any], model_id: str) -> Dict[str, Any
         # 该字段（vLLM/OpenRouter 等端点特性才有），只能配置声明，不做运行时探测。
         "contextWindow": int(model.get("contextWindow") or 0),
         "request": dict(prov.get("request") or {}),
+        # 思考开关能力声明（provider 条目配置）：该端点接受 `reasoning_effort`
+        # 请求参数（2026-11-15 探针实测 link/ai.qpcmqam.cn 认 none/low/medium/high）。
+        # 未声明的 provider 不下发该参数——OpenAI 官方等严格端点会 400 拒收未知参数。
+        "supports_reasoning_effort": bool(prov.get("supports_reasoning_effort")),
         "model_provider_id": pid,
     }
 
@@ -143,14 +147,33 @@ def resolve_main_with_engine(cfg_brain: Optional[Dict[str, Any]] = None) -> Dict
     端点真源是 models.json（main 槽位 defaults）；``config.brain`` 里的旧端点键
     （base_url/model/api_key 等）**不参与解析**。目录里 main 未配置时返回仅含
     引擎参数的 dict（调用方据 ``base_url``/``model`` 缺失自行报错）。
+
+    2026-11-15 起为 :func:`build_brain_cfg`（无显式选择）的薄壳——Web /chat 与
+    通道网关两条派发链的 brain_cfg 装配收口到同一个构造函数，思考开关等派生
+    只写一处。
     """
-    src = dict(cfg_brain or {})
+    return build_brain_cfg(model=None, engine_src=cfg_brain)
+
+
+def build_brain_cfg(model: Optional[str] = None,
+                    engine_src: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """统一 brain_cfg 装配（单点）：main 槽位端点 + config.brain 引擎参数。
+
+    Args:
+        model: 显式选择 ``"<provider_id>/<model_id>"``（Web 请求体可带）；非法忽略。
+        engine_src: 引擎参数来源 dict（调用方从 config 读 ``brain`` 键传入；
+            端点键 base_url/model/api_key 一律不透传）。
+
+    Web ``_make_brain_cfg`` 与通道网关 ``resolve_main_with_engine`` 都从这里出，
+    避免同一装配逻辑两份实现漂移（2026-11-15 Web 与通道网关装配收口）。
+    """
+    src = dict(engine_src or {})
     out: Dict[str, Any] = {
         "reasoning_mode": str(src.get("reasoning_mode", "native") or "native"),
         "maxInputTokens": int(src.get("maxInputTokens", 0) or 0),
         "long_task": dict(src.get("long_task") or {}),
     }
-    ep = resolve_slot("main")
+    ep = resolve_slot("main", model)
     if ep:
         out.update(ep)
     return out

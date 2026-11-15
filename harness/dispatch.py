@@ -248,8 +248,10 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
 
         # 端点真源收敛（2026-11-03）：与 Web /chat 同源——端点一律来自 models.json
         # main 槽位（defaults.main），config.brain 只保留引擎参数；旧端点键不再被读取。
+        # 2026-11-15 装配收口：与 Web `_make_brain_cfg` 同走 router.build_brain_cfg
+        # 单点构造（思考开关等派生只写一处）。
         brain_src = (config.load_config() or {}).get("brain", {}) or {}
-        brain_cfg = model_router.resolve_main_with_engine(brain_src)
+        brain_cfg = model_router.build_brain_cfg(model=None, engine_src=brain_src)
         if not (brain_cfg.get("base_url") and brain_cfg.get("model")):
             raise RuntimeError("大脑未配置（models.json 未设置 main 槽位默认模型），无法派发任务")
         if not (brain_cfg.get("api_key") or brain_cfg.get("api_key_env")):
@@ -370,6 +372,12 @@ def _run_task_once(item: Dict[str, Any]) -> DispatchResult:
         loop = ToolLoop(brain_cfg, verbose=False,
                         on_thinking=_on_thinking, on_tool_call=_on_tool_call,
                         on_llm_delta=_on_llm_delta,
+                        # mode 透传（2026-11-15，用户定案「QQ 必须走 chat」）：对话轮
+                        # （reply 非空，含私聊/群点名/旁听升格）= chat——人格版 system
+                        # + 思考显式关（reasoning_effort=none）；cron（reply=None）
+                        # 是任务口径 = auto——task 版 system + 思考恒开。mode 是参数
+                        # 非通道属性（2026-10-31 收窄），由派发内容决定而非通道。
+                        mode="chat" if reply is not None else "auto",
                         # 外部消息（他人可达的通道）默认纯对话：见 submit 的 tools_enabled
                         tools_enabled=bool(item.get("tools_enabled", True)),
                         # 显式发送通道：纯对话也不给工具，但必须放行「说话」这几个动作

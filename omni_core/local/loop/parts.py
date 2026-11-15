@@ -72,6 +72,16 @@ def _strip_after_think(text: str) -> str:
     if "<think>" in t:
         return ""
     return t.strip()
+
+
+# ── 标签残片消毒（2026-11-15 事故族）：单一实现在 omni_core.brain.sanitize
+#（零依赖中性模块，brain 与 local.loop 双侧可导入无循环）；此处转出供 emitter
+# 等既有 import 面使用，规则永不在此分叉。
+from omni_core.brain.sanitize import (  # noqa: F401
+    strip_tag_junk,
+    is_pure_tag_fragment,
+    SANITIZE_STATS,
+)
 class _SubtaskGate:
     """L2 门控：完成判定 / 备注写入（供 SDK 元工具 task_done / verify / record 调用）。
 

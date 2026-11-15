@@ -262,8 +262,12 @@ def test_chat_mode_skips_finish_intent_gate(monkeypatch):
     install_fake_env(monkeypatch, _FakeExec)
     monkeypatch.setattr(tl.config, "load_config", lambda: {})
     cfg = {"model": "m", "base_url": "http://localhost:9", "api_key": "test"}
-    assert tl.ToolLoop(brain_cfg=cfg, mode="chat")._plain_finish_judge(None) is None, \
-        "对话取向不付收尾意图门"
+    # 2026-11-15 两级化：chat 仍不付 LLM 判定（普通文本 → None），但保留确定性
+    # 残片签名层——残片不是交付物，放行会被兜底代发出去（t_9c2c0634e9ab 实测）
+    chat_judge = tl.ToolLoop(brain_cfg=cfg, mode="chat")._plain_finish_judge(None)
+    assert callable(chat_judge), "chat 保留残片签名层"
+    assert chat_judge("普通的一段对话回复") is None, "chat 不付 LLM 判定"
+    assert chat_judge('<memory_recall">') is not None, "chat 残片仍被拦下"
     assert callable(tl.ToolLoop(brain_cfg=cfg, mode="task")._plain_finish_judge(None)), \
         "task 取向仍装门（oneshot 假成功守门人不动）"
     assert callable(tl.ToolLoop(brain_cfg=cfg, mode="auto")._plain_finish_judge(None))

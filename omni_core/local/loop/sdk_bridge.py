@@ -556,7 +556,12 @@ class SdkBridgeMixin:
             _req = (self.brain_cfg or {}).get("request") or {}
             _mt = int(_req.get("max_tokens", 0) or 0)
             _iu = bool(config.get_config("brain.request.include_usage", True))
-            if _mt > 0 or _iu:
+            # 思考开关（2026-11-15，用户定案）：ToolLoop 按 mode 推导写入
+            # brain_cfg.request.reasoning_effort（chat=none / task-auto=high，
+            # 仅声明 supports_reasoning_effort 的 provider 才有值）——经
+            # extra_args 直通请求体，思考从「端点随机决定」变成显式开关。
+            _effort = str(_req.get("reasoning_effort") or "").strip()
+            if _mt > 0 or _iu or _effort:
                 from agents import ModelSettings
 
                 # 与原语义一致：仅 max_tokens>0 时下发 temperature/max_tokens；
@@ -565,6 +570,7 @@ class SdkBridgeMixin:
                     temperature=float(_req.get("temperature", 0.3) or 0.3) if _mt > 0 else None,
                     max_tokens=_mt if _mt > 0 else None,
                     include_usage=True if _iu else None,
+                    extra_args=({"reasoning_effort": _effort} if _effort else None),
                 )
                 if _mt > 0:
                     _max_output_tokens = _mt
@@ -674,6 +680,10 @@ class SdkBridgeMixin:
                 _first = dict(_user_content[0])
                 _first["text"] = _context_note + "\n\n" + str(_first.get("text") or "")
                 _user_content = [_first] + list(_user_content[1:])
+        # 消毒计数快照（2026-11-15 事故族观测面）：run 收尾按 delta 落一行轨迹，
+        # 中转站漏不漏、哪个环节剥的，per-run 可归属。
+        from omni_core.brain.sanitize import SANITIZE_STATS as _SANITIZE_STATS
+        _ss_before = dict(_SANITIZE_STATS)
         res = run_subtask_sdk(
             brain,
             instructions=system_prompt,
@@ -734,6 +744,17 @@ class SdkBridgeMixin:
         )
         # M7：主 agent 的派发计划（由 dispatch 元工具写到 gate 上）
         res["dispatch_plan"] = list(getattr(gate, "dispatch_plan", None) or [])
+        # 消毒计数落盘（delta 非零才落一行）：input=进历史前剥壳（回路切断量），
+        # record=展示/收尾文本剥壳（用户面防护量），fragment=收尾残片重试次数
+        try:
+            _ss_delta = {k: int(_SANITIZE_STATS.get(k, 0)) - int(_ss_before.get(k, 0))
+                         for k in ("input_strips", "record_strips", "fragment_retries")}
+            if traj is not None and any(_ss_delta.values()):
+                traj.log_think(json.dumps({"kind": "sanitize_stats", **_ss_delta},
+                                          ensure_ascii=False),
+                               "brain", str(getattr(brain, "model", "") or ""))
+        except Exception:
+            pass
         # P1 观测：本 run 的 memory_recall 自取行为落观测记录一行
         # （零查标记由此对出；lead-in 已下线，"注入了什么"看 memory_injected 轨迹）。
         # §8.3：主键 run_id / 进料道 / 是否外部 / 注入字符 / 发话与 LLM 调用一并落行。

@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 from omni_core.brain.llm import LLMClient, model_health_ok
 from omni_core.brain.prompt import build_system_prompt
 from omni_core.brain import tools as brain_tools
+from omni_core.brain.sanitize import is_pure_tag_fragment, SANITIZE_STATS
 from omni_core.local.world_model import WorldModel
 from omni_core.local.states import AgentState
 from omni_core.local.trajectory import TrajectoryStore
@@ -262,32 +263,44 @@ class InstructionMixin:
 
         背景：畸形调用表现为「文本被当普通输出、调用根本不派发」,而 oneshot 语义会把
         纯文本收尾判成功 → 任务静默假成功（doc/plans/implemented/memory-architecture.md §6）。
-        判断**全 LLM**（是否在尝试发起但未派发调用）,零厂商格式字面量——与
-        「语义判断全 LLM、脚本只做簿记」红线同构;仅 oneshot 无校验条件路径触发。
+        判断分两级（2026-11-15 重构）：
+        ① **确定性残片签名**（零成本，chat/task 都查）：收尾文本整体是损坏的工具
+          调用残片（如 ``<memory_recall">``，native 调用组装失败泄漏）→ 纠正消息
+          回灌重跑——chat 的纯文本收尾是交付物，但残片不是交付物，放行它就是让
+          兜底代发把垃圾发给用户（t_9c2c0634e9ab 实测）。不付 LLM 往返。
+        ② **LLM 提取式判定**（仅 task/auto，原逻辑）：判断全 LLM，零厂商格式字面量。
 
-        取向门（2026-11-04）：**对话取向（mode=chat）不付这道门**。它防的是「oneshot 任务
-        把没派发的畸形调用当结论、静默假成功」,而 chat 的纯文本收尾**就是交付物本身**——
-        没有「任务成功」这件事可被误判。judge 是一次不计入 brain_calls 的额外模型往返
-        （timeout 90s）,压在用户已经看完答案之后：本机同一句闲聊实测,口播完成 → run 结束
-        的门内尾巴 **34.29s**,关门后 **0.04s**（A/B 口径：runtime.long_task
-        .finish_intent_check=false）。task/auto 取向语义不变。
+        取向门（2026-11-04）：**对话取向（mode=chat）不付②这道门**（纯文本收尾就是
+        交付物本身，judge 是一次不计入 brain_calls 的额外模型往返，实测门内尾巴
+        34.29s → 关门后 0.04s）。①是纯正则（微秒级），chat 也保留——受
+        ``_FINISH_INTENT_MAX``（2 次）同一预算约束。
 
-        judge 异常/无 brain_cfg/配置关/对话取向 → 返回 None（fail-open=现状）。
+        judge 异常/无 brain_cfg（仅 LLM 级）/配置关（仅 LLM 级）→ fail-open。
         """
         brain_cfg = getattr(self, "brain_cfg", None)
-        if not brain_cfg:
-            return None
-        if str(getattr(self, "mode", "auto") or "auto") == "chat":
-            return None
-        try:
-            # 总闸（设置页「通用」→ 收尾意图门）：只对 task/auto 有效——上面那行 chat
-            # 退出在读键之前，所以 chat 不受本开关影响，不存在"开关开着 + chat 被关掉"的组合。
-            if not bool(config.get_config("runtime.long_task.finish_intent_check", True)):
-                return None
-        except Exception:
-            pass
+        is_chat = str(getattr(self, "mode", "auto") or "auto") == "chat"
 
         def _judge(text: str) -> Optional[str]:
+            # ① 确定性残片签名（2026-11-15 事故族）：剥完为空/整体畸形开标签
+            #    → 格式失败而非交付物，纠正回灌重跑（同门既有语义：不 return，
+            #    落回 while 下一块，模型按纠正消息重试）。零成本，chat/task 都查、
+            #    不受下方开关影响（护的是兜底代发出站面，不是省 LLM 往返）。
+            if text and is_pure_tag_fragment(text):
+                SANITIZE_STATS["fragment_retries"] += 1
+                self._log_knowledge_injection(traj, {
+                    "kind": "tag_fragment_retry", "chars": len(text or "")})
+                return ("你上一条输出是损坏的工具调用残片（形如 `<工具名\">` 的标签碎片，"
+                        "不是正常回复）。请重新给出你想说的最终回复；如需调用工具，"
+                        "用结构化 tool_calls 发出。")
+            # ② 对话取向退出（原逻辑）：chat 的纯文本收尾就是交付物，不付 LLM 判定
+            if is_chat:
+                return None
+            # 总闸（设置页「通用」→ 收尾意图门）：只对 task/auto 的 LLM 级判定有效
+            try:
+                if not bool(config.get_config("runtime.long_task.finish_intent_check", True)):
+                    return None
+            except Exception:
+                pass
             if not text or not text.strip():
                 return None
             try:

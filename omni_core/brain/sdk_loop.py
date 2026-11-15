@@ -28,6 +28,8 @@ from agents import StopAtTools
 from agents.tool import function_tool as sdk_function_tool
 from agents.tool import FunctionTool
 
+from omni_core.brain.sanitize import strip_tag_junk, is_pure_tag_fragment, SANITIZE_STATS
+
 from omni_core.async_bridge import run_async, create_task, wait_task
 from omni_core.brain.chat_bridge import build_chat_bridge_model
 import config  # 全局配置（runtime.chunk_turns 可覆盖默认分块大小）
@@ -957,6 +959,57 @@ class _OutputTruncationModel(Model):
             yield chunk
 
 
+class _ContentSanitizeModel(Model):
+    """输入侧消毒（2026-11-15 空壳污染回路）：每次请求前剥掉消息文本里的标签残片。
+
+    背景（生产实测）：中转站偶发把空 ``<thinking> </thinking>`` 包裹序列化进
+    content 流；SDK Runner 把本 run 自己的回复累积进后续请求 input，模型看到
+    「自己上轮说过」就 100% 模仿（479/479）——一个种子污染整条 run。本包装在
+    **请求边界**剥掉空包裹与前导残片，切断模仿回路：种子即使漏进来也只出现一次。
+
+    与 review_lint R4 红线（_TailInjectModel 每步**追加**固定内容）不同类：
+    本包装**只删不增**，且仅在文本命中污染形态时改写——干净 run 输入零字节
+    差异，前缀缓存不受影响。剥壳规则集中在 ``parts.strip_tag_junk``（输入侧/
+    记录侧/收尾判定三层共用同一实现，避免规则漂移）。
+    """
+
+    # 只处理纯文本 role 消息：工具结果（function_call output）里可能有合法
+    # HTML/XML，一律不碰。
+    _ROLE_MSG = ("user", "assistant", "system")
+
+    def __init__(self, inner: Model):
+        self._inner = inner
+
+    def _sanitize_items(self, items: List[Any]) -> List[Any]:
+        out: List[Any] = []
+        for it in items:
+            if (isinstance(it, dict)
+                    and str(it.get("role") or "") in self._ROLE_MSG
+                    and isinstance(it.get("content"), str) and it["content"]):
+                clean = strip_tag_junk(it["content"])
+                if clean != it["content"].strip():
+                    SANITIZE_STATS["input_strips"] += 1
+                if clean != it["content"]:
+                    it = {**it, "content": clean}
+            out.append(it)
+        return out
+
+    async def get_response(self, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(kwargs.get("input"), list):
+            kwargs["input"] = self._sanitize_items(kwargs["input"])
+        elif len(args) >= 2 and isinstance(args[1], list):
+            args = (args[0], self._sanitize_items(args[1])) + tuple(args[2:])
+        return await self._inner.get_response(*args, **kwargs)
+
+    async def stream_response(self, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(kwargs.get("input"), list):
+            kwargs["input"] = self._sanitize_items(kwargs["input"])
+        elif len(args) >= 2 and isinstance(args[1], list):
+            args = (args[0], self._sanitize_items(args[1])) + tuple(args[2:])
+        async for chunk in self._inner.stream_response(*args, **kwargs):
+            yield chunk
+
+
 def _deltas_of(event) -> List[tuple]:
     """从 SDK 原始流式事件抽取 ``(kind, text)`` 增量（kind ∈ {reasoning, message}）。
 
@@ -1651,6 +1704,11 @@ def _assemble_agent_stack(
             context_note=context_note,
             extra_note=mcp_catalog,
         )
+    # 输入侧消毒（2026-11-15 事故族）：包在压缩**之外**、截断之内——每次请求的
+    # 最终装配输入（含压缩产物）都过一遍剥壳，模型永远看不到「自己上轮输出过
+    # <thinking> </thinking>」——实测该残片进历史后后续调用 100% 模仿（479/479）。
+    # 只删不增，与 R4 红线（_TailInjectModel 每步追加固定内容）不同类。
+    model = _ContentSanitizeModel(model)
     # T4.7：输出截断检测——包在最外层，拿到最终响应的 usage 用量
     if max_output_tokens > 0:
         model = _OutputTruncationModel(model, max_output_tokens, on_truncate)

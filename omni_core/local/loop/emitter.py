@@ -34,6 +34,8 @@ from omni_core.local.loop.parts import (
     RECORD_TOOL_SCHEMA,
     _WORKER_EXTRA_SCHEMAS,
     _strip_after_think,
+    strip_tag_junk,
+    SANITIZE_STATS,
     _SubtaskGate,
     _ARTIFACT_MAX,
     _ARTIFACT_SHOW_MAX,
@@ -103,7 +105,13 @@ class EmitterMixin:
                     self.on_llm_delta(role, "reasoning", f"{role}-R{seq}-{_run_nonce}", "".join(rbuf), model)
                 else:
                     mbuf.append(text)
-                    self.on_llm_delta(role, "message", f"{role}-M{seq}-{_run_nonce}", "".join(mbuf), model)
+                    # 记录侧消毒（2026-11-15 事故族）：流式快照剥掉空标签包裹/前导残片，
+                    # 下游（会话记录 / _last_answer / SSE）拿到的永远是干净文本
+                    _raw = "".join(mbuf)
+                    _clean = strip_tag_junk(_raw)
+                    if _clean != _raw.strip():
+                        SANITIZE_STATS["record_strips"] += 1
+                    self.on_llm_delta(role, "message", f"{role}-M{seq}-{_run_nonce}", _clean, model)
             except Exception:
                 pass
 
@@ -146,7 +154,7 @@ class EmitterMixin:
                     pass
             # 非流式回退：未启用增量回调时，仍把完整「推理+口播」推到对话区。
             if not self.on_llm_delta and self.on_thinking:
-                full = (reasoning + "\n\n" if reasoning else "") + message
+                full = (reasoning + "\n\n" if reasoning else "") + strip_tag_junk(message)
                 if full:
                     self.on_thinking(role, full, model)
             # 终态：用完整推理/口播 upsert 本回合块（即便流式中断，最终内容也完整）
@@ -160,7 +168,12 @@ class EmitterMixin:
                             if pure:
                                 self.on_llm_delta(role, "message", f"{role}-M{seq}-{_run_nonce}", pure, model)
                         else:
-                            self.on_llm_delta(role, "message", f"{role}-M{seq}-{_run_nonce}", message, model)
+                            # 终态快照同走记录侧消毒（与流式路径同一口径，终态覆盖流式）
+                            _clean = strip_tag_junk(message)
+                            if _clean != message.strip():
+                                SANITIZE_STATS["record_strips"] += 1
+                            if _clean:
+                                self.on_llm_delta(role, "message", f"{role}-M{seq}-{_run_nonce}", _clean, model)
                 except Exception:
                     pass
             # 本回合结束：序号递增、缓冲清空（下一回合独立成块，不与上回合拼接）

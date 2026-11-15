@@ -150,6 +150,15 @@ class ToolLoop(
         self.brain_model = (brain_cfg or {}).get("model", "?")
         # T3.2：保留大脑端点配置原样，供读取模型级上下文上限（maxInputTokens）
         self.brain_cfg = dict(brain_cfg or {})
+        # 思考开关（2026-11-15，用户定案）：思考是**模式级显式决策**，不放任端点
+        # 随机决定——task/auto run 必须有思考块，chat 对话轮显式关思考。依据探针
+        # 实测：中转站认 `reasoning_effort`（none=关 / low~high=开），不传 = 端点
+        # 自定（正是此前 life 空壳泄漏的模糊态）。仅对声明 supports_reasoning_effort
+        # 的 provider 下发（OpenAI 官方等严格端点会 400 拒收未知参数）。落点在
+        # ToolLoop 构造：Web /chat 与通道网关两条派发链共用本类，天然单点。
+        if self.brain_cfg.get("supports_reasoning_effort"):
+            _effort = "none" if self.mode == "chat" else "high"
+            self.brain_cfg.setdefault("request", {})["reasoning_effort"] = _effort
         # 执行单元模型名占位（与 env 无关；真实值由 dispatch 注册表按槽位填充）
         self.exec_model = "none"
         self.verbose = verbose

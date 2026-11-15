@@ -312,12 +312,21 @@ def test_subtask_gets_no_memory_injection(monkeypatch):
     assert loop._memory_stable_block(True, task_id="t") == ("", [])
 
 
-# --- 5. 收尾意图门（判断全 LLM,零格式字面量）-----------------------------------
+# --- 5. 收尾意图门（两级：①确定性残片签名 ②LLM 提取式判定）--------------------
 def test_intent_judge_built_only_with_brain_cfg(monkeypatch):
     loop = _loop()
     traj = _Rec()
     loop.brain_cfg = None
-    assert loop._plain_finish_judge(traj) is None, "无 brain_cfg 不注入 judge"
+    # 2026-11-15 两级化：①确定性残片签名层零成本、不依赖 brain_cfg（残片拦截护的是
+    # 兜底代发出站面）；②LLM 提取式层无 brain_cfg → fail-open（恒 None）
+    judge = loop._plain_finish_judge(traj)
+    assert callable(judge), "残片签名层无端点也注入"
+    assert judge("   ") is None, "空文本放行"
+    assert judge("普通的一段收尾陈述") is None, "无 brain_cfg 时 LLM 级 fail-open"
+    v = judge('<memory_recall">')
+    assert v is not None and "tool_calls" in v, "纯残片仍被拦下（不依赖 brain_cfg）"
+    rec = traj.records("tag_fragment_retry")[0]
+    assert rec["chars"] == len('<memory_recall">')
 
     loop.brain_cfg = {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}
     judge = loop._plain_finish_judge(traj)
@@ -347,7 +356,11 @@ def test_intent_judge_config_off(monkeypatch):
     loop.brain_cfg = {"model": "m", "base_url": "http://127.0.0.1:9", "api_key": "k"}
     monkeypatch.setattr(config_mod, "get_config",
                         lambda k, d=None: False if k == "runtime.long_task.finish_intent_check" else d)
-    assert loop._plain_finish_judge(_Rec()) is None
+    # 配置关只关 LLM 级判定；①确定性残片签名零成本、常驻（护兜底代发出站面）
+    judge = loop._plain_finish_judge(_Rec())
+    assert callable(judge), "残片签名层不受开关影响"
+    assert judge("普通文本") is None, "LLM 级被配置关"
+    assert judge('<memory_recall">') is not None, "纯残片仍被拦下"
 
 
 # --- 5b. sdk_loop 级：判 B → 不判完成继续跑,限 2 次 -----------------------------
