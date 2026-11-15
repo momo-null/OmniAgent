@@ -24,8 +24,30 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$")
 #: 无显式归属的 task / 会话缺省落这个项目（逻辑归属恒定存在，目录懒创建）
 DEFAULT_PROJECT_ID = "default"
 
+def _resolve_global_root() -> Path:
+    """数据根解析顺序：OMNIAGENT_HOME 环境变量 → CWD 的 omniagent.home 文件 → ~/.omniagent。
+
+    两个入口都是 README/desktop 打包早就承诺的（「后端与 .venv 仍指向本仓库，用
+    OMNIAGENT_HOME 或 omniagent.home 指定路径」），此前一直未被读取（2026-11-16
+    出厂包冒烟时发现并补上）。import 时解析一次：env 由启动方（desktop 壳 /
+    多实例冒烟）在拉起进程前设好即可全进程生效。
+    """
+    env = os.environ.get("OMNIAGENT_HOME", "").strip()
+    if env:
+        return Path(env).expanduser().resolve()
+    try:
+        home_file = Path.cwd() / "omniagent.home"
+        if home_file.exists():
+            pointed = home_file.read_text(encoding="utf-8-sig").strip()
+            if pointed:
+                return Path(pointed).expanduser().resolve()
+    except OSError:
+        pass
+    return Path(os.path.expanduser("~")) / ".omniagent"
+
+
 # 用户全局（跨项目）唯一持久化根
-_GLOBAL = Path(os.path.expanduser("~")) / ".omniagent"
+_GLOBAL = _resolve_global_root()
 
 
 # ---- 全局基础目录 ----------------------------------------------------------
