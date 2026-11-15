@@ -41,7 +41,7 @@ def test_multi_uid_all_map_to_one_key(monkeypatch):
     monkeypatch.setattr(identity, "master_uids", lambda: ["88888", "77777"])
     assert identity.normalize_master("", "88888") == "主人(master)"
     assert identity.normalize_master("蓝色大肥鱼的主人(77777)", "") == "主人(master)"
-    assert identity.normalize_master("doro(30001)", "") == "doro(30001)"
+    assert identity.normalize_master("路人(30001)", "") == "路人(30001)"
     assert identity.normalize_master("", "30001") == ""
 
 
@@ -58,7 +58,7 @@ def test_resolve_peer_uids_claim_normalization(monkeypatch):
     assert identity.resolve_peer_uids("蓝色大肥鱼的主人(77777)") == ["master"]
     assert identity.resolve_peer_uids("master") == ["master"]
     assert identity.resolve_peer_uids("主人(master)") == ["master"]
-    assert identity.resolve_peer_uids("doro(30001)") == ["30001"]   # 未认领原样
+    assert identity.resolve_peer_uids("路人(30001)") == ["30001"]   # 未认领原样
     assert identity.resolve_peer_uids("") == []
 
 
@@ -66,7 +66,7 @@ def test_resolve_peer_uids_unconfigured(monkeypatch):
     """名单为空：除 master key 本体外一律原样（零认领部署语义不变）。"""
     monkeypatch.setattr(identity, "master_uids", lambda: [])
     assert identity.resolve_peer_uids("10001") == ["10001"]
-    assert identity.resolve_peer_uids("doro(10001)") == ["10001"]
+    assert identity.resolve_peer_uids("路人(10001)") == ["10001"]
     assert identity.resolve_peer_uids("master") == ["master"]
 
 
@@ -158,7 +158,7 @@ def test_plain_card_uses_plain_template(rel_env, monkeypatch):
                                        "topics": []})
     _seed_peer_lines(monkeypatch, {
         "master": {"name": "主人", "lines": ["a", "b", "c"]},
-        "10001": {"name": "doro", "lines": ["x", "y", "z"]},
+        "10001": {"name": "路人", "lines": ["x", "y", "z"]},
     })
     monkeypatch.setattr(memory_brain, "upsert_narrative_index", lambda *a, **k: None)
 
@@ -175,7 +175,7 @@ def test_maintain_master_card_wide_window(rel_env, monkeypatch):
     def fake_peer_lines(limit_days=7):
         seen["limit_days"] = limit_days
         return {"master": {"name": "主人", "lines": ["a", "b", "c"]},
-                "10001": {"name": "doro", "lines": ["x", "y", "z"]}}
+                "10001": {"name": "路人", "lines": ["x", "y", "z"]}}
 
     monkeypatch.setattr(memory_brain, "_peer_lines", fake_peer_lines)
     _fake_llm(monkeypatch, {"card": "【稳定背景】\n- A\n【最近交手】x\n"
@@ -246,7 +246,7 @@ def test_list_speakers_claim_candidates(monkeypatch):
 
     monkeypatch.setattr(memory_brain, "open_brain", lambda: _Conn([
         ("群友甲(70001001)", 61, "2026-11-11"),
-        ("doro(30001)", 2, "2026-11-11"),
+        ("访客(30001)", 2, "2026-11-11"),
         ("路人(40109)", 5, "2026-11-10"),
         ("主人(master)", 9, "2026-11-11"),
     ]))
@@ -255,7 +255,7 @@ def test_list_speakers_claim_candidates(monkeypatch):
     assert "70001001" in uids and "40109" in uids
     assert "30001" not in uids  # 2 条 < 门槛 3
     assert "master" not in uids  # 已认领排除
-    items = memory_brain.list_speakers(q="doro", exclude_uids={"master"})
+    items = memory_brain.list_speakers(q="访客", exclude_uids={"master"})
     assert [x["uid"] for x in items] == ["30001"]
 
 
@@ -270,8 +270,8 @@ def test_search_narrative_claimed_peer_hits_master_card(rel_env, monkeypatch):
         '["穿搭", "日常"]', "[]", '["主人(master)"]', "",
     ), (
         "10001", "relation", "", "2026-11-11", "2026-11-11", "", "",
-        "与 doro(10001) 的往来印象卡；话题：闲聊",
-        '["闲聊"]', "[]", '["doro(10001)"]', "",
+        "与 路人(10001) 的往来印象卡；话题：闲聊",
+        '["闲聊"]', "[]", '["路人(10001)"]', "",
     )]
     monkeypatch.setattr(memory_brain, "open_brain", lambda: _Conn(rows))
     monkeypatch.setattr(identity, "master_uids", lambda: ["88888"])

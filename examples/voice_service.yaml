@@ -51,7 +51,7 @@ gptsovits_repo: ""
 # worker 解释器（GS 独立 venv 的 python）；默认 <gptsovits_repo>/.venv/Scripts/python.exe
 tts_python: ""
 # 微调权重（相对路径按 gptsovits_dir 解析）；
-# 默认 weights/doro_e12_s288.pth + weights/doro-e30.ckpt
+# 默认 weights/voice_e12_s288.pth + weights/voice-e30.ckpt
 tts_vits: ""
 tts_t2s: ""
 

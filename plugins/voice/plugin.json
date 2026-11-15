@@ -181,7 +181,7 @@
         "type": "path",
         "default": "",
         "group": "路径（高级）",
-        "desc": "留空=weights/doro_e12_s288.pth（相对路径按 gptsovits_dir 解析）。"
+        "desc": "留空=weights/voice_e12_s288.pth（相对路径按 gptsovits_dir 解析）。"
       },
       {
         "key": "tts_t2s",
@@ -189,7 +189,7 @@
         "type": "path",
         "default": "",
         "group": "路径（高级）",
-        "desc": "留空=weights/doro-e30.ckpt（相对路径按 gptsovits_dir 解析）。"
+        "desc": "留空=weights/voice-e30.ckpt（相对路径按 gptsovits_dir 解析）。"
       }
     ]
   },

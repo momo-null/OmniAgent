@@ -182,7 +182,7 @@ def test_explicit_mode_stay_silent_tool_keeps_silent(monkeypatch):
 def test_explicit_mode_plain_text_finish_fallback_sends(monkeypatch):
     """named 轮「零 send + 零 silence」的纯文本收尾 = 漏发的回复 → 兜底代发。
 
-    实测诱因（doro 私聊 5 条未达）：短附和轮模型把回复写成正文忘了派发工具。
+    实测诱因（某私聊 5 条未达）：短附和轮模型把回复写成正文忘了派发工具。
     代发走 msg_send_text 同一闸门（本测试桩记账同款），前端据此标「已发送」。
     """
     called = []

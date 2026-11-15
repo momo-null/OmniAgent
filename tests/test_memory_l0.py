@@ -207,7 +207,7 @@ def test_conversation_search_master_is_never_scoped(_ch_ctx, brain):
     memory_brain.index_l0_message("s_m1", "user", "甲群的约定", context_key="group:111")
     memory_brain.index_l0_message("s_m2", "user", "乙群的约定", context_key="group:222")
     _ch_ctx.set_boundary(context_key="group:111", source_external=True,
-                         peer="姐姐(master)")
+                         peer="伙伴(master)")
     _ch_ctx.build_run(context_key="group:111")
     r = mt.conversation_search(keyword="约定")
     assert r["ok"] and r["scope"] == "all" and r["count"] == 2

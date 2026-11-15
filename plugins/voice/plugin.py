@@ -33,7 +33,7 @@ TTS = GPT-SoVITS v2 微调引擎（CosyVoice2 zero-shot 已退役，原因与验
   （sherpa-onnx releases 的 sense-voice int8 包，中英日韩粤）
 - GPT-SoVITS：``models/gptsovits/``——``pretrained_models/``（v2 底模：
   chinese-hubert-base / chinese-roberta-wwm-ext-large / gsv-v2final-pretrained）
-  + ``weights/``（微调权重，默认 doro_e12_s288.pth + doro-e30.ckpt）
+  + ``weights/``（微调权重，默认 voice_e12_s288.pth + voice-e30.ckpt）
   + ``voices/``（参考音色 wav + 同名 txt）
   上游 clone 在 ``external/GPT-SoVITS``（text/G2PWModel 文本前端随仓库）。
 """
@@ -421,8 +421,8 @@ def _voices_dir() -> str:
 def _tts_weights() -> tuple:
     """（vits, t2s）微调权重路径；配置可覆盖，默认 s2-e12 + s1-e30 验收组合。"""
     model_dir = _gptsovits_dir()
-    vits = str(_cfg().get("tts_vits") or os.path.join(model_dir, "weights", "doro_e12_s288.pth"))
-    t2s = str(_cfg().get("tts_t2s") or os.path.join(model_dir, "weights", "doro-e30.ckpt"))
+    vits = str(_cfg().get("tts_vits") or os.path.join(model_dir, "weights", "voice_e12_s288.pth"))
+    t2s = str(_cfg().get("tts_t2s") or os.path.join(model_dir, "weights", "voice-e30.ckpt"))
     if vits and not os.path.isabs(vits):
         vits = os.path.join(model_dir, vits)
     if t2s and not os.path.isabs(t2s):

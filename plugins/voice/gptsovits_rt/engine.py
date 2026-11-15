@@ -45,8 +45,8 @@ class GptSovitsEngine:
                 nltk.data.path.insert(0, nltk_data)
 
         pre = os.path.join(model_dir, "pretrained_models")
-        vits = vits or os.path.join(model_dir, "weights", "doro_e12_s288.pth")
-        t2s = t2s or os.path.join(model_dir, "weights", "doro-e30.ckpt")
+        vits = vits or os.path.join(model_dir, "weights", "voice_e12_s288.pth")
+        t2s = t2s or os.path.join(model_dir, "weights", "voice-e30.ckpt")
         missing = [p for p in (vits, t2s,
                                os.path.join(pre, "chinese-hubert-base"),
                                os.path.join(pre, "chinese-roberta-wwm-ext-large"))

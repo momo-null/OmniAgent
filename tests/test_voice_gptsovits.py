@@ -26,8 +26,8 @@ def model_bundle(tmp_path, monkeypatch):
                 "pretrained_models/chinese-roberta-wwm-ext-large"):
         (d / sub).mkdir(parents=True)
     (d / "weights").mkdir()
-    (d / "weights" / "doro_e12_s288.pth").write_bytes(b"v")
-    (d / "weights" / "doro-e30.ckpt").write_bytes(b"t")
+    (d / "weights" / "voice_e12_s288.pth").write_bytes(b"v")
+    (d / "weights" / "voice-e30.ckpt").write_bytes(b"t")
     v = d / "voices"
     v.mkdir()
     (v / "duorou.wav").write_bytes(b"wav")
@@ -129,8 +129,8 @@ class TestPaths:
     def test_weights_default_pair(self, monkeypatch):
         monkeypatch.setattr(voice_plugin, "_cfg", lambda: {})
         vits, t2s = voice_plugin._tts_weights()
-        assert vits.endswith(os.path.join("weights", "doro_e12_s288.pth"))
-        assert t2s.endswith(os.path.join("weights", "doro-e30.ckpt"))
+        assert vits.endswith(os.path.join("weights", "voice_e12_s288.pth"))
+        assert t2s.endswith(os.path.join("weights", "voice-e30.ckpt"))
 
     def test_weights_config_override_relative(self, tmp_path, monkeypatch):
         monkeypatch.setattr(voice_plugin, "_cfg",
