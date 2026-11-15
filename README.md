@@ -2,11 +2,17 @@
 
 # OmniAgent · 能聊、能记、能干活的常驻 AI 伙伴
 
+![redline-lint](https://github.com/momo-null/OmniAgent/actions/workflows/redline-lint.yml/badge.svg)
+
 **中文** | [English](#english)
 
 > 跑在自己电脑上的 AI 伙伴：桌面端陪你聊、跨会话记得你和身边每个人、能替你在 QQ / 飞书 / 企微 里说话、按点把活干了、用你自己的音色回语音（被点歌还能清唱一句），需要时还能直接操作这台电脑或一台安卓机。
 >
 > 它不是界面演示：记忆（原子记忆 → 场景块 / 日记 → 画像 → 关系卡）、常驻语音引擎服务、多 IM 通道、定时任务、本地模型、MCP、插件、人工审批都是打通的完整链路。做不到的部分写在[边界](#边界诚实说明)里，不吹。
+
+<p align="center">
+  <img src="docs/img/demo_chat.gif" width="900" alt="OmniAgent 界面示意（合成数据）：能干活——思考与工具步骤全程可见；会记得——L0/L1/L2 记忆面板；群聊在场感——未点名不插话，被 @ 才回">
+</p>
 
 ## 30 秒看懂
 
@@ -32,7 +38,7 @@ python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
 cd web && npm install && cd ..
-.\start_all.bat      # 三个窗口：后端 :8000 + 语音引擎 :18742 + 前端 :5173
+.\start_all.bat      # 两个窗口：后端 :8000（托管网关与模型服务）+ 前端 :5173
 ```
 
 打开 `http://localhost:5173` → **设置 → 模型** 填 API provider 与 key（或选本地 GGUF）→ 直接聊。
@@ -80,7 +86,7 @@ copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
 |---|---|---|
 | 桌面 / Web 对话 | 流式回答、思考与工具步骤可见、随时打断、消息排队、产物可开文件夹；会话级 `chat / task` 取向胶囊 | 开箱 |
 | 界面形态 | 设置与技能工具是**同一层整屏遮罩 + 左导航分组表单**（外观 / 通用 / 伙伴 / 安全 / 模型 / 编排 / 关于），右侧 dock 可拖宽并按机器记忆；图标全走 Lucide | 开箱 |
-| 长期记忆 | L1 原子（`memory/brain.db`，一条原子一行索引）→ L2 场景块 + 日记 / 月记 → L3 用户画像；L0 逐字会话索引；相关性绝对化打分 + 同主题去冗余，**由模型自取而非自动注入** | 开箱 |
+| 长期记忆 | L1 原子（`memory/brain.db`，一条原子一行索引）→ L2 场景块 + 日记 / 月记 → L3 用户画像；L0 逐字会话索引；向量召回臂与 FTS 双路融合（RRF，只补候选不动旧分，自锚定评测集 A/B 见 [vector-recall-2026-11-13](doc/plans/implemented/vector-recall-2026-11-13.md)）；相关性绝对化打分 + 同主题去冗余，**由模型自取而非自动注入** | 开箱 |
 | 关系卡 | 按 uid 全局存一份、卡内记「在哪儿遇到」；QQ 点名 / 私聊时注入 ≤200 字三行印象，无卡零注入 | 需开 QQ 通道 |
 | 角色卡 | 单角色 `character.md`，设置里直接改、自下一次运行起生效；人格只写在角色卡里，通道文案只交代处境与发送机制，不重复扮演 | 开箱 |
 | 项目与任务 | 项目 = 工作目录 + 项目级知识，任务 = 一次会话；右键改名、保存到项目、删除、打开文件夹 | 开箱 |
@@ -107,7 +113,7 @@ python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
 cd web && npm install && cd ..
-.\start_all.bat                        # 后端 :8000 + 语音引擎 :18742 + 前端 :5173
+.\start_all.bat                        # 后端 :8000 + 前端 :5173
 python -m harness.channel_gateway      # 调试用：手动单独跑 IM + 定时任务（常规由后端托管）
 .\start_all.bat stop                   # 停掉 :8000 / :18742 / :5173
 ```
@@ -128,7 +134,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 ### 几个容易踩的坑
 
 - dev server 监听 IPv6 `::1`，访问用 `http://localhost:5173`（`127.0.0.1` 可能连不上）。
-- `start_all.bat` 起的是**三个可见窗口**（Backend / Voice / Web），输出直接摆在眼前；桌面端则后台拉起、日志落文件。**不要给 uvicorn 加 `--reload`**（Windows 下双进程抢端口会随机挂起）。
+- `start_all.bat` 起的是**两个可见窗口**（Backend / Web），输出直接摆在眼前；桌面端则后台拉起、日志落文件。**不要给 uvicorn 加 `--reload`**（Windows 下双进程抢端口会随机挂起）。
 - 端点只认 `~/.omniagent/models.json`：主配置里残留的旧端点键已不再读取，改 `config.yaml` 不会换模型。
 - 语音服务与主进程解耦：服务没起来时语音调用明确失败，文字链路不受影响；GPT-SoVITS 运行时在 `external/GPT-SoVITS/.venv`（独立 venv），不在主 venv。
 - 操作本机 / 安卓要显式建插件配置（`~/.omniagent/plugins/host.yaml` 等）；安卓需自备 `adb_serial`。
@@ -263,6 +269,10 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 >
 > This is not a UI mock: memory (atomic memories → scene blocks / diary → profile → relation cards), an always-on voice engine service, multi-channel IM, cron, local models, MCP, plugins and human approval are all wired end to end. What it cannot do is listed under [Boundaries](#boundaries-honest-notes).
 
+<p align="center">
+  <img src="docs/img/demo_chat.gif" width="900" alt="OmniAgent UI mockup (synthetic data): visible tool steps; the L0/L1/L2 memory panel; natural group-chat presence — silent unless mentioned, chimes in when relevant">
+</p>
+
 ## At a Glance
 
 | What you want | What it actually does |
@@ -334,7 +344,7 @@ copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
 |---|---|---|
 | Desktop / web chat | Streaming, visible reasoning and tool steps, interrupt, message queue, open task folder; per-session `chat / task` orientation capsule | On |
 | UI shell | Settings and Skills & Tools are full-screen overlays on one shared shell with a left nav (Appearance / General / Companion / Security / Models / Orchestration / About); the right dock is resizable and remembered per machine; Lucide icons throughout | On |
-| Long-term memory | L1 atoms (`memory/brain.db`, one index row per atom) → L2 scene blocks + diary / monthly notes → L3 profile; L0 verbatim index; absolute-relevance scoring with same-topic redundancy trimming, **fetched by the model rather than auto-injected** | On |
+| Long-term memory | L1 atoms (`memory/brain.db`, one index row per atom) → L2 scene blocks + diary / monthly notes → L3 profile; L0 verbatim index; a vector recall arm fused with FTS (RRF, candidates-only — never touching existing scores; self-anchored A/B in [vector-recall-2026-11-13](doc/plans/implemented/vector-recall-2026-11-13.md)); absolute-relevance scoring with same-topic redundancy trimming, **fetched by the model rather than auto-injected** | On |
 | Relation cards | One global card per uid recording where they met; ≤200 chars injected on QQ mentions and private chats; no card, no injection | Needs a QQ channel |
 | Character card | Single `character.md`, editable in Settings, effective from the next run; personality lives only in the card — channel narration states the situation, it does not act the persona out | On |
 | Projects & tasks | Project = workspace + project knowledge, task = one session; rename / save-to-project / delete / open folder | On |
@@ -361,7 +371,7 @@ python -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
 cd web && npm install && cd ..
-.\start_all.bat                        # backend :8000 + voice engine :18742 + frontend :5173
+.\start_all.bat                        # backend :8000 + frontend :5173
 python -m harness.channel_gateway      # debug only: run IM + cron standalone (normally backend-hosted)
 .\start_all.bat stop                   # stops :8000 / :18742 / :5173
 ```
