@@ -2,6 +2,7 @@
 
 这里的目录树**镜像 `~/.omniagent/`**：把 `examples/` 下面的东西按同名路径放进
 `~/.omniagent/`，就得到一份「每个键都有注释说明」的初始配置。
+一条命令完成同样的事（存在即跳过，永不覆盖）：`python scripts/setup_factory.py`。
 
 ```
 examples/                                  →  ~/.omniagent/
@@ -9,6 +10,7 @@ examples/                                  →  ~/.omniagent/
 ├── config.yaml            引擎旋钮（brain / runtime / security / knowledge / skill …）
 ├── mcp.json               MCP server 清单
 ├── voice_service.yaml     语音引擎服务（独立进程，不是插件配置）
+├── character.md           出厂角色卡（小澄：有性情的白纸，零关系零记忆预设，设置里随时改）
 ├── channels/
 │   └── routes.yaml        聊天路由表：哪个群/会话属于哪个项目
 ├── plugins/
@@ -31,6 +33,7 @@ if not exist "%USERPROFILE%\.omniagent\cron"     mkdir "%USERPROFILE%\.omniagent
 copy examples\*.json          %USERPROFILE%\.omniagent\
 copy examples\config.yaml     %USERPROFILE%\.omniagent\
 copy examples\voice_service.yaml %USERPROFILE%\.omniagent\
+copy examples\character.md    %USERPROFILE%\.omniagent\
 copy examples\channels\routes.yaml %USERPROFILE%\.omniagent\channels\
 copy examples\plugins\*.yaml  %USERPROFILE%\.omniagent\plugins\
 copy examples\cron\jobs.json  %USERPROFILE%\.omniagent\cron\
@@ -40,7 +43,7 @@ copy examples\cron\jobs.json  %USERPROFILE%\.omniagent\cron\
 
 ```sh
 mkdir -p ~/.omniagent/{channels,plugins,cron}
-cp examples/{models.json,config.yaml,mcp.json,voice_service.yaml} ~/.omniagent/
+cp examples/{models.json,config.yaml,mcp.json,voice_service.yaml,character.md} ~/.omniagent/
 cp examples/channels/routes.yaml ~/.omniagent/channels/
 cp examples/plugins/*.yaml  ~/.omniagent/plugins/
 cp examples/cron/jobs.json  ~/.omniagent/cron/
@@ -57,6 +60,7 @@ cp examples/cron/jobs.json  ~/.omniagent/cron/
 | `config.yaml` | `~/.omniagent/config.yaml` | core 引擎旋钮 | 下一次运行生效（运行级快照，当前这轮不受影响） | 设置 → 通用 / 安全 / 模型 / 编排 / 伙伴（记忆开关） |
 | `mcp.json` | `~/.omniagent/mcp.json` | 工具运行时（MCP server 启停） | Web 保存即时；**手改要重启** | 技能与工具 |
 | `voice_service.yaml` | `~/.omniagent/voice_service.yaml` | 语音引擎服务（**独立进程**） | 监听/令牌/空闲秒数在**服务启动**时读，音色与路径在调用时读 | 设置 → 模型 → 语音引擎 |
+| `character.md` | `~/.omniagent/character.md` | 注入层（并入 system prompt，角色缺失=零注入） | 下一次运行生效（run 开始读一次） | 设置 → 伙伴 |
 | `plugins/napcat.yaml`<br>`plugins/feishu.yaml`<br>`plugins/wecom.yaml`<br>`plugins/bilibili.yaml`<br>`plugins/xiaohongshu.yaml` | `~/.omniagent/plugins/<同名>.yaml` | 网关/插件加载器 | 重启网关（适配器在启动时按文件构造） | 无，纯手改 |
 | `channels/routes.yaml` | `~/.omniagent/channels/routes.yaml` | 网关聊天路由 | 每条消息重读，**改完即生效** | 无，纯手改 |
 | `plugins/voice.yaml` | `~/.omniagent/plugins/voice.yaml` | 语音插件调用端 | 端点类键调用时读；`enabled` 开关重启生效 | 右侧「语音调用端点」插件页（端点 / 试听 + 技能与工具开关） |

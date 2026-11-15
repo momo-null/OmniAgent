@@ -1,0 +1,19 @@
+# 出厂最小依赖：对话 + 记忆 + 定时任务 + 通道文字链路（不含语音 / OCR / 桌面操作）。
+# 装齐这份就能跑通 README「三步出厂」。
+# 完整依赖（开发者全量安装）见 requirements.txt；
+# 语音见 requirements-voice.txt；看图与桌面操作见 requirements-vision.txt；
+# 向量召回 sidecar（CPU torch + bge-m3）不用 pip，跑 scripts/setup_embed_svc.py；
+# 训练环境见 requirements-train.txt。
+PyYAML>=6.0
+requests>=2.31.0
+psutil>=5.9.0
+numpy>=1.24.0
+Pillow>=10.0.0
+segno>=1.6.0
+langgraph>=0.0.38
+openai-agents>=0.22.2
+fastapi>=0.110.0
+uvicorn>=0.29.0
+httpx>=0.27.0
+lark-oapi>=1.7.5
+pytest-timeout

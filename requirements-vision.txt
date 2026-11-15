@@ -1,0 +1,10 @@
+# 看图增强与桌面操作（可选装）。核心链路不依赖本文件；
+# host / emulator / ocr 插件均默认 enabled=false，要用再开。
+#
+# OCR = RapidOCR（ONNXRuntime CPU，约 200MB；已弃用 EasyOCR，理由见 requirements.txt 注释）；
+# 桌面操作 = host 插件（键鼠 pyautogui + 截图 mss）；安卓另需自备 adb 与 uiautomator2
+# （uiautomator2 未列入本文件，启用 emulator 插件时再装）。
+rapidocr-onnxruntime>=1.4.0
+opencv-python>=4.8.0
+PyAutoGUI>=0.9.54
+mss>=9.0.1

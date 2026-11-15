@@ -106,6 +106,30 @@ copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
 
 ## 快速开始
 
+### 三步出厂（推荐第一次）
+
+```bash
+git clone https://github.com/momo-null/OmniAgent.git
+cd OmniAgent
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements-core.txt
+python scripts\setup_factory.py     # 拷 examples 模板 + 出厂角色卡到 ~/.omniagent（已存在一律跳过，永不覆盖）
+.\start_all.bat                     # 后端 :8000 + 前端 :5173
+```
+
+打开 `http://localhost:5173` → **设置 → 模型** 填 provider 与 key → 回到对话页发第一条消息。出厂角色卡是「小澄」：有性情的白纸，零关系零记忆预设——她从认识你这天开始，卡随时可在设置里改写。
+
+依赖分四层，按需安装：
+
+| 层 | 安装 | 给什么 |
+|---|---|---|
+| 核心 | `pip install -r requirements-core.txt` | 对话、记忆、cron、通道文字链路 |
+| 语音 | `pip install -r requirements-voice.txt` | SenseVoice STT；TTS 为 GPT-SoVITS 独立 venv（见 voice-tone 文档） |
+| 看图与桌面操作 | `pip install -r requirements-vision.txt` | RapidOCR、键鼠/截屏（host 插件，默认关） |
+| 向量召回 | `python scripts/setup_embed_svc.py` | 独立 venv + CPU torch + bge-m3（支持 HF 镜像） |
+| 训练 | `pip install -r requirements-train.txt` | GPT-SoVITS 微调全家桶 |
+
 ### Windows 一键
 
 ```bash
@@ -363,6 +387,22 @@ copy examples\plugins\voice.yaml %USERPROFILE%\.omniagent\plugins\voice.yaml
 | Safety | Approval prompts for sensitive tools (with audit log), tool-less external channels, per-task full-access toggle | On |
 
 ## Quick Start
+
+### Three-step factory setup (first time)
+
+```bash
+git clone https://github.com/momo-null/OmniAgent.git
+cd OmniAgent
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements-core.txt
+python scripts\setup_factory.py     # copies the examples templates + factory character card into ~/.omniagent (skips anything that exists, never overwrites)
+.\start_all.bat                     # backend :8000 + frontend :5173
+```
+
+Open `http://localhost:5173` → **Settings → Models** → add a provider and key → send the first message. The factory character card ships as 「小澄」: a personality with no preset relationships and no memories — she starts knowing nothing about you, on purpose, and the card is editable in Settings at any time.
+
+Dependencies come in layers, installed on demand: core (`requirements-core.txt`: chat, memory, cron, text channels), voice (`requirements-voice.txt`: SenseVoice STT; TTS runs in its own GPT-SoVITS venv, see the voice-tone doc), vision & desktop control (`requirements-vision.txt`: RapidOCR, mouse/keyboard — host plugin off by default), vector recall sidecar (`python scripts/setup_embed_svc.py`: dedicated venv + CPU torch + bge-m3, HF mirror aware), training (`requirements-train.txt`).
 
 ### Windows, one click
 

@@ -1,6 +1,12 @@
-﻿# 基础依赖
+﻿# 全量依赖（开发者用）：核心对话 + 全部可选能力。
+# 依赖分四层：出厂最小见 requirements-core.txt（能跑通三步出厂）；
+# 语音见 requirements-voice.txt；看图与桌面操作见 requirements-vision.txt；
+# 向量召回 sidecar 跑 scripts/setup_embed_svc.py（独立 venv，不进主环境）；训练见 requirements-train.txt。
+
+# 基础依赖
 PyYAML>=6.0
 requests>=2.31.0
+psutil>=5.9.0
 numpy>=1.24.0
 Pillow>=10.0.0
 segno>=1.6.0

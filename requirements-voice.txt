@@ -1,0 +1,7 @@
+# 语音（可选装）。核心链路不依赖本文件；语音插件默认 enabled=false。
+#
+# STT = SenseVoice（sherpa-onnx，装进主 venv 即可，模型本体放 ~/.omniagent/models/sense-voice/）；
+# TTS = GPT-SoVITS v2 微调（独立 venv external/GPT-SoVITS/.venv，推理代码用 external 上游
+# clone 不进仓库；模型下载、音色与验收数据见 doc/plans/voice-tone-2026-10-31.md）。
+sherpa-onnx>=1.10.0
+soundfile>=0.12.0
