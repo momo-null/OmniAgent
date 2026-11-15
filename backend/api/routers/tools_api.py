@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import yaml
@@ -200,7 +201,8 @@ async def set_plugin_enabled(request: Request):
 
 # ── 插件配置（schema 由插件自报，宿主不认识任何具体键名）────────────────────
 # plugin.json 的 "config" 是字段数组：{key, label, type, default?, desc?, options?,
-# secret?, min?, max?, group?}。type ∈ text|password|path|number|bool|select。
+# secret?, min?, max?, group?}。type ∈ text|password|path|number|bool|select|list
+# （list = 字符串列表，收逗号分隔串或字符串数组，落盘成 YAML 数组）。
 # 本接口只做「按键写 YAML / 按 type 校验」，因此对任何插件通用（语音、OCR、视觉…）。
 #
 # scope=service：插件可以把**另一份独立文件的 schema** 放在 manifest 的
@@ -299,6 +301,22 @@ def _coerce(field: dict, value):
         if str(value) not in allowed:
             raise ValueError(f"{key} 必须是 {allowed} 之一")
         return str(value)
+    if typ == "list":
+        # 字符串列表：数组直传（逐项标量化、去空）；字符串按中英文逗号拆——
+        # 给插件页的逗号分隔输入框用。空串/空数组都是空列表。
+        if isinstance(value, str):
+            parts = re.split(r"[,，]", value)
+            return [p.strip() for p in parts if p.strip()]
+        if isinstance(value, list):
+            out = []
+            for item in value:
+                if isinstance(item, bool) or not isinstance(item, (str, int, float)):
+                    raise ValueError(f"{key} 必须是字符串列表")
+                s = str(item).strip()
+                if s:
+                    out.append(s)
+            return out
+        raise ValueError(f"{key} 必须是字符串列表")
     if not isinstance(value, str):
         raise ValueError(f"{key} 必须是字符串")
     return value

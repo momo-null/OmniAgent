@@ -21,6 +21,7 @@ PLUGIN_FIELDS = [
     {"key": "nested.key", "label": "密钥", "type": "password", "secret": True},
     {"key": "num", "label": "数", "type": "number", "min": 0, "max": 10, "default": 3},
     {"key": "flag", "label": "开关", "type": "bool", "default": False},
+    {"key": "tags", "label": "标签", "type": "list", "default": []},
 ]
 
 SERVICE_FIELDS = [
@@ -83,6 +84,22 @@ def test_dotted_path_roundtrip():
     assert tools_api._dig(data, "openai.missing", "d") == "d"
 
 
+def test_coerce_list_type():
+    """list = 字符串列表：数组直传去空，逗号串拆分，其余拒绝。"""
+    field = {"key": "l", "type": "list"}
+    assert tools_api._coerce(field, ["a", "b"]) == ["a", "b"]
+    assert tools_api._coerce(field, [" a ", 2, "", "b"]) == ["a", "2", "b"]
+    assert tools_api._coerce(field, "a, b，c") == ["a", "b", "c"]   # 中英文逗号都拆
+    assert tools_api._coerce(field, "") == []
+    assert tools_api._coerce(field, []) == []
+    with pytest.raises(ValueError):
+        tools_api._coerce(field, True)          # 布尔不是列表
+    with pytest.raises(ValueError):
+        tools_api._coerce(field, {"a": 1})      # 对象不是列表
+    with pytest.raises(ValueError):
+        tools_api._coerce(field, [True])        # 项也不能是布尔
+
+
 # ── 端点：插件 scope ──────────────────────────────────────
 
 def test_get_unknown_plugin_404(client, fake_plugin):
@@ -130,6 +147,21 @@ def test_put_empty_secret_keeps_existing(client, fake_plugin):
     doc = yaml.safe_load((fake_plugin / "fake.yaml").read_text(encoding="utf-8"))
     assert doc["nested"]["key"] == "keep-me"
     assert doc["num"] == 2
+
+
+def test_put_list_writes_yaml_array(client, fake_plugin):
+    """逗号分隔的输入框值落盘成真 YAML 数组（插件页列表字段的通路）。"""
+    r = client.put("/api/runtime/tools/plugins/fake/config",
+                   json={"values": {"tags": "10001, 10002，10003"}})
+    assert r.status_code == 200
+    doc = yaml.safe_load((fake_plugin / "fake.yaml").read_text(encoding="utf-8"))
+    assert doc["tags"] == ["10001", "10002", "10003"]
+    # 数组直传同样可以；GET 原样返回数组
+    r = client.put("/api/runtime/tools/plugins/fake/config",
+                   json={"values": {"tags": []}})
+    assert r.status_code == 200
+    r = client.get("/api/runtime/tools/plugins/fake/config")
+    assert r.json()["values"]["tags"] == []
 
 
 # ── 端点：service scope（服务配置独立成文件） ─────────────

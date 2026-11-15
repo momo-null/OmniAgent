@@ -340,7 +340,7 @@ class TestAtomicRunState:
 
         def _fake_dispatch(task_id, history, max_steps, full_access=None, agent_id=None,
                            model=None, mode="auto", persona="",
-                           tools_enabled=None, tool_allowlist=None):
+                           tools_enabled=None, tool_allowlist=None, attachments=None):
             calls["dispatch"] += 1
 
         monkeypatch.setattr(rt, "_dispatch_chat", _fake_dispatch)
@@ -534,7 +534,7 @@ class TestChatForceInterrupt:
 
         def _fake_dispatch(task_id, history, max_steps, full_access=None, agent_id=None,
                            model=None, mode="auto", persona="",
-                           tools_enabled=None, tool_allowlist=None):
+                           tools_enabled=None, tool_allowlist=None, attachments=None):
             calls["dispatch"] += 1
 
         monkeypatch.setattr(rt, "_dispatch_chat", _fake_dispatch)
@@ -595,7 +595,7 @@ class TestChatForceInterrupt:
 
         def _fake_dispatch(task_id, history, max_steps, full_access=None, agent_id=None,
                            model=None, mode="auto", persona="",
-                           tools_enabled=None, tool_allowlist=None):
+                           tools_enabled=None, tool_allowlist=None, attachments=None):
             calls["dispatch"] += 1
 
         monkeypatch.setattr(rt, "_dispatch_chat", _fake_dispatch)
@@ -639,7 +639,7 @@ class TestChatForceInterrupt:
 
         def _fake_dispatch(task_id, history, max_steps, full_access=None, agent_id=None,
                            model=None, mode="auto", persona="",
-                           tools_enabled=None, tool_allowlist=None):
+                           tools_enabled=None, tool_allowlist=None, attachments=None):
             calls["dispatch"] += 1
 
         monkeypatch.setattr(rt, "_dispatch_chat", _fake_dispatch)

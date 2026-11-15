@@ -9,7 +9,9 @@
 #   与 WebSocket（缺省 :3001）服务，并把 ws_url 指向它——本程序是 WS **客户端**。
 # 谁来读：网关（harness/channel_gateway.py）通过插件配置读取；适配器在网关启动时
 #   按这份文件构造，所以**改完要重启网关**（桌面端会自动拉起，不用手动跑）。
-#   Web 设置里没有通道页，纯手改。
+#   必要项（托管/连接/触发闸门/能力/对外文风）可在 Web 端插件页「QQ 登录 → 插件配置」
+#   可视化改（走宿主通用配置 API，改的是这份文件、注释会丢）；群存在感调参与出站
+#   机械限制是高级项，仍手改本文件。
 # 能力闸门的安全前提：QQ 上任何人都能给这个号发消息，所以缺省**纯对话**
 #   （allow_tools: false，模型侧连工具清单都没有）。除非确认只有你自己能发，
 #   不要把 allow_tools 置 true——那等于把文件/键鼠/shell 交给全体陌生人。
@@ -24,6 +26,15 @@ ws_url: ws://127.0.0.1:3001     # 入站：正向 WS，本程序作为客户端�
 token: ""                       # NapCat 侧配的 access token。留空则取 token_env 指向的环境变量
 token_env: NAPCAT_TOKEN         # 推荐只写环境变量名，密钥不落盘
 timeout_sec: 10                 # 单次 HTTP API 调用超时（秒）
+
+# ── NapCat 进程托管（Web 端「QQ 登录」页用；不配也能用，只是回到手动启动）──────
+# 插件启用时网关会拉起插件页服务（page_server），它按这两个键托管 NapCat 本体：
+# 自动拉起 napcat.bat、页面内扫码登录 / 登录状态 / 实时日志 / 启停按钮。
+# 手改这份文件后重启网关生效；NapCat 已在外跑着时不会重复拉起（按端口识别）。
+napcat_home: ""                 # NapCat OneKey Shell 目录（里面要有 napcat.bat）。
+                                # 空 = 不托管：页面只观察 OneBot/WebUI 状态，不拉进程
+webui_url: http://127.0.0.1:6099  # NapCat 自带 WebUI（config/webui.json 的 token 会被
+                                  # page_server 读走用于查登录状态/取二维码，只留服务端）
 
 # ── 触发闸门（三层，顺序固定：总闸 → 范围 → 形态）───────────────────────────
 reply_groups: true              # 群消息总闸。false = 群消息**入口整体忽略**（@ 也不回）

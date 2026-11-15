@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QQ 登录（NapCat）</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #1c1c1c;
+    --fg: #e0e0e0;
+    --muted: #9a9a9a;
+    --border: #2e2e2e;
+    --card: #1c1c1c;
+    --ghost-hover: rgba(255, 255, 255, 0.06);
+    --primary: #e0e0e0;
+    --primary-fg: #121212;
+    --primary-hover: #f2f2f2;
+    --err: #ff6961;
+    --ok: #30d158;
+    --warn: #ffd60a;
+    --log-bg: #121212;
+    --input-bg: #121212;
+    --input-border: #3a3a3c;
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #ffffff;
+    --fg: #1d1d1f;
+    --muted: #6e6e73;
+    --border: #e3e3e6;
+    --card: #ffffff;
+    --ghost-hover: rgba(0, 0, 0, 0.05);
+    --primary: #1d1d1f;
+    --primary-fg: #ffffff;
+    --primary-hover: #333333;
+    --err: #d70015;
+    --ok: #248a3d;
+    --warn: #b25000;
+    --log-bg: #f5f5f7;
+    --input-bg: #ffffff;
+    --input-border: #d0d0d4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px 16px 32px;
+    font: 13px/1.55 system-ui, -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+    color: var(--fg); background: var(--bg);
+  }
+  header { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  h1 { font-size: 14px; font-weight: 600; margin: 0; }
+  .chip {
+    font-size: 11px; border: 1px solid var(--border); border-radius: 999px;
+    padding: 1px 8px; opacity: .85;
+  }
+  .chip.ok { color: var(--ok); border-color: var(--ok); opacity: 1; }
+  .chip.err { color: var(--err); border-color: var(--err); opacity: 1; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; border-radius: 6px; border: 1px solid transparent; padding: 4px 10px;
+    cursor: pointer; background: var(--primary); color: var(--primary-fg);
+  }
+  button:hover { background: var(--primary-hover); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: transparent; color: var(--fg); border-color: var(--border); }
+  button.ghost:hover { background: var(--ghost-hover); }
+  button.danger { background: transparent; color: var(--err); border-color: var(--err); }
+  button.danger:hover { background: var(--err); color: var(--bg); }
+  .card {
+    border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+    margin-bottom: 10px; background: var(--card);
+  }
+  .hint { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .state-line { font-size: 12px; margin: 6px 0; }
+  .ok-text { color: var(--ok); }
+  .err-text { color: var(--err); }
+  .warn-text { color: var(--warn); }
+  .muted { color: var(--muted); }
+  #qr-img {
+    width: 168px; height: 168px; border: 1px solid var(--border); border-radius: 8px;
+    background: #fff; display: block;
+  }
+  #qr-wrap { display: flex; gap: 14px; align-items: flex-start; margin-top: 8px; }
+  #qr-side { flex: 1; min-width: 180px; }
+  .avatar { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); }
+  .quick-btn { margin: 0 6px 6px 0; }
+  #logbox {
+    margin: 0; padding: 8px 10px; height: 260px; overflow: auto;
+    background: var(--log-bg); border: 1px solid var(--border); border-radius: 6px;
+    font: 12px/1.5 ui-monospace, Consolas, "Cascadia Mono", monospace;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .log-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .log-head .hint { margin: 0; }
+  #cfg-card summary {
+    cursor: pointer; font-size: 13px; font-weight: 600; margin: -4px 0 10px;
+  }
+  #cfg-card[open] summary { margin-bottom: 12px; }
+  #cfg-card summary .hint { font-weight: 400; margin-left: 8px; }
+  .cfg-group-title {
+    font-size: 12px; font-weight: 600; margin: 14px 0 8px; opacity: .85;
+  }
+  .cfg-group-title:first-child { margin-top: 2px; }
+  .check-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .field label.check-row {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    margin-bottom: 0; opacity: 1; font-size: 13px;
+  }
+  .field label.check-row input { width: auto; accent-color: var(--fg); }
+  .field .desc { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.45; }
+  .field { margin-bottom: 11px; }
+  .field label { display: block; font-size: 12px; margin-bottom: 4px; opacity: .8; }
+  .field input {
+    width: 100%; font: inherit; border: 1px solid var(--input-border); border-radius: 6px;
+    padding: 6px 8px; background: var(--input-bg); color: var(--fg);
+  }
+  .field input:focus { outline: none; border-color: var(--fg); }
+  .field input::placeholder { color: var(--muted); opacity: 1; }
+</style>
+<script>
+  (() => {
+    try {
+      const t = new URLSearchParams(location.search).get("theme");
+      document.documentElement.dataset.theme = t === "light" ? "light" : "dark";
+    } catch (e) { /* 无脚本环境按默认 dark */ }
+  })();
+</script>
+</head>
+<body>
+<header>
+  <h1>QQ 登录（NapCat）</h1>
+  <span id="state" class="chip">读取中…</span>
+  <span class="spacer"></span>
+  <button class="ghost" id="refresh" type="button">刷新</button>
+</header>
+<div id="banner" class="state-line" hidden></div>
+
+<div class="card" id="login-card">
+  <p class="hint">登录状态来自 NapCat 自带 WebUI；扫码用手机 QQ 扫下面的码即可，不用再盯 CLI。</p>
+  <div id="login-body"><span class="muted">读取中…</span></div>
+</div>
+
+<div class="card" id="proc-card">
+  <p class="hint">NapCat 进程托管：插件启用后网关会自动拉起 napcat.bat（已在外跑的实例会被识别并显示「外部」）。</p>
+  <div id="proc-body" class="row"><span class="muted">读取中…</span></div>
+</div>
+
+<div class="card">
+  <div class="log-head">
+    <span class="hint">实时日志（napcat.bat stdout）</span>
+    <span class="spacer"></span>
+    <span id="follow-state" class="hint"></span>
+    <button class="ghost" id="clear-log" type="button">清空显示</button>
+  </div>
+  <pre id="logbox"></pre>
+</div>
+
+<details class="card" id="cfg-card">
+  <summary>插件配置（必要项）<span class="hint" id="cfg-state"></span></summary>
+  <p class="hint">
+    托管组改完即时生效；连接 / 触发闸门 / 能力 / 对外文风要重启网关才生效。
+    群存在感调参与出站机械限制（拆条/字数）是高级项，仍手改 ~/.omniagent/plugins/napcat.yaml。
+  </p>
+  <div id="cfg-body"><span class="muted">展开时加载…</span></div>
+  <div class="row" style="margin-top: 8px;">
+    <button type="button" id="cfg-save">保存配置</button>
+    <span id="cfg-busy" class="hint"></span>
+  </div>
+</details>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let lastQrUrl = "";
+let pinned = true;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+function setChip(text, cls) {
+  const chip = $("state");
+  chip.textContent = text;
+  chip.className = "chip" + (cls ? " " + cls : "");
+}
+
+function banner(text, cls) {
+  const box = $("banner");
+  box.hidden = !text;
+  box.textContent = text || "";
+  box.className = "state-line " + (cls || "muted");
+}
+
+async function call(path, opts) {
+  const r = await fetch(path, opts);
+  let body = {};
+  try { body = await r.json(); } catch (e) { /* 非 JSON：下面统一报状态码 */ }
+  if (!r.ok) throw new Error(body.error || ("HTTP " + r.status));
+  return body;
+}
+
+async function post(path, body) {
+  return call(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+}
+
+/* ── 登录卡 ── */
+function renderLogin(st) {
+  const box = $("login-body");
+  box.replaceChildren();
+  if (!st) {
+    box.append(el("span", "err-text", "NapCat WebUI 不可达：进程可能还没起来或正在启动，几秒后自动重试；一直不起就用上面的「启动」。"));
+    return;
+  }
+  if (st.isLogin) {
+    setChip("已登录", "ok");
+    const row = el("div", "row");
+    if (st.avatar) {
+      const img = el("img", "avatar");
+      img.src = st.avatar;
+      img.alt = "头像";
+      row.append(img);
+    }
+    const text = el("div");
+    text.append(el("div", "ok-text", (st.nick || "已登录") + (st.uin ? "（" + st.uin + "）" : "")));
+    text.append(el("div", "muted", "OneBot 已就绪，通道按 ~/.omniagent/plugins/napcat.yaml 的闸门收发。"));
+    row.append(text);
+    box.append(row);
+    return;
+  }
+  setChip("未登录", "err");
+  if (st.error) {
+    box.append(el("div", "err-text", "WebUI： " + st.error));
+  }
+  if (st.login_error) {
+    box.append(el("div", "err-text", "登录错误： " + st.login_error));
+  }
+  if (st.qr_url) {
+    // 同一张码不重建 DOM/不重拉 PNG（页面 3s 轮询，避免二维码闪烁）
+    if (st.qr_url === lastQrUrl && $("qr-img")) {
+      const phaseEl = document.getElementById("qr-phase");
+      if (phaseEl) phaseEl.textContent = st.phase_label || "请扫码";
+      return;
+    }
+    lastQrUrl = st.qr_url;
+    const wrap = el("div");
+    wrap.id = "qr-wrap";
+    const img = el("img");
+    img.id = "qr-img";
+    img.alt = "登录二维码";
+    img.src = "/api/qr.png?t=" + Date.now();
+    wrap.append(img);
+    const side = el("div");
+    side.id = "qr-side";
+    const phaseEl = el("div", null, st.phase_label || "请扫码");
+    phaseEl.id = "qr-phase";
+    side.append(phaseEl);
+    side.append(el("div", "muted", "手机 QQ 扫码登录；二维码过期点下面的按钮换新码。"));
+    const actions = el("div", "row");
+    actions.style.marginTop = "8px";
+    const refreshBtn = el("button", "ghost", "刷新二维码");
+    refreshBtn.type = "button";
+    refreshBtn.onclick = async () => {
+      refreshBtn.disabled = true;
+      try {
+        const r = await post("/api/login/refresh");
+        if (r.ok === false) throw new Error(r.error || "刷新失败");
+        lastQrUrl = "";  // 强制下轮重取新码
+      } catch (e) { banner("刷新二维码失败：" + e.message, "err-text"); }
+      refreshBtn.disabled = false;
+      loadStatus();
+    };
+    actions.append(refreshBtn);
+    side.append(actions);
+    wrap.append(side);
+    box.append(wrap);
+  } else {
+    box.append(el("div", "muted", "暂无二维码（" + (st.phase_label || st.phase || "等待 NapCat 出码") + "）"));
+  }
+  const quick = statusData && statusData.quick_logins ? statusData.quick_logins : [];
+  if (quick.length) {
+    const qrow = el("div");
+    qrow.style.marginTop = "8px";
+    qrow.append(el("div", "muted", "快速登录（本机记录过的账号）："));
+    quick.forEach((acc) => {
+      const btn = el("button", "ghost quick-btn", acc.nick ? acc.nick + "（" + acc.uin + "）" : String(acc.uin));
+      btn.type = "button";
+      btn.onclick = async () => {
+        btn.disabled = true;
+        try {
+          const r = await post("/api/login/quick", { uin: acc.uin });
+          if (r.ok === false) throw new Error(r.error || "快速登录失败");
+          banner("已发起快速登录： " + acc.uin, "ok-text");
+        } catch (e) { banner("快速登录失败：" + e.message, "err-text"); }
+        btn.disabled = false;
+        loadStatus();
+      };
+      qrow.append(btn);
+    });
+    box.append(qrow);
+  }
+}
+
+/* ── 进程卡 ── */
+function renderProc(p) {
+  const box = $("proc-body");
+  box.replaceChildren();
+  if (!p.configured) {
+    box.append(el("span", "warn-text",
+      "未配置 napcat_home：不会自动拉起 NapCat。在 ~/.omniagent/plugins/napcat.yaml 里加 napcat_home（NapCat OneKey 目录，含 napcat.bat）后重启网关。"));
+    return;
+  }
+  let stateText, cls;
+  if (p.managed) { stateText = "运行中（托管 pid " + p.pid + "）"; cls = "ok-text"; }
+  else if (p.external) { stateText = "运行中（外部实例）"; cls = "ok-text"; }
+  else { stateText = "未运行"; cls = "err-text"; }
+  const label = el("span", cls, stateText);
+  const startBtn = el("button", "ghost", "启动");
+  startBtn.onclick = () => act("/api/napcat/start");
+  const restartBtn = el("button", "ghost", "重启");
+  restartBtn.onclick = () => act("/api/napcat/restart");
+  const stopBtn = el("button", "danger", "停止");
+  stopBtn.onclick = () => act("/api/napcat/stop");
+  box.append(label, startBtn, restartBtn, stopBtn);
+  if (p.external) {
+    box.append(el("span", "muted", "（手动启动的实例也能在这里停止）"));
+    if (!$("logbox").childNodes.length) {
+      // 外部实例的 stdout 抓不到（不是本进程拉起的）
+      appendLog("（外部实例：抓不到 stdout 日志，点「重启」切成托管实例后这里会有实时日志）");
+    }
+  }
+}
+
+async function act(path) {
+  banner("执行中…");
+  try {
+    await post(path);
+    banner("已执行 " + path.split("/").pop(), "ok-text");
+  } catch (e) {
+    banner("执行失败：" + e.message, "err-text");
+  }
+  loadStatus();
+}
+
+/* ── 状态轮询 ── */
+let statusData = null;
+
+async function loadStatus() {
+  let st;
+  try {
+    st = await call("/api/status");
+    banner("");
+  } catch (e) {
+    setChip("服务异常", "err");
+    banner("插件页服务不可达：" + e.message, "err-text");
+    return;
+  }
+  statusData = st;
+  renderProc(st.process);
+  if (!st.process.running && !st.onebot_http) {
+    setChip("NapCat 未运行", "err");
+  }
+  renderLogin(st.process.running || st.onebot_http ? st.login : null);
+}
+
+/* ── 实时日志 ── */
+function appendLog(line) {
+  const box = $("logbox");
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
+  box.append(document.createTextNode(line + "\n"));
+  while (box.childNodes.length > 500) box.removeChild(box.firstChild);
+  if (pinned || atBottom) box.scrollTop = box.scrollHeight;
+}
+
+function connectLogs() {
+  const es = new EventSource("/api/logs/stream");
+  es.onmessage = (ev) => appendLog(ev.data);
+  es.onerror = () => { /* EventSource 自动重连；不手动重建避免双流 */ };
+  const box = $("logbox");
+  box.addEventListener("scroll", () => {
+    pinned = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
+    $("follow-state").textContent = pinned ? "" : "已暂停跟随（滚到底恢复）";
+  });
+  $("clear-log").onclick = () => { box.replaceChildren(); };
+}
+
+/* ── 插件配置（schema 来自 manifest，编辑走宿主通用配置 API） ── */
+let cfgSchema = [];
+let cfgValues = {};
+let cfgSecrets = {};
+
+function cfgDefault(key) {
+  const f = cfgSchema.find((x) => x.key === key);
+  return f && f.default !== undefined ? f.default : "";
+}
+
+function buildCfgField(f) {
+  const wrap = el("div", "field");
+  const val = cfgValues[f.key];
+  let input = document.createElement("input");
+  input.dataset.key = f.key;
+  input.dataset.type = f.type || "text";
+  if (f.type === "bool") {
+    input.type = "checkbox";
+    input.checked = val === true;
+    const row = el("label", "check-row");
+    row.append(input, el("span", null, f.label || f.key));
+    wrap.append(row);
+  } else {
+    wrap.append(el("label", null, f.label || f.key));
+    if (f.type === "number") {
+      input.type = "number";
+      input.step = "any";
+      if (f.min != null) input.min = f.min;
+      if (f.max != null) input.max = f.max;
+      input.value = val == null ? "" : String(val);
+      input.placeholder = "默认 " + cfgDefault(f.key);
+    } else if (f.type === "password") {
+      input.type = "password";
+      input.value = val == null ? "" : String(val);
+      if (cfgSecrets[f.key]) input.placeholder = "已配置，留空保持不变";
+    } else if (f.type === "list") {
+      input.type = "text";
+      input.value = Array.isArray(val) ? val.join(", ") : (val == null ? "" : String(val));
+      input.placeholder = "逗号分隔；留空 = 不限";
+    } else {
+      input.type = "text";
+      input.value = val == null ? "" : String(val);
+    }
+    wrap.append(input);
+  }
+  if (f.desc) wrap.append(el("div", "desc", f.desc));
+  return wrap;
+}
+
+function renderConfig() {
+  const body = $("cfg-body");
+  body.replaceChildren();
+  const groups = [], byGroup = {};
+  cfgSchema.forEach((f) => {
+    const g = f.group || "其他";
+    if (!byGroup[g]) { byGroup[g] = []; groups.push(g); }
+    byGroup[g].push(f);
+  });
+  groups.forEach((g) => {
+    body.append(el("div", "cfg-group-title", g));
+    byGroup[g].forEach((f) => body.append(buildCfgField(f)));
+  });
+}
+
+async function loadConfig() {
+  try {
+    const data = await call("/api/config");
+    cfgSchema = data.schema || [];
+    cfgValues = data.values || {};
+    cfgSecrets = data.secrets_set || {};
+    renderConfig();
+  } catch (e) {
+    $("cfg-body").replaceChildren(
+      el("span", "err-text", "配置读取失败：" + e.message));
+  }
+}
+
+function collectConfig() {
+  const out = {};
+  document.querySelectorAll("#cfg-body [data-key]").forEach((input) => {
+    const key = input.dataset.key, type = input.dataset.type;
+    if (type === "bool") { out[key] = input.checked; return; }
+    if (type === "number") {
+      // 清空 = 回到 schema 默认（后端拒绝空数字）
+      out[key] = input.value === "" ? cfgDefault(key) : Number(input.value);
+      return;
+    }
+    out[key] = input.value;  // list 传逗号串，宿主拆成数组；password 空串 = 保持
+  });
+  return out;
+}
+
+$("cfg-card").addEventListener("toggle", () => {
+  if ($("cfg-card").open) loadConfig();  // 每次展开都重读，吃到外部改动
+});
+$("cfg-save").onclick = async () => {
+  const btn = $("cfg-save");
+  btn.disabled = true;
+  $("cfg-busy").textContent = "保存中…";
+  try {
+    await call("/api/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values: collectConfig() }),
+    });
+    $("cfg-busy").textContent = "已保存";
+    $("cfg-state").textContent = "（有未生效项时重启网关）";
+    banner("配置已保存：托管组即时生效，其余重启网关生效", "ok-text");
+    loadStatus();  // 托管组即时生效，刷新进程卡
+  } catch (e) {
+    $("cfg-busy").textContent = "";
+    banner("配置保存失败：" + e.message, "err-text");
+  }
+  btn.disabled = false;
+};
+
+$("refresh").onclick = () => loadStatus();
+
+loadStatus();
+setInterval(loadStatus, 3000);
+connectLogs();
+</script>
+</body>
+</html>

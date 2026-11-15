@@ -110,7 +110,7 @@ def _did_work(turn_steps: List[Dict[str, Any]], result: Optional[Dict[str, Any]]
     return False
 
 
-def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, full_access: Optional[bool] = None, agent_id: str = AGENT_MAIN, model: Optional[str] = None, mode: str = "auto", persona: str = "", tools_enabled: Optional[bool] = None, tool_allowlist: Optional[List[str]] = None, source_kind: str = "chat"):
+def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, full_access: Optional[bool] = None, agent_id: str = AGENT_MAIN, model: Optional[str] = None, mode: str = "auto", persona: str = "", tools_enabled: Optional[bool] = None, tool_allowlist: Optional[List[str]] = None, source_kind: str = "chat", attachments=None):
     """统一 agent 入口（单入口处理闲聊 + 双 agent 任务执行）。
 
     一个会话 = 一个 task（首条消息由调用方在外部建好 task 并传入 task_id）。
@@ -281,7 +281,8 @@ def _dispatch_chat(task_id: str, history: List[Dict[str, Any]], max_steps: int, 
                         task_id=task_id, project_id=None, max_steps=max_steps,
                         history=list(model_messages),
                         task_mode=_task_mode,
-                        run_key=run_key)
+                        run_key=run_key,
+                        attachments=list(attachments or []))
         # M1（F-4）：Web 直连是「与主人对话」——进料道
         # 标 chat，context_signal 据此构造 <current-context>（与 QQ 通道同一套结构）。
         try:
@@ -820,6 +821,7 @@ async def api_chat(request: Request):
     threading.Thread(target=_rt._dispatch_chat,
                      args=(task_id, messages, max_steps, full_access, AGENT_MAIN, req.model,
                            req.mode, _persona, req.tools_enabled, req.tool_allowlist),
+                     kwargs={"attachments": req.attachments},
                      daemon=True).start()
     return JSONResponse({"ok": True, "task_id": task_id, "msg": "已下发",
                          "mode": req.mode, "persona": _persona})

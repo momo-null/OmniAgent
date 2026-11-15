@@ -1,5 +1,6 @@
 """运行时 REST API 的输入模型与边界校验。"""
-from typing import Literal, Optional
+import re
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -50,12 +51,36 @@ class ChatRequest(BaseModel):
     # 空 = 用持久化在 task 上的值，再空则回退配置里的单人设缺省。
     persona: Optional[str] = Field(default=None, max_length=64,
                                    pattern=r"^[A-Za-z0-9_-]*$")
+    # 当轮多模态附件（2026-11-14，手机端发图）：dict 列表，目前
+    # ``{"type":"image","data_url":"data:image/jpeg;base64,..."}``。与通道网关
+    # （QQ）同一契约：只作用于本次模型输入，不进会话历史（防 base64 撑爆
+    # jsonl，sdk_bridge.build_user_content 转 input_image）。尺寸压缩由通道层
+    # 负责；这里做形状与总量上限校验。
+    attachments: Optional[List[Dict[str, Any]]] = None
 
     @field_validator("task_id")
     @classmethod
     def validate_task_id(cls, value: Optional[str]) -> Optional[str]:
         """只允许安全的既有任务 ID。"""
         return paths.validate_identifier(value, "task_id") if value else None
+
+    @field_validator("attachments")
+    @classmethod
+    def validate_attachments(cls, value):
+        """附件形状校验：type=image、data_url 为 data:image/*;base64、单张 ≤6MB base64、≤4 张。"""
+        if value is None:
+            return value
+        if not isinstance(value, list) or len(value) > 4:
+            raise ValueError("attachments 最多 4 项")
+        for a in value:
+            if not isinstance(a, dict) or a.get("type") != "image":
+                raise ValueError("attachment.type 目前只支持 image")
+            url = str(a.get("data_url") or "")
+            if not re.match(r"^data:image/(png|jpe?g|webp);base64,", url):
+                raise ValueError("attachment.data_url 必须是 data:image/*;base64 形状")
+            if len(url) > 6_000_000:
+                raise ValueError("单张图片过大（base64 超 6MB），请压缩后再发")
+        return value
 
 
 class CreateTaskRequest(BaseModel):

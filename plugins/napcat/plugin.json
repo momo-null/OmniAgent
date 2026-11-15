@@ -12,7 +12,19 @@
     "factory": "channel:build"
   },
   "lifecycle": {
-    "autostart": true
+    "autostart": true,
+    "health": {
+      "probe": "ready"
+    },
+    "spawn": {
+      "args": [
+        "-m",
+        "plugins.napcat.page_server"
+      ],
+      "cwd": "{repo}",
+      "port": 18753,
+      "health": "/healthz"
+    }
   },
   "requires": {
     "host": [
@@ -21,5 +33,203 @@
       "config",
       "log"
     ]
-  }
+  },
+  "config": [
+    {
+      "key": "napcat_home",
+      "label": "NapCat 目录",
+      "type": "path",
+      "default": "",
+      "group": "托管",
+      "desc": "OneKey Shell 目录（含 napcat.bat），改完即时生效；空 = 不托管，页面只观察"
+    },
+    {
+      "key": "webui_url",
+      "label": "NapCat WebUI 地址",
+      "type": "text",
+      "default": "http://127.0.0.1:6099",
+      "group": "托管",
+      "desc": "登录状态/二维码走这里；token 自动读 NapCat 的 config/webui.json，即时生效"
+    },
+    {
+      "key": "http_url",
+      "label": "OneBot HTTP API",
+      "type": "text",
+      "default": "http://127.0.0.1:3000",
+      "group": "连接",
+      "desc": "出站（发消息）；重启网关生效"
+    },
+    {
+      "key": "ws_url",
+      "label": "OneBot WebSocket",
+      "type": "text",
+      "default": "ws://127.0.0.1:3001",
+      "group": "连接",
+      "desc": "入站（收消息），本程序是客户端；重启网关生效"
+    },
+    {
+      "key": "token",
+      "label": "Access Token",
+      "type": "password",
+      "secret": true,
+      "default": "",
+      "group": "连接",
+      "desc": "NapCat 侧配的 access token；留空保存 = 保持不变"
+    },
+    {
+      "key": "token_env",
+      "label": "Token 环境变量名",
+      "type": "text",
+      "default": "NAPCAT_TOKEN",
+      "group": "连接",
+      "desc": "推荐只写环境变量名，密钥不落盘；填了它就忽略明文 token"
+    },
+    {
+      "key": "timeout_sec",
+      "label": "API 超时（秒）",
+      "type": "number",
+      "default": 10,
+      "min": 1,
+      "max": 120,
+      "group": "连接"
+    },
+    {
+      "key": "reply_groups",
+      "label": "响应群聊",
+      "type": "bool",
+      "default": true,
+      "group": "触发闸门",
+      "desc": "false = 群消息入口整体忽略（@ 也不回）"
+    },
+    {
+      "key": "reply_private",
+      "label": "响应私聊",
+      "type": "bool",
+      "default": true,
+      "group": "触发闸门"
+    },
+    {
+      "key": "reply_poke",
+      "label": "戳一戳唤醒",
+      "type": "bool",
+      "default": true,
+      "group": "触发闸门",
+      "desc": "只认「戳的是自己」；回不回、回什么由模型决定"
+    },
+    {
+      "key": "require_at",
+      "label": "群聊必须 @",
+      "type": "bool",
+      "default": true,
+      "group": "触发闸门",
+      "desc": "false = 群消息全回，慎用"
+    },
+    {
+      "key": "allow_groups",
+      "label": "群白名单",
+      "type": "list",
+      "default": [],
+      "group": "触发闸门",
+      "desc": "逗号分隔群号；空 = 不限。这是「哪些群允许她出现」"
+    },
+    {
+      "key": "allow_users",
+      "label": "私聊白名单",
+      "type": "list",
+      "default": [],
+      "group": "触发闸门",
+      "desc": "逗号分隔 QQ 号；空 = 谁私聊都回"
+    },
+    {
+      "key": "default_chat_id",
+      "label": "广播兜底会话",
+      "type": "text",
+      "default": "",
+      "group": "触发闸门",
+      "desc": "private:<QQ> 或 group:<群号>；cron 的 notify_channel 指向 napcat 时发这里，空 = 不外发"
+    },
+    {
+      "key": "allow_tools",
+      "label": "允许工具",
+      "type": "bool",
+      "default": false,
+      "group": "能力",
+      "desc": "QQ 上任何人都能发消息，开=true 等于把文件/键鼠/shell 交给全体陌生人——确认只有你自己能发再开"
+    },
+    {
+      "key": "images",
+      "label": "收图",
+      "type": "bool",
+      "default": true,
+      "group": "能力",
+      "desc": "收到的图片作为当轮图片输入直传模型；关 = [图片] 文本占位"
+    },
+    {
+      "key": "voice",
+      "label": "收语音转写",
+      "type": "bool",
+      "default": true,
+      "group": "能力",
+      "desc": "只控制入站：语音转文字交给模型；出站形式由模型自己定"
+    },
+    {
+      "key": "voice_reply_ratio",
+      "label": "群语音回复比例",
+      "type": "number",
+      "default": 0.5,
+      "min": 0,
+      "max": 1,
+      "group": "能力",
+      "desc": "0 = 永远文字，1 = 永远语音；只影响群，私聊恒文字"
+    },
+    {
+      "key": "stickers.enabled",
+      "label": "表情包",
+      "type": "bool",
+      "default": false,
+      "group": "能力",
+      "desc": "开了模型工具面才有 msg_send_sticker"
+    },
+    {
+      "key": "stickers.dir",
+      "label": "表情包目录",
+      "type": "path",
+      "default": "",
+      "group": "能力",
+      "desc": "空 = ~/.omniagent/stickers（文件名就是贴纸名）"
+    },
+    {
+      "key": "stickers.debug_chat_id",
+      "label": "表情调试定向",
+      "type": "text",
+      "default": "",
+      "group": "能力",
+      "desc": "设置后所有表情强制发往该会话（调试期不直接发群用）"
+    },
+    {
+      "key": "outbound.identity",
+      "label": "对外自称",
+      "type": "text",
+      "default": "",
+      "group": "对外文风",
+      "desc": "可选；不写人格覆盖声明"
+    },
+    {
+      "key": "outbound.style",
+      "label": "说话规矩",
+      "type": "text",
+      "default": "",
+      "group": "对外文风",
+      "desc": "自然语言喂模型，如「一条一句、不用 emoji」"
+    }
+  ],
+  "ui": [
+    {
+      "id": "login",
+      "label": "QQ 登录",
+      "icon": "terminal",
+      "slot": "dock",
+      "url": "http://127.0.0.1:18753/"
+    }
+  ]
 }

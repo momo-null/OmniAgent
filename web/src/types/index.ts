@@ -352,7 +352,7 @@ export interface ToolsResponse {
 // ── 插件配置（GET/PUT /api/runtime/tools/plugins/<name>/config） ─────────
 // schema 由插件 plugin.json 的 config 字段自报；前端只按 type 通用渲染，
 // 不认识任何具体键名（语音/OCR/视觉共用同一套）。
-export type PluginConfigFieldType = "text" | "password" | "path" | "number" | "bool" | "select";
+export type PluginConfigFieldType = "text" | "password" | "path" | "number" | "bool" | "select" | "list";
 
 export interface PluginConfigField {
   key: string; // 支持点分路径（openai.base_url = YAML 嵌套键）
