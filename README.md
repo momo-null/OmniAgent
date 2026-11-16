@@ -11,7 +11,7 @@
 > 它不是界面演示：记忆（原子记忆 → 场景块 / 日记 → 画像 → 关系卡）、常驻语音引擎服务、多 IM 通道、定时任务、本地模型、MCP、插件、人工审批都是打通的完整链路。做不到的部分写在[边界](#边界诚实说明)里，不吹。
 
 <p align="center">
-  <img src="docs/img/demo_chat.gif" width="900" alt="OmniAgent 界面示意（合成数据）：能干活——思考与工具步骤全程可见；会记得——L0/L1/L2 记忆面板；群聊在场感——未点名不插话，被 @ 才回">
+  <img src="doc/img/demo_chat.gif" width="900" alt="OmniAgent 界面示意（合成数据）：能干活——思考与工具步骤全程可见；会记得——L0/L1/L2 记忆面板；群聊在场感——未点名不插话，被 @ 才回">
 </p>
 
 ## 30 秒看懂
@@ -294,7 +294,7 @@ npm run dist         # 打包 NSIS 安装包 + portable exe（desktop/dist/）
 > This is not a UI mock: memory (atomic memories → scene blocks / diary → profile → relation cards), an always-on voice engine service, multi-channel IM, cron, local models, MCP, plugins and human approval are all wired end to end. What it cannot do is listed under [Boundaries](#boundaries-honest-notes).
 
 <p align="center">
-  <img src="docs/img/demo_chat.gif" width="900" alt="OmniAgent UI mockup (synthetic data): visible tool steps; the L0/L1/L2 memory panel; natural group-chat presence — silent unless mentioned, chimes in when relevant">
+  <img src="doc/img/demo_chat.gif" width="900" alt="OmniAgent UI mockup (synthetic data): visible tool steps; the L0/L1/L2 memory panel; natural group-chat presence — silent unless mentioned, chimes in when relevant">
 </p>
 
 ## At a Glance
